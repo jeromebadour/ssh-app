@@ -2,13 +2,14 @@
 // and only in an unpackaged build started with SSHAPP_SELFTEST=1. It prints one line, "SELFTEST <json>",
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
-import { app, type WebContentsView } from 'electron';
+import { app, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ShellState } from '../common/ipc';
 import type { Tab } from './main';
 import { memory } from './memory';
 import { BUDGET, type Meter } from './meter';
+import { takePicture } from './picture';
 
 interface Ctx {
   shell: WebContentsView;
@@ -16,6 +17,9 @@ interface Ctx {
   kind: string;
   mode: string;
   meter: Meter;
+  win: BaseWindow;
+  dist: string;
+  harden(ses: Session): void;
   openTab(): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
@@ -102,6 +106,24 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await until(() => t.engine.state === 'gone', 10_000);
       check('the engine was not started', t.engine.state === 'gone' && t.engine.pid === 0, [t.engine.state, t.engine.pid]);
       check('and the tab says why', t.engine.cause === 'the engine file is not the one this app was built with', t.engine.cause);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    }
+
+    // "picture": the whole window as one picture, from the real app. Three tabs, the second one in front.
+    // SSHAPP_PICTURE=<file.png> says where it goes; SSHAPP_PICTURE_STRIP is the text of the strip that names it.
+    if (ctx.mode === 'picture') {
+      const file = process.env['SSHAPP_PICTURE'] ?? '';
+      const tabs3 = [ctx.openTab()!, ctx.openTab()!, ctx.openTab()!];
+      await until(() => tabs3.every((t) => t.engine.state === 'ready'), 15_000);
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${tabs3[1]!.id} })`);
+      await type(tabs3[1]!, 'this text went to the tab\'s own engine and came back');
+      await until(async () => (await shown(tabs3[1]!)).includes('came back'), 3000);
+      await sleep(400);
+      const size = ctx.win.getContentBounds();
+      const made = await takePicture({ win: ctx.win, views: [ctx.shell, tabs3[1]!.view], file, strip: process.env['SSHAPP_PICTURE_STRIP'] ?? '', dist: ctx.dist, harden: ctx.harden });
+      check(`a picture of the whole window: ${made.width} x ${made.height} pixels at scale ${made.scale}`, file !== '' && made.width === Math.round(size.width * made.scale), made);
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);
