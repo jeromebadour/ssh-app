@@ -1,0 +1,8 @@
+{
+  "about": "Until when each compiler and runtime we build with is supported by its maker. The gate fails once a date has passed: an unsupported one gets no security fixes. Estimates are marked and are corrected when the maker publishes the real date.",
+  "items": [
+    { "name": "Node 22", "until": "2027-04-30", "estimate": false, "source": "https://github.com/nodejs/Release (schedule.json, v22 end)" },
+    { "name": "Go 1.27", "until": "2027-08-01", "estimate": true, "source": "https://go.dev/doc/devel/release#policy : each release is supported until two newer ones exist; 1.29 is expected in August 2027" },
+    { "name": "Electron 45", "until": "2027-04-07", "estimate": true, "source": "https://www.electronjs.org/docs/latest/tutorial/electron-timelines : the latest three majors are supported; 45.0.0 came out 2026-10-21 and a major follows about every 8 weeks, so 48 is expected about 2027-04-07" }
+  ]
+}

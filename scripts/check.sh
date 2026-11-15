@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
-# Every check that needs no window: types, the no-blocking-calls rule, Go format, vet, tests, a short fuzz run,
-# and the TypeScript tests. The same script runs in the workspace and in CI.
+# Every check that needs no window: the dependency gate, types, the no-blocking-calls rule, Go format, vet (for
+# Linux and for Windows), tests, a short fuzz run, and the TypeScript tests. The same script runs in the workspace and in CI.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
+
+echo "check: the dependency gate"
+node scripts/test-gate.mjs
+node scripts/gate.mjs
+npm audit --audit-level=low >/dev/null || { npm audit; exit 1; }
+echo "npm audit: no advisory"
+if [ "${CI:-}" = "true" ]; then
+  npm audit signatures | tail -3
+else
+  echo "npm audit signatures: runs in CI only (its key store cannot be reached from this workspace)"
+fi
 
 echo "check: types"
 node_modules/.bin/tsc -p .
@@ -14,7 +25,7 @@ node scripts/no-sync.mjs
 echo "check: Go format, vet, tests"
 unformatted="$(cd engine && gofmt -l .)"
 [ -z "$unformatted" ] || { echo "not gofmt-formatted: $unformatted" >&2; exit 1; }
-(cd engine && go vet ./... && go test -count=1 ./...)
+(cd engine && go vet ./... && GOOS=windows go vet ./... && go test -count=1 ./...)
 
 echo "check: a short fuzz run on the frame reader"
 (cd engine && go test -run '^$' -fuzz '^FuzzRead$' -fuzztime 5s ./internal/frame | tail -2)

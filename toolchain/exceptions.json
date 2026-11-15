@@ -1,0 +1,5 @@
+{
+  "about": "Written exceptions to the gate (plan B7). young: a security release of an already reviewed package that may skip the 14 days, with its diff read and the owner told. advisories: an advisory with no fixed version, which must not block unrelated work. Every entry carries its reason and its date, and is removed when it no longer applies.",
+  "young": [],
+  "advisories": []
+}
