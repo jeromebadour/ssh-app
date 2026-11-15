@@ -36,7 +36,7 @@ const ENGINE_NAME = process.platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp
 // Packaged: the engine sits beside the app archive (a program cannot be started from inside it).
 const ENGINE_BIN = app.isPackaged ? path.join(process.resourcesPath, 'engine', ENGINE_NAME) : path.join(DIST, 'engine', ENGINE_NAME);
 const ENGINE_HASHES = path.join(DIST, 'engine-hashes.json');
-let SELFTEST = false; // decided once it is known what kind of build this is
+let SELFTEST = ''; // the self-test to run, or '' for none; decided once it is known what kind of build this is
 
 // A fault in main must never open a blocking error box (Electron's default) and must never pass unseen.
 // For now it is written to stderr; the local log with an id per failure replaces this in step 2.
@@ -264,7 +264,8 @@ if (!app.requestSingleInstanceLock()) {
     const lab = await labProof;
     if (wantsLab && !lab) return app.exit(64);
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
-    SELFTEST = kind !== 'release' && process.env['SSHAPP_SELFTEST'] === '1';
+    const asked = process.env['SSHAPP_SELFTEST'] ?? '';
+    SELFTEST = kind !== 'release' && (asked === 'all' || asked === 'engine-must-be-refused') ? asked : '';
     harden(session.defaultSession);
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
@@ -286,7 +287,7 @@ if (!app.requestSingleInstanceLock()) {
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind });
+      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST });
     } else {
       await shellLoaded;
     }

@@ -41,7 +41,7 @@ start() {
 selftest() {
   local log="$1"; shift
   local code line
-  code="$(start 150 "$log" SSHAPP_SELFTEST=1 -- "$@")"
+  code="$(start 150 "$log" SSHAPP_SELFTEST=all -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
     echo "smoke: the app gave no result (exit code $code)." >&2
@@ -85,10 +85,10 @@ case "$mode" in
     cp -a "$pkg" "$work/swapped"
     helper "$work/swapped/chrome-sandbox"
     printf '\x00' | dd of="$work/swapped/resources/engine/sshapp-engine" bs=1 seek=4096 conv=notrunc status=none
-    start 150 "$log" SSHAPP_SELFTEST=1 -- "$work/swapped/ssh-app" --lab >/dev/null
-    grep -a '^SELFTEST ' "$log" | grep -q 'the engine file is not the one this app was built with' \
+    code="$(start 60 "$log" SSHAPP_SELFTEST=engine-must-be-refused -- "$work/swapped/ssh-app" --lab)"
+    [ "$code" = 0 ] && grep -a '^SELFTEST ' "$log" | grep -q '"ok":true' \
       && say "a swapped engine is not started, and the tab says why" \
-      || fail "a swapped engine was not refused"
+      || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
     echo "smoke: the lab package held"
     ;;
 
@@ -98,7 +98,7 @@ case "$mode" in
     helper "$pkg/chrome-sandbox"
 
     # 1. Plain start: it comes up, says what it is, stays up, and the self-test switch does nothing.
-    code="$(start 12 "$log" SSHAPP_SELFTEST=1 -- "$pkg/ssh-app")"
+    code="$(start 12 "$log" SSHAPP_SELFTEST=all -- "$pkg/ssh-app")"
     [ "$code" = 124 ] || fail "the release package did not stay up for 12 s (exit $code)"
     grep -aq '^READY kind=release$' "$log" || fail "the release package did not come up as a release build"
     say "it starts and stays up as a release build"
@@ -111,7 +111,7 @@ case "$mode" in
     for arg in --anything --inspect=0 --remote-debugging-port=9333 --lab "--lab --remote-debugging-port=9333" /tmp/some-file; do
       t0=$(date +%s%N)
       # shellcheck disable=SC2086
-      code="$(start 20 "$log" SSHAPP_SELFTEST=1 -- "$pkg/ssh-app" $arg)"
+      code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$pkg/ssh-app" $arg)"
       ms=$(( ($(date +%s%N) - t0) / 1000000 ))
       [ "$code" = 64 ] || fail "started with '$arg' it did not exit with 64 (exit $code)"
       ! grep -aq '^READY\|^SELFTEST\|Debugger listening\|DevTools listening' "$log" || fail "started with '$arg' it came up, or opened a debugger"
@@ -121,7 +121,7 @@ case "$mode" in
     cp -a "$pkg" "$work/marked"
     helper "$work/marked/chrome-sandbox"
     cp out/ssh-app-linux-x64-lab/resources/lab "$work/marked/resources/lab"
-    code="$(start 20 "$log" SSHAPP_SELFTEST=1 -- "$work/marked/ssh-app" --lab)"
+    code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$work/marked/ssh-app" --lab)"
     [ "$code" = 64 ] || fail "a release binary with the lab marker beside it did not exit (exit $code)"
     ! grep -aq '^READY\|^SELFTEST' "$log" || fail "a release binary with the lab marker beside it came up"
     say "the lab marker beside a release binary changes nothing"
