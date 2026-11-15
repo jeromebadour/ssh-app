@@ -9,6 +9,12 @@ const port: ShellPort = {
   onState(cb) {
     ipcRenderer.on(CH.shellState, (_e, s: ShellState) => cb(s));
   },
+  meter(n) {
+    ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs) });
+  },
+  frame() {
+    ipcRenderer.send(CH.meterFrame);
+  },
 };
 
 contextBridge.exposeInMainWorld('shellPort', port);

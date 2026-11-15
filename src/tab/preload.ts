@@ -13,6 +13,15 @@ const port: TabPort = {
   onState(cb) {
     ipcRenderer.on(CH.tabState, (_e, info: TabInfo) => cb(info));
   },
+  onShown(cb) {
+    ipcRenderer.on(CH.tabShown, () => cb());
+  },
+  meter(n) {
+    ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs) });
+  },
+  frame() {
+    ipcRenderer.send(CH.meterFrame);
+  },
 };
 
 contextBridge.exposeInMainWorld('tabPort', port);

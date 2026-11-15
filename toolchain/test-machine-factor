@@ -1,0 +1,9 @@
+# The one stated multiplier for the budgets on test machines (plan B8).
+# The budgets themselves (src/main/meter.ts) are for a real PC. The build workspace and CI runners are 2-core
+# machines that draw without a graphics card, so the lab applies the same checks times this number.
+# It is set from measurement and never loosened silently: every change is a line here with its date and reason.
+#
+# 2026-11-15: 3. Measured under the seven-tab flood, at factor 1: workspace main delay 11 to 23 ms (budget 50),
+#             tab switch 40 to 79 ms (budget 100), a click or key painted in 72 to 96 ms (budget 100, too
+#             close to pass every time on such a machine).
+3

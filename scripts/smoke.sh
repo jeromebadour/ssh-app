@@ -12,6 +12,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
 mode="${1:-dev}"
+# The stated multiplier for budgets on test machines: the last line of toolchain/test-machine-factor.
+factor="$(grep -v '^#' toolchain/test-machine-factor | tail -1)"
 
 as_user=()
 if [ "$(id -u)" = 0 ]; then
@@ -41,7 +43,7 @@ start() {
 selftest() {
   local log="$1"; shift
   local code line
-  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" -- "$@")"
+  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
     echo "smoke: the app gave no result (exit code $code)." >&2

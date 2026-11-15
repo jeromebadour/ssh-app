@@ -10,6 +10,10 @@ Private; the name is a working name.
 - One message format between the processes, in Go and TypeScript, run against the same test vectors.
 - The window never waits: nothing in the app's code may block, and a check enforces it.
 - Watchdogs show, they never restart: a frozen or dead engine is shown on its tab and nothing else is touched.
+- The app measures its own promises as it runs (the meter): how late main ever was, the longest busy stretch in a
+  view, how long a real click or key took to be painted, a tab switch, the start. The lab checks them against the
+  plan's budgets under a seven-tab flood, times one stated factor for slow test machines
+  (`toolchain/test-machine-factor`).
 
 ## Build and check
 

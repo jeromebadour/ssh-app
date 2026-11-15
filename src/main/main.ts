@@ -6,6 +6,7 @@ import path from 'node:path';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Engine } from './engine';
 import { FUSE_NODE_CLI_INSPECT, fuseOf } from './fuse';
+import { Meter } from './meter';
 
 // A release build takes no arguments: none of its own, and none of Chromium's (a debugging port, for one).
 // The one exception is the lab package, which the test driver must be able to start with a debugger: it says
@@ -142,6 +143,7 @@ let active = 0;
 let win: BaseWindow | null = null;
 let shell: WebContentsView | null = null;
 let droppedMessages = 0;
+const meter = new Meter();
 
 function info(t: Tab): TabInfo {
   return { id: t.id, state: t.engine.state, cause: t.engine.cause };
@@ -212,6 +214,7 @@ function closeTab(id: number): void {
   tabByContents.delete(tab.view.webContents.id);
   win.contentView.removeChildView(tab.view);
   tab.view.webContents.close();
+  meter.forget(id);
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
   layout();
   tellShell();
@@ -241,10 +244,34 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   if (c?.op === 'new') openTab();
   else if (c?.op === 'select' && typeof c.id === 'number' && tabs.has(c.id)) {
     active = c.id;
+    meter.tabSwitchBegins(c.id);
     layout();
+    sendTo(tabs.get(c.id)!.view, CH.tabShown, null);
     tellShell();
   } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else droppedMessages++;
+});
+
+// The meter's two messages. They carry numbers only, and only from a known view's own main frame.
+function knownView(e: IpcMainEvent): { tab: Tab | null } | null {
+  const tab = tabByContents.get(e.sender.id);
+  if (tab) return fromMainFrameOf(e, tab.origin) ? { tab } : null;
+  if (shell && e.sender.id === shell.webContents.id && fromMainFrameOf(e, 'app://shell')) return { tab: null };
+  return null;
+}
+
+ipcMain.on(CH.meterReport, (e, numbers: unknown) => {
+  if (!knownView(e) || !meter.fromView(numbers)) droppedMessages++;
+});
+
+ipcMain.on(CH.meterFrame, (e) => {
+  const from = knownView(e);
+  if (!from) {
+    droppedMessages++;
+    return;
+  }
+  if (from.tab) meter.tabPainted(from.tab.id);
+  else meter.firstFrame();
 });
 
 app.on('web-contents-created', (_e, contents) => {
@@ -270,11 +297,12 @@ if (!app.requestSingleInstanceLock()) {
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
     SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven'].includes(asked) ? asked : '';
+    meter.start();
     harden(session.defaultSession);
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
 
-    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#0c0e10', title: 'SSH App', show: !SELFTEST });
+    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#0c0e10', title: 'SSH App' });
     win.setMenu(null);
     shell = new WebContentsView({ webPreferences: viewPrefs(shellSession, 'preload-shell.js', true) });
     win.contentView.addChildView(shell);
@@ -291,7 +319,7 @@ if (!app.requestSingleInstanceLock()) {
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST });
+      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter });
     } else {
       await shellLoaded;
     }
