@@ -40,6 +40,12 @@ fails the checks if a package appears that nobody reviewed, if any version is yo
 lacks its registry hash, or if a compiler or runtime is past its maker's support date. npm's own advisory and
 registry-signature checks run beside it.
 
+**The Windows run** (`scripts/smoke-windows.mjs`, CI's `windows` job) is asked for by changing
+`toolchain/windows-run` in a pull request; Windows runner time costs more, so it does not run on every one. It
+builds everything again on a Windows machine, requires its Windows packages to be file for file the ones the Linux
+job built, runs the engine's tests on Windows, then runs the lab and the release package there, including what only
+Windows can show: Electron refusing an app archive with one byte changed.
+
 CI runs the same scripts on every pull request (`checks` and `lab`). A pull request is merged, by a workflow, only
 after both passed on its head commit; on `main`, CI fails any commit that did not come from a merged pull request.
 

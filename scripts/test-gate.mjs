@@ -120,7 +120,8 @@ await expect('a toolchain with no support date', 'no support date written for El
     return s;
   }),
 );
-await expect('a Go download without its hash', 'no SHA-256 for the Go download', (d) => edit(d, 'toolchain/go.env', (s) => s.replace(/^GO_LINUX_X64_SHA256=.*$/m, 'GO_LINUX_X64_SHA256=')));
+await expect('a Go download without its hash', 'no SHA-256 for the Go download (win32)', (d) => edit(d, 'toolchain/go.env', (s) => s.replace(/^GO_WIN32_X64_SHA256=.*$/m, 'GO_WIN32_X64_SHA256=')));
+await expect('a Go download of another version', 'is not the pinned version from actions/go-versions', (d) => edit(d, 'toolchain/go.env', (s) => s.replace(/^GO_VERSION=.*$/m, 'GO_VERSION=1.27.9')));
 
 await rm(base, { recursive: true, force: true });
 console.log(failures ? `test-gate: ${failures} of ${count} cases FAILED` : `test-gate: ${count} cases held`);

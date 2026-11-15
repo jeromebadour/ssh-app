@@ -1,0 +1,4 @@
+# The same bytes on every machine: text files are checked out with LF line ends, on Windows too.
+* text=auto eol=lf
+*.png binary
+*.ico binary
