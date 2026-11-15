@@ -20,7 +20,7 @@ shoot() {
   local percent; percent="$(awk "BEGIN { printf \"%d\", $scale * 100 }")"
   local file="$dir/berth-${d}-dark-${size}-${percent}-${scene}.png"
   local strip="Berth, direction ${NAME[$d]}   |   dark   |   window ${size} at ${percent} %   |   ${scene/paths/pinned and recent folders open}   |   commit ${commit}"
-  strip="${strip/dialog/a dialog open}"; strip="${strip/boxes/the Boxes menu open}"
+  strip="${strip/dialog/a dialog open}"; strip="${strip/boxes/the Boxes menu open}"; strip="${strip/logs/a log streaming, word colouring on}"
   local log; log="$(mktemp)"; rm -f "$file"
   timeout 90 "${as_user[@]}" xvfb-run -a --server-args='-screen 0 3000x1800x24' env -u NODE_OPTIONS \
     SSHAPP_SELFTEST=direction SSHAPP_DIRECTION="$d" SSHAPP_SCENE="$scene" SSHAPP_WINDOW="$size" SSHAPP_PICTURE="$file" SSHAPP_PICTURE_STRIP="$strip" \
@@ -32,3 +32,4 @@ shoot() {
 shoot a 1920x1080 1 boxes
 shoot a 1280x720 1.25 dialog
 shoot a 1280x720 1.25 paths
+shoot a 1920x1080 1 logs
