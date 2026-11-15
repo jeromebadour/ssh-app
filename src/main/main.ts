@@ -66,7 +66,12 @@ const CSP = [
 ].join('; ');
 
 // Every file a view may load, by kind and path. Anything else is 404: no path is ever built from a request.
-const FILES: Record<'shell' | 'tab', Record<string, [file: string, type: string]>> = {
+const FILES: Record<'shell' | 'tab' | 'easel', Record<string, [file: string, type: string]>> = {
+  // The easel puts pictures of the window together. Lab and development builds only (see below).
+  easel: {
+    '/index.html': ['lab/index.html', 'text/html; charset=utf-8'],
+    '/easel.js': ['lab/easel.js', 'text/javascript; charset=utf-8'],
+  },
   shell: {
     '/index.html': ['shell/index.html', 'text/html; charset=utf-8'],
     '/shell.js': ['shell/shell.js', 'text/javascript; charset=utf-8'],
@@ -88,7 +93,7 @@ async function serve(request: Request): Promise<Response> {
   } catch {
     return new Response(null, { status: 400 });
   }
-  const kind = url.hostname === 'shell' ? 'shell' : /^tab-[0-9]{1,6}$/.test(url.hostname) ? 'tab' : null;
+  const kind = url.hostname === 'shell' ? 'shell' : /^tab-[0-9]{1,6}$/.test(url.hostname) ? 'tab' : url.hostname === 'easel' && SELFTEST ? 'easel' : null;
   const entry = kind && request.method === 'GET' ? FILES[kind][url.pathname] : undefined;
   if (!entry) return new Response(null, { status: 404 });
   const data = await readFile(path.join(DIST, entry[0]));
@@ -296,13 +301,16 @@ if (!app.requestSingleInstanceLock()) {
     if (wantsLab && !lab) refuse();
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven'].includes(asked) ? asked : '';
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture'].includes(asked) ? asked : '';
+    // A lab or development run may ask for a window size (for pictures). A release build never reads this.
+    const asksSize = kind !== 'release' ? /^(\d{3,4})x(\d{3,4})$/.exec(process.env['SSHAPP_WINDOW'] ?? '') : null;
     meter.start();
     harden(session.defaultSession);
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
 
-    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#0c0e10', title: 'SSH App' });
+    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#0c0e10', title: 'SSH App', useContentSize: true });
+    if (asksSize) win.setContentSize(Number(asksSize[1]), Number(asksSize[2]));
     win.setMenu(null);
     shell = new WebContentsView({ webPreferences: viewPrefs(shellSession, 'preload-shell.js', true) });
     win.contentView.addChildView(shell);
@@ -319,7 +327,7 @@ if (!app.requestSingleInstanceLock()) {
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter });
+      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden });
     } else {
       await shellLoaded;
     }

@@ -154,5 +154,7 @@ jobs:
           echo "win32=$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')" >> "$GITHUB_OUTPUT"
       - name: The lab package (the self-test packaged, seven tabs, children end with their parent, a swapped engine)
         run: bash scripts/smoke.sh lab
+      - name: A picture of the whole window, from the real app
+        run: bash scripts/pictures.sh 1280x720 1.25
       - name: The release package (no debugger, no test hook, exits on any argument)
         run: bash scripts/smoke.sh release

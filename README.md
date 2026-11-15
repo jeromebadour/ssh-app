@@ -30,6 +30,7 @@ bash scripts/smoke.sh dev       # the real app on a virtual screen, sandbox on, 
 node scripts/package.mjs        # out/: four packages (lab and release, Linux and Windows), one app archive
 bash scripts/smoke.sh lab       # the same self-test in the lab package; a swapped engine must be refused
 bash scripts/smoke.sh release   # the release package: no debugger, no test hook, exits on any argument
+bash scripts/pictures.sh        # out/pictures/: the whole window, from the real app, at every agreed size
 ```
 
 **Two packages from one commit.** The lab and the release package hold the same app archive, byte for byte. A lab
@@ -49,6 +50,10 @@ registry-signature checks run beside it.
 builds everything again on a Windows machine, requires its Windows packages to be file for file the ones the Linux
 job built, runs the engine's tests on Windows, then runs the lab and the release package there, including what only
 Windows can show: Electron refusing an app archive with one byte changed.
+
+**Pictures come from the real app.** The window is several sealed views, each drawn by its own process, so no one
+view can take a picture of it. Main asks each view for its pixels and a lab-only page puts them together where they
+sit, with a strip above that names the picture (what it is, the theme, the window size and scaling, the commit).
 
 CI runs the same scripts on every pull request (`checks` and `lab`). A pull request is merged, by a workflow, only
 after both passed on its head commit; on `main`, CI fails any commit that did not come from a merged pull request.
