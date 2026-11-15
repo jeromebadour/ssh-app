@@ -1,8 +1,6 @@
 // Reads one fuse from an Electron program file. Fuses are switches burnt into the binary at packaging time;
 // they sit right after a fixed marker text as: one version byte, one count byte, then one byte per fuse
 // ('1' on, '0' off, 'r' removed). Main uses this for one question only: is this binary a lab build?
-import { readFile } from 'node:fs/promises';
-
 const SENTINEL = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX', 'ascii');
 
 // The position of "EnableNodeCliInspectArguments" in fuse version 1. The packaging script checks this number
@@ -20,12 +18,4 @@ export function fuseIn(binary: Uint8Array, index: number): FuseState {
   if (version !== 1 || count === undefined || index < 0 || index >= count) return 'unknown';
   const value = binary[start + 2 + index];
   return value === 0x31 ? 'on' : value === 0x30 ? 'off' : value === 0x72 ? 'removed' : 'unknown';
-}
-
-export async function fuseOf(file: string, index: number): Promise<FuseState> {
-  try {
-    return fuseIn(await readFile(file), index);
-  } catch {
-    return 'unknown';
-  }
 }

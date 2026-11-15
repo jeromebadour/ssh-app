@@ -140,6 +140,9 @@ case "$mode" in
       ms=$(( ($(date +%s%N) - t0) / 1000000 ))
       [ "$code" = 64 ] || fail "started with '$arg' it did not exit with 64 (exit $code)"
       ! grep -aq '^READY\|^SELFTEST\|Debugger listening\|DevTools listening' "$log" || fail "started with '$arg' it came up, or opened a debugger"
+      # The refusal comes before Chromium starts anything: a refusal that waited showed here as Chromium's
+      # launcher being asked for the graphics process while the app was already going down.
+      ! grep -aq 'gpu-process' "$log" || fail "started with '$arg' Chromium had begun starting its processes before the refusal"
       say "exits on: $arg (${ms} ms, nothing listening)"
     done
     # 3. A release binary with the lab's marker file put beside it is still not a lab package: its fuse says so.
@@ -149,6 +152,7 @@ case "$mode" in
     code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$work/marked/ssh-app" --lab)"
     [ "$code" = 64 ] || fail "a release binary with the lab marker beside it did not exit (exit $code)"
     ! grep -aq '^READY\|^SELFTEST' "$log" || fail "a release binary with the lab marker beside it came up"
+    ! grep -aq 'gpu-process' "$log" || fail "a release binary with the lab marker beside it had begun starting Chromium's processes before the refusal"
     say "the lab marker beside a release binary changes nothing"
     # 4. The control for the Windows run. There, Electron must refuse an app archive with one byte changed. Here
     #    on Linux Electron has no such check, so the same changed archives must start: that shows the change is

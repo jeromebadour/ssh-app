@@ -1,39 +1,24 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Engine } from './engine';
-import { FUSE_NODE_CLI_INSPECT, fuseOf } from './fuse';
+import { isLabPackageNow } from './lab-proof';
 import { Meter } from './meter';
 
 // A release build takes no arguments: none of its own, and none of Chromium's (a debugging port, for one).
 // The one exception is the lab package, which the test driver must be able to start with a debugger: it says
-// --lab, and that is believed only if the package really is a lab package (see isLabPackage). A release build
-// given --lab finds no proof within a moment and exits like for any other argument.
+// --lab, and that is believed only if the package really is a lab package (lab-proof.ts). The question is
+// answered here, before the event loop turns once: a release build given --lab, alone or with anything else,
+// exits like for any other argument, before Chromium has started anything those arguments asked for.
 // Refusing means ending the process there and then. app.exit() is not used for it: asked to exit while Electron
 // is still starting, it can wait for a start-up that we do not want to happen (seen on GitHub's runner, where
 // a release binary given --lab stayed alive).
 const refuse = (): never => process.exit(64);
-const wantsLab = app.isPackaged && process.argv.includes('--lab');
-if (app.isPackaged && process.argv.length > 1 && !wantsLab) refuse();
-
-// A lab package is one whose binary has the inspect fuse left on and which carries a marker file beside the
-// app archive. Both are outside the archive, so the lab and the release package hold the same app code, byte
-// for byte. A release binary can never pass: its fuse is off, whatever files sit beside it.
-async function isLabPackage(): Promise<boolean> {
-  try {
-    await stat(path.join(process.resourcesPath, 'lab'));
-  } catch {
-    return false;
-  }
-  return (await fuseOf(process.execPath, FUSE_NODE_CLI_INSPECT)) === 'on';
-}
-const labProof: Promise<boolean> = wantsLab ? isLabPackage() : Promise.resolve(false);
-void labProof.then((ok) => {
-  if (wantsLab && !ok) refuse();
-});
+const LAB = app.isPackaged && process.argv.includes('--lab') && isLabPackageNow(process.resourcesPath, process.execPath);
+if (app.isPackaged && process.argv.length > 1 && !LAB) refuse();
 
 const DIST = __dirname;
 const BAR = 44;
@@ -308,9 +293,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(async () => {
-    const lab = await labProof;
-    if (wantsLab && !lab) refuse();
-    const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
+    const kind = !app.isPackaged ? 'dev' : LAB ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
     SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction'].includes(asked) ? asked : '';
     if (SELFTEST === 'direction') await listDirections();
