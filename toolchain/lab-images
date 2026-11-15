@@ -1,0 +1,8 @@
+# The real OpenSSH servers the lab tests the engine's link against (plan B9), CI only.
+# name    image (pinned by digest)    package tool    the key exchange the link must agree on with it
+# "oldest" must be OpenSSH 8.9, the oldest the app supports (plan B2.2); scripts/lab-openssh.sh checks it.
+oldest ubuntu:22.04@sha256:unpinned apt curve25519-sha256
+newest ubuntu:26.04@sha256:unpinned apt mlkem768x25519-sha256
+survey ubuntu:26.10@sha256:unpinned apt mlkem768x25519-sha256
+survey debian:testing@sha256:unpinned apt mlkem768x25519-sha256
+survey alpine:latest@sha256:unpinned apk mlkem768x25519-sha256
