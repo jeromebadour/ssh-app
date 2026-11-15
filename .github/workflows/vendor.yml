@@ -1,0 +1,51 @@
+name: Vendor
+
+# The engine's Go modules live in the repo, under engine/vendor, and every build uses only that folder. This
+# workflow is the one place they are fetched: from Go's module proxy, each checked against Go's public checksum
+# log (scripts/vendor.sh). When a push to a work/ branch changes what the engine needs, it commits the result to
+# that same branch, as Jerome. CI then fetches everything again on its own and fails on any difference, so what
+# this workflow commits is checked by a second run before it can reach main.
+# It is the only workflow that pushes, and it pushes only to the work/ branch that started it.
+on:
+  push:
+    branches: ["work/**"]
+    paths:
+      - "engine/**"
+      - "!engine/vendor/**"
+      - "scripts/vendor.sh"
+      - "toolchain/go.env"
+      - ".github/workflows/vendor.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vendor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vendor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: Fetch the modules, checked against Go's checksum log
+        run: bash scripts/vendor.sh make
+      - name: Commit them to this branch if anything changed
+        env:
+          TOKEN: ${{ secrets.SSHAPP_MERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in work/*) ;; *) echo "not a work/ branch: $BRANCH" >&2; exit 1 ;; esac
+          git add -A -- engine/go.mod engine/go.sum engine/vendor
+          if git diff --cached --quiet; then echo "Nothing changed: the branch already holds these modules."; exit 0; fi
+          git diff --cached --stat | tail -1
+          git -c user.name="Jerome Badour" -c user.email="353646076+jeromebadour@users.noreply.github.com" \
+            commit -q -m "Vendor the engine's Go modules, fetched and checked in CI"
+          git push -q "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
+          echo "Pushed $(git rev-parse --short HEAD) to $BRANCH."

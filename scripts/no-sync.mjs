@@ -1,5 +1,7 @@
 // Fails if the app's own code calls anything that blocks: a synchronous file, process or message call,
 // or a blocking browser dialog. One blocked call in main freezes every tab at once.
+// One file is allowed two named calls, and nothing else anywhere: src/main/lab-proof.ts, which answers "is this
+// a lab package?" before the app has started anything (its own header says why).
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -18,6 +20,9 @@ async function* files(dir) {
   }
 }
 
+const allowed = { 'main/lab-proof.ts': ['statSync', 'readFileSync'] };
+const usedAllowance = new Set();
+
 let bad = 0;
 let seen = 0;
 for await (const file of files(root)) {
@@ -26,12 +31,28 @@ for await (const file of files(root)) {
   lines.forEach((line, i) => {
     if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
     for (const [re, what] of rules) {
-      if (re.test(line)) {
+      const hit = re.exec(line);
+      const call = hit ? hit[0].replace(/\s*\($/, '') : '';
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      // Each allowed call may appear once: a second use is a new blocking call like any other.
+      if (hit && (allowed[rel] ?? []).includes(call) && line.split(call).length === 2 && !usedAllowance.has(`${rel}:${call}`)) {
+        usedAllowance.add(`${rel}:${call}`);
+        continue;
+      }
+      if (hit) {
         bad++;
         console.log(`${path.relative(process.cwd(), file)}:${i + 1}: ${what}: ${line.trim()}`);
       }
     }
   });
+}
+for (const [rel, calls] of Object.entries(allowed)) {
+  for (const call of calls) {
+    if (!usedAllowance.has(`${rel}:${call}`)) {
+      bad++;
+      console.log(`no-sync: an allowance nothing uses any more: ${call} in ${rel}`);
+    }
+  }
 }
 if (seen === 0) { console.log('no-sync: found no source files'); process.exit(1); }
 console.log(bad ? `no-sync: ${bad} blocking call(s)` : `no-sync: ${seen} files, no blocking call`);

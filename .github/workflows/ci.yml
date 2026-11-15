@@ -1,10 +1,11 @@
 name: CI
 
-# Every pull request, and main after each merge. Two jobs must pass before merge.yml merges a pull request:
+# Every pull request, and main after each merge. These jobs must pass before merge.yml merges a pull request:
 #   checks: everything that needs no window (types, the no-blocking-calls rule, Go vet and tests, a short fuzz run).
 #   lab:    the real app on a virtual screen with Chromium's sandbox on: its self-test in the built tree and in
 #           the lab package, then the release package with no debugger and no test hook.
-# Changes reach main only through a pull request; merge.yml does the merging once both jobs pass.
+#   vuln:   known vulnerabilities in the Go code that ships.
+# Changes reach main only through a pull request; merge.yml does the merging once the whole run passed.
 # On main a third job, from-a-pull-request, fails the run if a commit got there any other way.
 # A pull request that changes toolchain/windows-run also gets the Windows run (jobs plan and windows).
 # Actions are GitHub's own, pinned by commit. Nothing here has write access.
@@ -36,8 +37,31 @@ jobs:
         run: npm ci --ignore-scripts
       - name: The pinned Go toolchain
         run: bash scripts/get-go.sh
+      - name: The vendored Go modules are exactly what a fresh, checked fetch gives
+        run: bash scripts/vendor.sh check
       - name: Checks
         run: bash scripts/check.sh
+
+  # Known vulnerabilities in the Go code that ships, for Linux and for Windows. The checker is a test tool: it is
+  # fetched in this job and nowhere else (pinned in toolchain/govulncheck-version, checked against Go's checksum
+  # log), and nothing built here ships.
+  vuln:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: govulncheck
+        run: |
+          source scripts/env.sh
+          version="$(cat toolchain/govulncheck-version)"
+          GOBIN="$RUNNER_TEMP/bin" GOFLAGS= GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go install "golang.org/x/vuln/cmd/govulncheck@$version"
+          cd engine
+          echo "for Linux:";   "$RUNNER_TEMP/bin/govulncheck" ./...
+          echo "for Windows:"; GOOS=windows "$RUNNER_TEMP/bin/govulncheck" ./...
 
   # Decides whether this pull request asks for the Windows run: it does by changing toolchain/windows-run.
   plan:

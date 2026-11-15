@@ -1,5 +1,5 @@
 {
-  "about": "Every package that may appear in package-lock.json, with why it is there. The gate fails on any name that is not listed, and on any listed name that is no longer used. A trailing * covers one family of platform builds published together with their parent.",
+  "about": "Every package that may appear in package-lock.json, with why it is there. The gate fails on any name that is not listed, and on any listed name that is no longer used. A trailing * covers one family of platform builds published together with their parent. goModules: every Go module engine/go.mod may require, the same way.",
   "packages": {
     "electron": "The app's shell: Chromium and Node. Ships.",
     "@electron/get": "Electron's own downloader for its binaries, checked against the checksums in the electron package: used by electron's install step and by our packaging script. Build only.",
@@ -23,5 +23,9 @@
     "pe-library": "Reads and writes Windows program files, for resedit. Build only.",
     "preact": "The view library the screens are built with (plan B7). Ships.",
     "@fontsource/*": "Open-licensed typefaces (OFL 1.1), font files only, no code: IBM Plex Sans Condensed and IBM Plex Mono, Berth's chosen type. Ships."
+  },
+  "goModules": {
+    "golang.org/x/crypto": "The Go team's cryptography: Argon2id and XChaCha20-Poly1305 for the locked list, and from step 2 on the SSH protocol itself (plan B2.1, B2.4). Ships.",
+    "golang.org/x/sys": "The Go team's operating-system calls: processor feature detection for x/crypto. Ships."
   }
 }
