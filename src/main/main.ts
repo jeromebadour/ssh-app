@@ -11,8 +11,12 @@ import { FUSE_NODE_CLI_INSPECT, fuseOf } from './fuse';
 // The one exception is the lab package, which the test driver must be able to start with a debugger: it says
 // --lab, and that is believed only if the package really is a lab package (see isLabPackage). A release build
 // given --lab finds no proof within a moment and exits like for any other argument.
+// Refusing means ending the process there and then. app.exit() is not used for it: asked to exit while Electron
+// is still starting, it can wait for a start-up that we do not want to happen (seen on GitHub's runner, where
+// a release binary given --lab stayed alive).
+const refuse = (): never => process.exit(64);
 const wantsLab = app.isPackaged && process.argv.includes('--lab');
-if (app.isPackaged && process.argv.length > 1 && !wantsLab) app.exit(64);
+if (app.isPackaged && process.argv.length > 1 && !wantsLab) refuse();
 
 // A lab package is one whose binary has the inspect fuse left on and which carries a marker file beside the
 // app archive. Both are outside the archive, so the lab and the release package hold the same app code, byte
@@ -27,7 +31,7 @@ async function isLabPackage(): Promise<boolean> {
 }
 const labProof: Promise<boolean> = wantsLab ? isLabPackage() : Promise.resolve(false);
 void labProof.then((ok) => {
-  if (wantsLab && !ok) app.exit(64);
+  if (wantsLab && !ok) refuse();
 });
 
 const DIST = __dirname;
@@ -262,7 +266,7 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(async () => {
     const lab = await labProof;
-    if (wantsLab && !lab) return app.exit(64);
+    if (wantsLab && !lab) refuse();
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
     SELFTEST = kind !== 'release' && (asked === 'all' || asked === 'engine-must-be-refused') ? asked : '';
