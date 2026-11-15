@@ -7,7 +7,8 @@ name: CI
 #   vuln:   known vulnerabilities in the Go code that ships.
 # Changes reach main only through a pull request; merge.yml does the merging once the whole run passed.
 # On main a third job, from-a-pull-request, fails the run if a commit got there any other way.
-# A pull request that changes toolchain/windows-run also gets the Windows run (jobs plan and windows).
+# A pull request that changes toolchain/windows-run also gets the Windows run (jobs plan and windows), and one
+# that changes the engine also gets the real OpenSSH servers (job openssh).
 # Actions are GitHub's own, pinned by commit. Nothing here has write access.
 on:
   push:
@@ -71,6 +72,7 @@ jobs:
       pull-requests: read
     outputs:
       windows: ${{ steps.files.outputs.windows }}
+      openssh: ${{ steps.files.outputs.openssh }}
     steps:
       - id: files
         env:
@@ -79,9 +81,37 @@ jobs:
           NUMBER: ${{ github.event.pull_request.number }}
         run: |
           windows=false
-          if [ -n "$NUMBER" ] && gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename' | grep -qx 'toolchain/windows-run'; then windows=true; fi
+          openssh=false
+          files=""
+          if [ -n "$NUMBER" ]; then files="$(gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename')"; fi
+          if grep -qx 'toolchain/windows-run' <<<"$files"; then windows=true; fi
+          if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$)' <<<"$files"; then openssh=true; fi
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
-          echo "the Windows run: $windows"
+          echo "openssh=$openssh" >> "$GITHUB_OUTPUT"
+          echo "the Windows run: $windows; the real OpenSSH servers: $openssh"
+
+  # The engine's link against real OpenSSH servers: the newest, and 8.9, the oldest the app supports. They run
+  # in containers pinned by digest (toolchain/lab-images). Only when a pull request changes the engine or the
+  # lab itself: nothing else can change what this proves.
+  openssh:
+    needs: plan
+    if: needs.plan.outputs.openssh == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: Real OpenSSH servers, in containers
+        run: bash scripts/lab-openssh.sh up
+      - name: The link against them
+        run: |
+          source scripts/env.sh
+          cd engine
+          LAB_OPENSSH="$GITHUB_WORKSPACE/out/lab-openssh" LAB_OPENSSH_REQUIRED=1 go test -count=1 -v -run '^TestOpenSSH$' ./internal/link 2>&1 \
+            | grep -E '^(\s*--- |ok|FAIL|panic|\s+\S+_test\.go)'
 
   # The Windows run. Not on every pull request (Windows runner time costs more): only when asked, see `plan`.
   # It builds everything again on Windows from the same commit, so it is also a second builder: the Windows

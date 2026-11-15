@@ -1,0 +1,7 @@
+# The real OpenSSH servers the lab tests the engine's link against (plan B9), CI only.
+# name    image (pinned by digest)    package tool    the key exchange the link must agree on with it
+# "oldest" must be OpenSSH 8.9, the oldest the app supports (plan B2.2); scripts/lab-openssh.sh checks it.
+oldest ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c apt curve25519-sha256
+newest ubuntu:26.10@sha256:b5194b8e58989da0865ebc80078bf9f5f8742ec6a867c53f6ae699f6036756f7 apt mlkem768x25519-sha256
+# Read on 2026-11-16, when these were pinned: 22.04 has OpenSSH 8.9p1 and 26.10 has 10.5p1. Also seen that day:
+# ubuntu:26.04 10.2p1, alpine:latest 10.3p1, debian:testing 10.6p2 (a moving target, so not used).
