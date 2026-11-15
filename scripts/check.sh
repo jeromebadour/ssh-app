@@ -27,6 +27,10 @@ unformatted="$(cd engine && gofmt -l cmd internal)"
 [ -z "$unformatted" ] || { echo "not gofmt-formatted: $unformatted" >&2; exit 1; }
 (cd engine && go vet ./... && GOOS=windows go vet ./... && go test -count=1 ./...)
 
+echo "check: lab tools are in no program that ships"
+shipped="$(cd engine && go list -deps ./cmd/... && GOOS=windows go list -deps ./cmd/...)"
+! grep -q 'internal/lab' <<<"$shipped" || { echo "a shipped program imports a lab package" >&2; exit 1; }
+
 echo "check: a short fuzz run on the frame reader"
 (cd engine && go test -run '^$' -fuzz '^FuzzRead$' -fuzztime 5s ./internal/frame | tail -2)
 
