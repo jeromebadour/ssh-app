@@ -22,8 +22,18 @@ node node_modules/electron/install.js
 bash scripts/get-go.sh
 bash scripts/check.sh    # the dependency gate, types, no blocking calls, Go vet and tests, a short fuzz run
 bash scripts/build.sh    # dist/: the engine (Linux and Windows), main, preloads, views
-bash scripts/smoke.sh    # the real app on a virtual screen, sandbox on, running its self-test
+bash scripts/smoke.sh dev       # the real app on a virtual screen, sandbox on, running its self-test
+node scripts/package.mjs        # out/: four packages (lab and release, Linux and Windows), one app archive
+bash scripts/smoke.sh lab       # the same self-test in the lab package; a swapped engine must be refused
+bash scripts/smoke.sh release   # the release package: no debugger, no test hook, exits on any argument
 ```
+
+**Two packages from one commit.** The lab and the release package hold the same app archive, byte for byte. A lab
+package's binary keeps the inspect fuse on and has a marker file beside the archive, so the test driver can attach;
+a release binary has neither, takes no arguments at all, and stays a release build whatever is put beside it. No
+packaging tool is used: Electron's files come from its own release (checked against the checksums in its package),
+the archive is written by `scripts/lib/asar.mjs` (same files, same bytes), the fuses by Electron's own fuse tool,
+and on Windows the archive's hash goes into the program file for Electron's integrity check.
 
 **The dependency gate** (`scripts/gate.mjs`, with `toolchain/reviewed.json`, `exceptions.json` and `support.json`)
 fails the checks if a package appears that nobody reviewed, if any version is younger than 14 days, if a package
@@ -39,6 +49,6 @@ after both passed on its head commit; on `main`, CI fails any commit that did no
 - `src/main/`: the main process: the window, the views, the engines, the routing, the self-test.
 - `src/tab/`, `src/shell/`: the views and their preloads. `src/common/`: the frame format and the message list.
 - `protocol/vectors.json`: the test vectors both languages run.
-- `scripts/`, `toolchain/`, `.github/workflows/`: build, checks, pins, CI.
+- `scripts/`, `toolchain/`, `.github/workflows/`: build, packaging, checks, pins, CI.
 
 No server, address, user or key of any real machine belongs in this repository, in code, tests, docs or commits.

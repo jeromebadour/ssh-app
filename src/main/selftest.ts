@@ -11,6 +11,7 @@ import type { Tab } from './main';
 interface Ctx {
   shell: WebContentsView;
   shellLoaded: Promise<void>;
+  kind: string;
   openTab(): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
@@ -55,7 +56,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     results.push({ name, ok, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   };
   const finish = (code: number) => {
-    process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, results })}\n`);
+    process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
   };
   const guard = setTimeout(() => {
@@ -81,7 +82,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     const b = ctx.openTab()!;
     const views: [string, WebContentsView][] = [['shell', ctx.shell], ['tab a', a.view], ['tab b', b.view]];
 
-    check('two engines answer', await until(() => a.engine.state === 'ready' && b.engine.state === 'ready', 10_000), [a.engine.state, b.engine.state]);
+    check('two engines answer', await until(() => a.engine.state === 'ready' && b.engine.state === 'ready', 10_000), [a.engine.state, b.engine.state, a.engine.cause]);
     await until(async () => (await js<string>(b.view, `document.readyState`)) === 'complete', 10_000);
     await until(async () => (await js<string>(a.view, `document.readyState`)) === 'complete', 10_000);
 
