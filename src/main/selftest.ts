@@ -3,6 +3,7 @@
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
 import { app, type WebContentsView } from 'electron';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ShellState } from '../common/ipc';
@@ -99,6 +100,61 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await until(() => t.engine.state === 'gone', 10_000);
       check('the engine was not started', t.engine.state === 'gone' && t.engine.pid === 0, [t.engine.state, t.engine.pid]);
       check('and the tab says why', t.engine.cause === 'the engine file is not the one this app was built with', t.engine.cause);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    }
+
+    // "hold": two tabs, then nothing. Prints who is who and stays up, so the script outside can end main by
+    // force and see that the engines end with it (children never outlive their parent).
+    if (ctx.mode === 'hold') {
+      const one = ctx.openTab()!;
+      const two = ctx.openTab()!;
+      const up = await until(() => one.engine.state === 'ready' && two.engine.state === 'ready', 15_000);
+      process.stdout.write(`HOLD ok=${up} main=${process.pid} engines=${one.engine.pid},${two.engine.pid}\n`);
+      canary.close();
+      clearTimeout(guard);
+      return;
+    }
+
+    // "seven": the fullest day. Seven tabs, each with its own view and engine, all answering, none leaking into
+    // another; with what it costs in memory.
+    if (ctx.mode === 'seven') {
+      const all = Array.from({ length: 7 }, () => ctx.openTab()!);
+      check('seven engines answer', await until(() => all.every((t) => t.engine.state === 'ready'), 30_000), all.map((t) => t.engine.state));
+      for (const t of all) await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
+      const ids = [process.pid, ctx.shell.webContents.getOSProcessId(), ...all.map((t) => t.view.webContents.getOSProcessId()), ...all.map((t) => t.engine.pid)];
+      check('sixteen processes, each its own', new Set(ids).size === 16 && !ids.includes(0), ids);
+      for (const [i, t] of all.entries()) await type(t, `seven-${i}-x`);
+      let leaks = 0;
+      let arrived = 0;
+      await sleep(300);
+      for (const [i, t] of all.entries()) {
+        const text = await until(async () => (await shown(t)).includes(`seven-${i}-x`), 3000) ? await shown(t) : '';
+        if (text) arrived++;
+        if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
+      }
+      check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
+      // Memory, counted fairly: memory shared between processes (the browser engine's own code, mostly) is counted
+      // once, not once per process. Linux gives that as "Pss"; Windows as each process's private bytes. The plain
+      // per-process sum is printed beside it, because that is the number a task manager shows.
+      const metrics = app.getAppMetrics();
+      const plain = Math.round(metrics.reduce((sum, m) => sum + m.memory.workingSetSize, 0) / 1024);
+      let fair = 0;
+      let how = '';
+      if (process.platform === 'linux') {
+        how = 'shared memory counted once';
+        for (const pid of [...metrics.map((m) => m.pid), ...all.map((t) => t.engine.pid)]) {
+          const rollup = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8').catch(() => '');
+          fair += Number(/^Pss:\s+(\d+) kB/m.exec(rollup)?.[1] ?? 0);
+        }
+      } else {
+        how = 'private memory, engines not counted';
+        fair = metrics.reduce((sum, m) => sum + (m.memory.privateBytes ?? 0), 0);
+      }
+      const mb = Math.round(fair / 1024);
+      const budget = 300 + 7 * 220;
+      check(`memory with seven tabs: ${mb} MB (${how}); budget ${budget} MB; plain per-process sum ${plain} MB`, mb > 0 && mb < budget, { mb, plain });
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);

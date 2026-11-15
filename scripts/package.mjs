@@ -66,7 +66,10 @@ const hashes = JSON.parse(readAsar(await readFile(path.join(out, 'app.asar'))).f
 
 const report = { electron: electronVersion, archive: { sha256: archive.sha256, headerHash: archive.headerHash, files: archive.files }, packages: {} };
 
-for (const platform of ['linux', 'win32']) {
+// "node scripts/package.mjs win32" makes the Windows packages only (the Windows job needs no Linux ones).
+const platforms = process.argv.length > 2 ? process.argv.slice(2) : ['linux', 'win32'];
+for (const platform of platforms) {
+  if (platform !== 'linux' && platform !== 'win32') throw new Error(`package: unknown platform ${platform}`);
   const zip = await downloadArtifact({ version: electronVersion, platform, arch: 'x64', artifactName: 'electron', checksums: require(path.join(root, 'node_modules/electron/checksums.json')) });
   const engineName = platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp-engine';
   const engine = await readFile(path.join(root, 'dist/engine', engineName));
@@ -127,4 +130,4 @@ for (const platform of ['linux', 'win32']) {
 await rm(path.join(out, 'app.asar'));
 await writeFile(path.join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
 for (const [id, p] of Object.entries(report.packages)) console.log(`package: ${id}  ${p.files} files  manifest ${p.manifestSha256.slice(0, 16)}`);
-console.log(`package: one archive in all four: ${archive.sha256.slice(0, 16)} (${archive.files} files, header ${archive.headerHash.slice(0, 16)})`);
+console.log(`package: one archive in all ${Object.keys(report.packages).length}: ${archive.sha256.slice(0, 16)} (${archive.files} files, header ${archive.headerHash.slice(0, 16)})`);

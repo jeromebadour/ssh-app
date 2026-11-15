@@ -269,7 +269,7 @@ if (!app.requestSingleInstanceLock()) {
     if (wantsLab && !lab) refuse();
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && (asked === 'all' || asked === 'engine-must-be-refused') ? asked : '';
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven'].includes(asked) ? asked : '';
     harden(session.defaultSession);
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
@@ -287,7 +287,7 @@ if (!app.requestSingleInstanceLock()) {
     layout();
     const shellLoaded = shell.webContents.loadURL('app://shell/index.html');
     // One line for whoever started the app from a terminal or a test: it is up, and what kind of build it is.
-    void shellLoaded.then(() => process.stderr.write(`READY kind=${kind}\n`));
+    void shellLoaded.then(() => process.stderr.write(`READY kind=${kind} ms=${Math.round(process.uptime() * 1000)}\n`));
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');

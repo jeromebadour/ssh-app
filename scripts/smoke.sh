@@ -41,7 +41,7 @@ start() {
 selftest() {
   local log="$1"; shift
   local code line
-  code="$(start 150 "$log" SSHAPP_SELFTEST=all -- "$@")"
+  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
     echo "smoke: the app gave no result (exit code $code)." >&2
@@ -79,7 +79,7 @@ case "$mode" in
     [ -x "$pkg/ssh-app" ] || { echo "smoke: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
     helper "$pkg/chrome-sandbox"
     selftest "$log" "$pkg/ssh-app" --lab
-    grep -aq '^READY kind=lab$' "$log" || fail "the lab package did not say it is a lab build"
+    grep -aq '^READY kind=lab ' "$log" || fail "the lab package did not say it is a lab build"
 
     # A swapped engine: the same package with one byte of its engine changed must refuse to start it.
     cp -a "$pkg" "$work/swapped"
@@ -89,6 +89,29 @@ case "$mode" in
     [ "$code" = 0 ] && grep -a '^SELFTEST ' "$log" | grep -q '"ok":true' \
       && say "a swapped engine is not started, and the tab says why" \
       || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
+    # Seven tabs at once.
+    selftest_mode=seven selftest "$log" "$pkg/ssh-app" --lab
+
+    # Children end with their parent: main is ended by force, and its engines must be gone within five seconds.
+    ( start 60 "$log" SSHAPP_SELFTEST=hold -- "$pkg/ssh-app" --lab >/dev/null ) &
+    held=""
+    for _ in $(seq 1 150); do held="$(grep -a '^HOLD ' "$log" 2>/dev/null | tail -1 || true)"; [ -n "$held" ] && break; sleep 0.2; done
+    [[ "$held" == *"ok=true"* ]] || { tail -20 "$log" >&2; fail "the app did not come up with two engines"; }
+    main_pid="$(sed -E 's/.* main=([0-9]+).*/\1/' <<<"$held")"
+    engine_pids="$(sed -E 's/.* engines=([0-9,]+).*/\1/' <<<"$held" | tr ',' ' ')"
+    # shellcheck disable=SC2086
+    for p in $main_pid $engine_pids; do kill -0 "$p" 2>/dev/null || fail "process $p was not running before the test"; done
+    kill -9 "$main_pid"
+    gone=no
+    for _ in $(seq 1 25); do
+      gone=yes
+      # shellcheck disable=SC2086
+      for p in $engine_pids; do kill -0 "$p" 2>/dev/null && gone=no; done
+      [ "$gone" = yes ] && break
+      sleep 0.2
+    done
+    wait || true
+    [ "$gone" = yes ] && say "main ended by force: its engines ended with it" || fail "engines outlived main"
     echo "smoke: the lab package held"
     ;;
 
@@ -100,7 +123,7 @@ case "$mode" in
     # 1. Plain start: it comes up, says what it is, stays up, and the self-test switch does nothing.
     code="$(start 12 "$log" SSHAPP_SELFTEST=all -- "$pkg/ssh-app")"
     [ "$code" = 124 ] || fail "the release package did not stay up for 12 s (exit $code)"
-    grep -aq '^READY kind=release$' "$log" || fail "the release package did not come up as a release build"
+    grep -aq '^READY kind=release ' "$log" || fail "the release package did not come up as a release build"
     say "it starts and stays up as a release build"
     ! grep -aq '^SELFTEST ' "$log" || fail "the release package ran the self-test"
     say "the self-test switch does nothing in it"
@@ -125,6 +148,18 @@ case "$mode" in
     [ "$code" = 64 ] || fail "a release binary with the lab marker beside it did not exit (exit $code)"
     ! grep -aq '^READY\|^SELFTEST' "$log" || fail "a release binary with the lab marker beside it came up"
     say "the lab marker beside a release binary changes nothing"
+    # 4. The control for the Windows run. There, Electron must refuse an app archive with one byte changed. Here
+    #    on Linux Electron has no such check, so the same changed archives must start: that shows the change is
+    #    harmless by itself, and that only the check can be what refuses it on Windows.
+    for what in index file; do
+      cp -a "$pkg" "$work/changed-$what"
+      helper "$work/changed-$what/chrome-sandbox"
+      node scripts/lib/change-archive.mjs "$work/changed-$what/resources/app.asar" "$what" >/dev/null
+      code="$(start 8 "$log" -- "$work/changed-$what/ssh-app")"
+      [ "$code" = 124 ] && grep -aq '^READY kind=release ' "$log" || fail "the control did not start with a changed archive ($what, exit $code)"
+      say "control: an archive with one harmless byte changed ($what) still starts on Linux"
+      rm -rf "$work/changed-$what"
+    done
     echo "smoke: the release package held"
     ;;
 

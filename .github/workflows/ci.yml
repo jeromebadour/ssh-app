@@ -6,6 +6,7 @@ name: CI
 #           the lab package, then the release package with no debugger and no test hook.
 # Changes reach main only through a pull request; merge.yml does the merging once both jobs pass.
 # On main a third job, from-a-pull-request, fails the run if a commit got there any other way.
+# A pull request that changes toolchain/windows-run also gets the Windows run (jobs plan and windows).
 # Actions are GitHub's own, pinned by commit. Nothing here has write access.
 on:
   push:
@@ -38,6 +39,68 @@ jobs:
       - name: Checks
         run: bash scripts/check.sh
 
+  # Decides whether this pull request asks for the Windows run: it does by changing toolchain/windows-run.
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      windows: ${{ steps.files.outputs.windows }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          windows=false
+          if [ -n "$NUMBER" ] && gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename' | grep -qx 'toolchain/windows-run'; then windows=true; fi
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+          echo "the Windows run: $windows"
+
+  # The Windows run. Not on every pull request (Windows runner time costs more): only when asked, see `plan`.
+  # It builds everything again on Windows from the same commit, so it is also a second builder: the Windows
+  # packages it makes must be, file for file, the ones the Linux job made.
+  windows:
+    needs: [plan, lab]
+    if: needs.plan.outputs.windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the pinned packages (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: The engine's tests on Windows (the process tests, and the patience read back from Windows)
+        run: |
+          source scripts/env.sh
+          cd engine && go vet ./... && go test -count=1 -v -run 'Test' ./... 2>&1 | grep -E '^(=== RUN|--- |ok|FAIL|panic|\s+\S+_test.go)' 
+      - name: Build
+        run: bash scripts/build.sh
+      - name: The Windows packages, built here
+        run: node scripts/package.mjs win32
+      - name: A second builder agrees with the first
+        env:
+          LINUX_BUILT: ${{ needs.lab.outputs.win32 }}
+        run: |
+          here="$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')"
+          echo "built on Linux:   $LINUX_BUILT"
+          echo "built on Windows: $here"
+          [ -n "$LINUX_BUILT" ] && [ "$here" = "$LINUX_BUILT" ] || { echo "::error::The two builders made different Windows packages."; exit 1; }
+      - name: The Windows packages, run
+        run: node scripts/smoke-windows.mjs
+
   # GitHub offers no ruleset for a private repo on the free plan, so nothing there blocks a direct push to main.
   # This job makes one loud: on main, the commit must be the merge of a pull request, or the run fails.
   from-a-pull-request:
@@ -61,6 +124,8 @@ jobs:
   lab:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      win32: ${{ steps.report.outputs.win32 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,7 +148,11 @@ jobs:
         run: bash scripts/smoke.sh dev
       - name: The four packages (lab and release, Linux and Windows), fuses and integrity read back
         run: node scripts/package.mjs
-      - name: The lab package (the same self-test in a packaged app, and a swapped engine)
+      - name: What was built, for the second builder to compare
+        id: report
+        run: |
+          echo "win32=$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')" >> "$GITHUB_OUTPUT"
+      - name: The lab package (the self-test packaged, seven tabs, children end with their parent, a swapped engine)
         run: bash scripts/smoke.sh lab
       - name: The release package (no debugger, no test hook, exits on any argument)
         run: bash scripts/smoke.sh release

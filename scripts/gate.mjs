@@ -88,8 +88,11 @@ const goMod = /^go (\d+\.\d+)(?:\.\d+)?$/m.exec(await text('engine/go.mod'))?.[1
 const goMinor = /^(\d+\.\d+)\.\d+$/.exec(goEnv.GO_VERSION ?? '')?.[1];
 if (!goMinor) bad(`toolchain/go.env has no full Go version: ${goEnv.GO_VERSION}`);
 if (goMinor !== goMod) bad(`engine/go.mod says go ${goMod}, toolchain/go.env pins ${goEnv.GO_VERSION}`);
-if (!/^[0-9a-f]{64}$/.test(goEnv.GO_LINUX_X64_SHA256 ?? '')) bad('toolchain/go.env has no SHA-256 for the Go download');
-if (!String(goEnv.GO_LINUX_X64_URL ?? '').startsWith('https://github.com/actions/go-versions/releases/download/')) bad('the Go download is not from actions/go-versions');
+for (const os of ['LINUX', 'WIN32']) {
+  if (!/^[0-9a-f]{64}$/.test(goEnv[`GO_${os}_X64_SHA256`] ?? '')) bad(`toolchain/go.env has no SHA-256 for the Go download (${os.toLowerCase()})`);
+  const url = String(goEnv[`GO_${os}_X64_URL`] ?? '');
+  if (!url.startsWith('https://github.com/actions/go-versions/releases/download/') || !url.includes(`/go-${goEnv.GO_VERSION}-`)) bad(`the Go download (${os.toLowerCase()}) is not the pinned version from actions/go-versions`);
+}
 const node = await text('.node-version');
 const nodeMajor = /^(\d+)\.\d+\.\d+$/.exec(node)?.[1];
 if (!nodeMajor) bad(`.node-version is not a full version: ${node}`);
