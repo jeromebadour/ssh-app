@@ -4,12 +4,14 @@
 //   ?scene=paths     the path bar's pinned and recent folders are open
 //   ?scene=boxes     the Boxes menu is open
 import { render } from 'preact';
-import { blocks, files, groups, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
+import { blocks, files, groups, logCmd, logLines, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
 import { Glyph } from './glyphs';
 import { Mark } from './marks';
 
 const q = new URLSearchParams(location.search);
 const scene = q.get('scene') ?? '';
+// In the logs picture the logs tab is the one in front.
+if (scene === 'logs') for (const g of tabGroups) for (const t of g.tabs) t.active = g.box === 'relay-fra' && t.place === 'logs';
 
 const stateWords: Record<Box['state'], string> = { connected: 'connected', reconnecting: 'reconnecting', idle: 'not open' };
 
@@ -127,7 +129,7 @@ function FilePanel() {
         {files.map((f) => (
           <div class={`file ${f.selected ? 'selected' : ''} ${f.fresh ? 'fresh' : ''} k-${f.kind}`} key={f.name}>
             <FileIcon row={f} />
-            <span class="f-name"><span class="f-text">{f.name}</span>{f.fresh && <span class="f-new">new</span>}</span>
+            <span class="f-name"><span class="f-text">{f.name}</span>{f.target && <span class="f-target">{f.target}</span>}{f.fresh && <span class="f-new">new</span>}</span>
             <span class="f-size">{f.size ?? ''}</span>
             <span class="f-date">{f.modified ?? ''}</span>
           </div>
@@ -152,7 +154,7 @@ function FilePanel() {
         </div>
       </div>
       <div class="file-foot">
-        <span>9 items, 1 selected, 48.6 MB</span>
+        <span>{files.length - 1} items, 1 selected, 48.6 MB</span>
         <span class="free">61.2 GB free</span>
       </div>
     </section>
@@ -170,7 +172,55 @@ function Prompt() {
   );
 }
 
+// Word colouring, as offered: a small fixed set of rules, in the app's muted meaning colours, on top of whatever
+// colours the box itself sends. Times and tags go quiet; failures and refusals take the problem colour; success
+// and 2xx answers the checked colour; addresses the input colour. Nothing else is touched.
+const RULES: [RegExp, string][] = [
+  [/^\d{4}-\d{2}-\d{2}T[\d:.]+Z/, 'w-time'],
+  [/\[[a-z]+\]/, 'w-tag'],
+  [/\b(?:refused|failure|failed|error|timeout|disconnected|denied)\b|\b[45]\d\d(?= \d+ms)|\b(?:451|503)\b/i, 'w-bad'],
+  [/\b(?:ok|verified|done|connected)\b|\b2\d\d(?= \d+ms)/i, 'w-good'],
+  [/\b\d{1,3}(?:\.\d{1,3}){3}\b/, 'w-addr'],
+];
+
+function paint(line: string) {
+  const parts: preact.JSX.Element[] = [];
+  let rest = line;
+  let key = 0;
+  while (rest.length) {
+    let best: { at: number; len: number; cls: string } | null = null;
+    for (const [re, cls] of RULES) {
+      const m = re.exec(rest);
+      if (m && (best === null || m.index < best.at)) best = { at: m.index, len: m[0].length, cls };
+    }
+    if (!best) {
+      parts.push(<span key={key++}>{rest}</span>);
+      break;
+    }
+    if (best.at > 0) parts.push(<span key={key++}>{rest.slice(0, best.at)}</span>);
+    parts.push(<span key={key++} class={best.cls}>{rest.slice(best.at, best.at + best.len)}</span>);
+    rest = rest.slice(best.at + best.len);
+  }
+  return parts;
+}
+
 function Terminal() {
+  if (scene === 'logs') {
+    return (
+      <section class="term" aria-label="Terminal on relay-fra">
+        <div class="term-frame">
+          <div class="scrolled-out">older output scrolled out</div>
+          <div class="block running">
+            <div class="gutter"><span class="g-mark" /><span class="g-time">6:10</span></div>
+            <div class="block-body">
+              <div class="line cmd"><Prompt />{logCmd}</div>
+              {logLines.map((l, i) => <div class="line" key={i}>{paint(l)}</div>)}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
   return (
     <section class="term" aria-label="Terminal on relay-fra">
       <div class="term-frame">

@@ -135,7 +135,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     if (ctx.mode === 'direction') {
       const file = process.env['SSHAPP_PICTURE'] ?? '';
       const which = /^[abc]$/.test(process.env['SSHAPP_DIRECTION'] ?? '') ? process.env['SSHAPP_DIRECTION'] : 'a';
-      const scene = /^(dialog|paths|boxes|plain)$/.test(process.env['SSHAPP_SCENE'] ?? '') ? process.env['SSHAPP_SCENE'] : 'plain';
+      const scene = /^(dialog|paths|boxes|logs|plain)$/.test(process.env['SSHAPP_SCENE'] ?? '') ? process.env['SSHAPP_SCENE'] : 'plain';
       const view = ctx.newView('directions');
       const size = ctx.win.getContentBounds();
       view.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
