@@ -1,7 +1,7 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Engine } from './engine';
@@ -66,7 +66,9 @@ const CSP = [
 ].join('; ');
 
 // Every file a view may load, by kind and path. Anything else is 404: no path is ever built from a request.
-const FILES: Record<'shell' | 'tab' | 'easel', Record<string, [file: string, type: string]>> = {
+const FILES: Record<'shell' | 'tab' | 'easel' | 'directions', Record<string, [file: string, type: string]>> = {
+  // The direction pictures: filled from dist/directions when a lab run asks for them, empty otherwise.
+  directions: {},
   // The easel puts pictures of the window together. Lab and development builds only (see below).
   easel: {
     '/index.html': ['lab/index.html', 'text/html; charset=utf-8'],
@@ -84,6 +86,15 @@ const FILES: Record<'shell' | 'tab' | 'easel', Record<string, [file: string, typ
   },
 };
 
+const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
+async function listDirections(): Promise<void> {
+  const base = path.join(DIST, 'directions');
+  for (const rel of await readdir(base, { recursive: true })) {
+    const type = TYPES[path.extname(rel)];
+    if (type) FILES.directions[`/${rel.split(path.sep).join('/')}`] = [path.join('directions', rel), type];
+  }
+}
+
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
 
 async function serve(request: Request): Promise<Response> {
@@ -93,7 +104,7 @@ async function serve(request: Request): Promise<Response> {
   } catch {
     return new Response(null, { status: 400 });
   }
-  const kind = url.hostname === 'shell' ? 'shell' : /^tab-[0-9]{1,6}$/.test(url.hostname) ? 'tab' : url.hostname === 'easel' && SELFTEST ? 'easel' : null;
+  const kind = url.hostname === 'shell' ? 'shell' : /^tab-[0-9]{1,6}$/.test(url.hostname) ? 'tab' : url.hostname === 'easel' && SELFTEST ? 'easel' : url.hostname === 'directions' && SELFTEST === 'direction' ? 'directions' : null;
   const entry = kind && request.method === 'GET' ? FILES[kind][url.pathname] : undefined;
   if (!entry) return new Response(null, { status: 404 });
   const data = await readFile(path.join(DIST, entry[0]));
@@ -301,7 +312,8 @@ if (!app.requestSingleInstanceLock()) {
     if (wantsLab && !lab) refuse();
     const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture'].includes(asked) ? asked : '';
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction'].includes(asked) ? asked : '';
+    if (SELFTEST === 'direction') await listDirections();
     // A lab or development run may ask for a window size (for pictures). A release build never reads this.
     const asksSize = kind !== 'release' ? /^(\d{3,4})x(\d{3,4})$/.exec(process.env['SSHAPP_WINDOW'] ?? '') : null;
     meter.start();
@@ -327,7 +339,11 @@ if (!app.requestSingleInstanceLock()) {
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden });
+      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
+        const ses = session.fromPartition(partition, { cache: false });
+        harden(ses);
+        return new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-shell.js', false) });
+      } });
     } else {
       await shellLoaded;
     }
