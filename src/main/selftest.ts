@@ -3,17 +3,19 @@
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
 import { app, type WebContentsView } from 'electron';
-import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ShellState } from '../common/ipc';
 import type { Tab } from './main';
+import { memory } from './memory';
+import { BUDGET, type Meter } from './meter';
 
 interface Ctx {
   shell: WebContentsView;
   shellLoaded: Promise<void>;
   kind: string;
   mode: string;
+  meter: Meter;
   openTab(): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
@@ -135,26 +137,49 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
       }
       check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
-      // Memory, counted fairly: memory shared between processes (the browser engine's own code, mostly) is counted
-      // once, not once per process. Linux gives that as "Pss"; Windows as each process's private bytes. The plain
-      // per-process sum is printed beside it, because that is the number a task manager shows.
-      const metrics = app.getAppMetrics();
-      const plain = Math.round(metrics.reduce((sum, m) => sum + m.memory.workingSetSize, 0) / 1024);
-      let fair = 0;
-      let how = '';
-      if (process.platform === 'linux') {
-        how = 'shared memory counted once';
-        for (const pid of [...metrics.map((m) => m.pid), ...all.map((t) => t.engine.pid)]) {
-          const rollup = await readFile(`/proc/${pid}/smaps_rollup`, 'utf8').catch(() => '');
-          fair += Number(/^Pss:\s+(\d+) kB/m.exec(rollup)?.[1] ?? 0);
-        }
-      } else {
-        how = 'private memory, engines not counted';
-        fair = metrics.reduce((sum, m) => sum + (m.memory.privateBytes ?? 0), 0);
+      // The promises, measured under load: every tab floods its engine for four seconds while real clicks switch
+      // tabs and real keys are typed. Budgets are the plan's (B8), times the stated factor for slow test machines.
+      const factor = Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
+      await sleep(1200); // let start-up noise be reported, then begin clean
+      ctx.meter.reset();
+      const FLOOD_MS = 4000;
+      for (const t of all) {
+        await js(t.view, `(() => { const chunk = new Uint8Array(16384).fill(120); const end = Date.now() + ${FLOOD_MS}; window.__sent = 0; const go = () => { if (Date.now() > end) return; window.tabPort.send(chunk); window.__sent += chunk.length; setTimeout(go, 0); }; go(); })()`);
       }
-      const mb = Math.round(fair / 1024);
+      const until4 = Date.now() + FLOOD_MS;
+      let turn = 0;
+      let switches = 0;
+      while (Date.now() < until4) {
+        const t = all[turn++ % all.length]!;
+        const at = await js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector('[data-tab="${t.id}"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+        if (at) {
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+          switches++;
+        }
+        t.view.webContents.focus();
+        for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
+        await sleep(200);
+      }
+      await sleep(1500); // the views report twice a second
+      let sent = 0;
+      for (const t of all) sent += await js<number>(t.view, `window.__sent || 0`);
+      const w = { ...ctx.meter.worst };
+      const mbps = (sent / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
+      check(`under load: ${switches} tab switches, ${mbps} MB/s through seven engines`, switches >= 7 && sent > 0, { switches, sent });
+      const within = (key: keyof typeof BUDGET, what: string, mustMeasure: boolean) => {
+        const limit = BUDGET[key] * factor;
+        check(`${what}: ${w[key]} ms (budget ${BUDGET[key]} ms${factor > 1 ? `, times ${factor} on this machine` : ''})`, w[key] <= limit && (!mustMeasure || w[key] > 0), w);
+      };
+      within('mainDelayMs', 'main was never later than', true);
+      within('viewTaskMs', 'no view was busy in one stretch longer than', false);
+      within('reactionMs', 'a real click or key was painted within', false);
+      within('tabSwitchMs', 'a tab switch was painted within', true);
+      within('startMs', 'from process start to the first painted frame', true);
+
+      const mem = await memory(all.map((t) => t.engine.pid));
       const budget = 300 + 7 * 220;
-      check(`memory with seven tabs: ${mb} MB (${how}); budget ${budget} MB; plain per-process sum ${plain} MB`, mb > 0 && mb < budget, { mb, plain });
+      check(`memory with seven tabs: ${mem.fairMB} MB (${mem.how}); budget ${budget} MB; plain per-process sum ${mem.plainMB} MB`, mem.fairMB > 0 && mem.fairMB < budget, mem);
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);
@@ -175,7 +200,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,onState,sandboxed' : 'onOutput,onState,sandboxed,send'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,meter,onState,sandboxed' : 'frame,meter,onOutput,onShown,onState,sandboxed,send'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

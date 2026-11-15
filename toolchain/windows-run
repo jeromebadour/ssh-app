@@ -1,3 +1,4 @@
 # Change this file in a pull request to ask CI for the Windows run (it costs more runner time than Linux,
 # so it does not run on every pull request). Write the date and why.
 2026-11-15: first Windows run of the skeleton and its packages.
+2026-11-15: the meter, measured on Windows for the first time.

@@ -5,7 +5,7 @@
 //   release package  starts and stays up as a release build; exits on any argument; the lab marker changes
 //                    nothing; and, what only Windows can show: a changed app archive is refused by Electron
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdtemp, open, rm, stat } from 'node:fs/promises';
+import { cp, mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { changeArchive } from './lib/change-archive.mjs';
@@ -15,6 +15,8 @@ const LAB = path.join(root, 'out', 'ssh-app-win32-x64-lab');
 const REL = path.join(root, 'out', 'ssh-app-win32-x64-release');
 const EXE = 'ssh-app.exe';
 const work = await mkdtemp(path.join(os.tmpdir(), 'ssh-app-win-'));
+// The stated multiplier for budgets on test machines: the last line of toolchain/test-machine-factor.
+const factor = (await readFile(path.join(root, 'toolchain', 'test-machine-factor'), 'utf8')).split('\n').filter((l) => l.trim() && !l.startsWith('#')).pop().trim();
 let failures = 0;
 const say = (name) => console.log(`ok    ${name}`);
 const fail = (name, detail = '') => {
@@ -57,7 +59,7 @@ function run(dir, args, env, { ms, until }) {
 }
 
 async function selftest(name, dir, mode) {
-  const r = await run(dir, ['--lab'], { SSHAPP_SELFTEST: mode }, { ms: 150_000 });
+  const r = await run(dir, ['--lab'], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor }, { ms: 150_000 });
   const line = r.out.split('\n').find((l) => l.startsWith('SELFTEST '));
   if (!line) {
     if (r.how === 'still up') await r.end();

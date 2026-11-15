@@ -1,6 +1,7 @@
 // Scaffolding for the skeleton stage: a row of tab buttons, so several sealed tabs can be opened and switched.
 // The real tab bar, box list and settings replace this once their pictures are approved.
 import type { ShellPort, ShellState } from '../common/ipc';
+import { watchView } from '../common/meter-view';
 
 declare global {
   interface Window {
@@ -38,3 +39,4 @@ function draw(s: ShellState): void {
 
 window.shellPort.onState(draw);
 draw({ tabs: [], active: 0 });
+watchView(window.shellPort);
