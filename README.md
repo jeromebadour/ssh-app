@@ -20,10 +20,15 @@ toolchain by hash in `toolchain/go.env`. Install scripts are off.
 npm ci --ignore-scripts
 node node_modules/electron/install.js
 bash scripts/get-go.sh
-bash scripts/check.sh    # types, no blocking calls, Go vet and tests, a short fuzz run, TypeScript tests
+bash scripts/check.sh    # the dependency gate, types, no blocking calls, Go vet and tests, a short fuzz run
 bash scripts/build.sh    # dist/: the engine (Linux and Windows), main, preloads, views
 bash scripts/smoke.sh    # the real app on a virtual screen, sandbox on, running its self-test
 ```
+
+**The dependency gate** (`scripts/gate.mjs`, with `toolchain/reviewed.json`, `exceptions.json` and `support.json`)
+fails the checks if a package appears that nobody reviewed, if any version is younger than 14 days, if a package
+lacks its registry hash, or if a compiler or runtime is past its maker's support date. npm's own advisory and
+registry-signature checks run beside it.
 
 CI runs the same scripts on every pull request (`checks` and `lab`). A pull request is merged, by a workflow, only
 after both passed on its head commit; on `main`, CI fails any commit that did not come from a merged pull request.

@@ -1,0 +1,22 @@
+{
+  "about": "Every package that may appear in package-lock.json, with why it is there. The gate fails on any name that is not listed, and on any listed name that is no longer used. A trailing * covers one family of platform builds published together with their parent.",
+  "packages": {
+    "electron": "The app's shell: Chromium and Node. Ships.",
+    "@electron/get": "Electron's own downloader for its binary, used once by node_modules/electron/install.js. Build only.",
+    "@electron-internal/extract-zip": "Unpacks Electron's binary for @electron/get. Build only.",
+    "sumchecker": "Checks Electron's binary against the checksums in its package, for @electron/get. Build only.",
+    "debug": "Logging helper inside @electron/get. Build only.",
+    "ms": "Time formatting for debug. Build only.",
+    "env-paths": "Cache folder lookup for @electron/get. Build only.",
+    "graceful-fs": "File helper for @electron/get. Build only.",
+    "progress": "Download progress bar for @electron/get. Build only.",
+    "semver": "Version comparison for @electron/get. Build only.",
+    "undici": "HTTP client for @electron/get. Build only.",
+    "undici-types": "Type declarations pulled in by @types/node. Build only.",
+    "@types/node": "Type declarations for Node (ours, and the copy Electron's own types ask for). Build only.",
+    "typescript": "The type checker. Build only.",
+    "@typescript/typescript-*": "TypeScript's own program, one build per platform; only the one for this machine is installed. Build only.",
+    "esbuild": "The bundler for main, the preloads and the views. Build only.",
+    "@esbuild/*": "esbuild's own program, one build per platform; only the one for this machine is installed. Build only."
+  }
+}
