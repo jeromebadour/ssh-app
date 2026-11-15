@@ -5,3 +5,4 @@
 2026-11-16: the locked list's sealing (Argon2id, XChaCha20-Poly1305) tested on Windows for the first time.
 2026-11-16: the lab's fault proxy (resets and refusals as Windows reports them).
 2026-11-16: the engine's SSH link (connection errors as Windows reports them).
+2026-11-16: the engine program for real (its tests start the built program on Windows).

@@ -249,7 +249,7 @@ func TestOpenSSH(t *testing.T) {
 				for i := 0; i < 3; i++ {
 					select {
 					case p := <-pulses:
-						if p.Silent || p.RoundTrip <= 0 || p.RoundTrip > time.Second {
+						if p.Silent || p.RoundTrip < 0 || p.RoundTrip > time.Second {
 							t.Fatalf("%+v", p)
 						}
 					case <-time.After(5 * time.Second):

@@ -68,8 +68,10 @@ const (
 	WeakOffer       Cause = "weak-offer"       // the box offers nothing we accept for Error.What
 	IdentityChanged Cause = "identity-changed" // the box showed a key that is not the pinned one
 	SignInFailed    Cause = "sign-in-failed"   // the box did not accept our key for this user
+	NoSignature     Cause = "no-signature"     // our own side gave no usable signature; the box was not asked
 	Reset           Cause = "reset"            // the connection was reset
 	ClosedByBox     Cause = "closed-by-box"    // the box closed the connection
+	SilentTooLong   Cause = "silent-too-long"  // no answer for the operating system's whole patience (ten minutes)
 	Cancelled       Cause = "cancelled"        // we were told to stop
 	Protocol        Cause = "protocol"         // anything else the SSH layer reported; Error.Err has it
 )
@@ -194,7 +196,7 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 		User:   t.User,
 		Auth: []ssh.AuthMethod{ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
 			a.enter(SigningIn, d.SignIn)
-			return []ssh.Signer{signer}, nil
+			return []ssh.Signer{a.watch(signer)}, nil
 		})},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			if !bytes.Equal(key.Marshal(), t.HostKey.Marshal()) {
@@ -214,7 +216,11 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 			return nil
 		},
 	}
-	conn, chans, reqs, err := ssh.NewClientConn(tcp, t.Addr, cfg)
+	// The operating system reports a reset once, to whichever call asks first, and the library's writer and
+	// reader both ask: so the wire remembers the first hard error itself, and that is the cause we report.
+	w := &wire{TCPConn: tcp}
+	a.wire = w
+	conn, chans, reqs, err := ssh.NewClientConn(w, t.Addr, cfg)
 	if err != nil {
 		_ = tcp.Close()
 		return nil, a.explain(err)
@@ -239,7 +245,7 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 	go ssh.DiscardRequests(reqs)
 	go func() {
 		werr := conn.Wait()
-		l.endErr = classifyEnd(werr)
+		l.endErr = classifyEnd(w.firstError(werr))
 		close(l.done)
 	}()
 	return l, nil
@@ -277,7 +283,51 @@ type attempt struct {
 	ended   Cause // set by a timer or a cancel: why we closed the connection ourselves
 	endedIn Phase
 	got     ssh.PublicKey
+	wire    *wire
+	signErr error // our signer failed: the cause is on our side, whatever the library then reports
 	onPhase func(Phase)
+}
+
+// watch wraps the signer so that its own failure is known as such. The wrapper keeps the signer's say over
+// which algorithm is used, when it has one.
+func (a *attempt) watch(s ssh.Signer) ssh.Signer {
+	w := watched{Signer: s, a: a}
+	if m, ok := s.(ssh.MultiAlgorithmSigner); ok {
+		return watchedMulti{watched: w, multi: m}
+	}
+	return w
+}
+
+type watched struct {
+	ssh.Signer
+	a *attempt
+}
+
+func (w watched) note(err error) {
+	if err != nil {
+		w.a.mu.Lock()
+		w.a.signErr = err
+		w.a.mu.Unlock()
+	}
+}
+
+func (w watched) Sign(r io.Reader, data []byte) (*ssh.Signature, error) {
+	sig, err := w.Signer.Sign(r, data)
+	w.note(err)
+	return sig, err
+}
+
+type watchedMulti struct {
+	watched
+	multi ssh.MultiAlgorithmSigner
+}
+
+func (w watchedMulti) Algorithms() []string { return w.multi.Algorithms() }
+
+func (w watchedMulti) SignWithAlgorithm(r io.Reader, data []byte, algorithm string) (*ssh.Signature, error) {
+	sig, err := w.multi.SignWithAlgorithm(r, data, algorithm)
+	w.note(err)
+	return sig, err
 }
 
 func (a *attempt) tell(p Phase) {
@@ -348,7 +398,7 @@ func (a *attempt) explain(err error) *Error {
 	if a.timer != nil {
 		a.timer.Stop()
 	}
-	phase, ended, endedIn, got := a.phase, a.ended, a.endedIn, a.got
+	phase, ended, endedIn, got, signErr := a.phase, a.ended, a.endedIn, a.got, a.signErr
 	a.mu.Unlock()
 
 	var neg *ssh.AlgorithmNegotiationError
@@ -357,14 +407,69 @@ func (a *attempt) explain(err error) *Error {
 		return &Error{Cause: ended, Phase: endedIn, Err: err}
 	case got != nil:
 		return &Error{Cause: IdentityChanged, Phase: phase, Got: got, Err: errIdentity}
+	case signErr != nil:
+		return &Error{Cause: NoSignature, Phase: phase, Err: signErr}
 	case errors.As(err, &neg):
 		return &Error{Cause: WeakOffer, Phase: phase, What: whatOf(neg.What), Ours: neg.RequestedAlgorithms, Box: neg.SupportedAlgorithms, Err: err}
 	case phase == SigningIn && strings.Contains(err.Error(), "unable to authenticate"):
 		return &Error{Cause: SignInFailed, Phase: phase, Err: err}
 	}
+	if a.wire != nil {
+		err = a.wire.firstError(err)
+	}
 	e := classifyEnd(err)
 	e.Phase = phase
 	return e
+}
+
+// wire is the raw connection under the SSH library. It remembers the first error the operating system gave
+// that names a real cause (a reset, or its patience running out), from a read or a write.
+type wire struct {
+	*net.TCPConn
+	mu    sync.Mutex
+	cause error
+}
+
+func (w *wire) note(err error) {
+	if err == nil || !(isResetErr(err) || isTimeoutErr(err)) {
+		return
+	}
+	w.mu.Lock()
+	if w.cause == nil {
+		w.cause = err
+	}
+	w.mu.Unlock()
+}
+
+func (w *wire) Read(p []byte) (int, error) {
+	n, err := w.TCPConn.Read(p)
+	w.note(err)
+	return n, err
+}
+
+func (w *wire) Write(p []byte) (int, error) {
+	n, err := w.TCPConn.Write(p)
+	w.note(err)
+	return n, err
+}
+
+// firstError gives the remembered cause if there is one, otherwise what the library said.
+func (w *wire) firstError(fallback error) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cause != nil {
+		return w.cause
+	}
+	return fallback
+}
+
+func isResetErr(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || isErrno(err, 10054) || isErrno(err, 10053)
+}
+
+// The operating system gave up on a silent link: its patience (ten minutes, set by us) ran out.
+func isTimeoutErr(err error) bool {
+	return errors.Is(err, syscall.ETIMEDOUT) || isErrno(err, 10060)
 }
 
 func whatOf(libraryWord string) string {
@@ -383,8 +488,10 @@ func classifyEnd(err error) *Error {
 	switch {
 	case err == nil || errors.Is(err, io.EOF):
 		return &Error{Cause: ClosedByBox, Phase: Up, Err: err}
-	case errors.Is(err, syscall.ECONNRESET) || isErrno(err, 10054):
+	case isResetErr(err):
 		return &Error{Cause: Reset, Phase: Up, Err: err}
+	case isTimeoutErr(err):
+		return &Error{Cause: SilentTooLong, Phase: Up, Err: err}
 	case errors.Is(err, net.ErrClosed):
 		return &Error{Cause: Cancelled, Phase: Up, Err: err}
 	case strings.Contains(err.Error(), "disconnect"):
