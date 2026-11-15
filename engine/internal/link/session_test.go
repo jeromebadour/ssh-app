@@ -219,3 +219,43 @@ func TestWatch(t *testing.T) {
 		t.Fatal("the watch went on after the link ended")
 	}
 }
+
+// A reset while bytes are moving both ways is still said as a reset. The operating system reports it once, to
+// the library's writer or its reader, whichever asks first; reading the library's own verdict called a fair
+// share of these "the box closed the connection" (found by the engine's tests, 2026-11-16).
+func TestAResetOnABusyLinkIsStillAReset(t *testing.T) {
+	for i := 0; i < 60; i++ {
+		w := setup(t, withSessions)
+		p, err := faultproxy.Listen(w.box.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.target.Addr = p.Addr()
+		l := up(t, w)
+		s, err := l.OpenShell(ShellOptions{Term: "xterm", Cols: 80, Rows: 24})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { _, _ = io.Copy(io.Discard, s) }()
+		go func() {
+			buf := make([]byte, 4096)
+			for {
+				if _, err := s.Write(buf); err != nil {
+					return
+				}
+			}
+		}()
+		time.Sleep(3 * time.Millisecond)
+		p.Reset()
+		select {
+		case <-l.Done():
+			if l.End().Cause != Reset {
+				t.Fatalf("round %d: a reset on a busy link was said as %v", i, l.End())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: the link did not end", i)
+		}
+		p.Close()
+		w.box.Close()
+	}
+}

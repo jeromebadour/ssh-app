@@ -22,7 +22,18 @@ const (
 	TypePong   byte = 0x04 // engine to main, the same body back
 	TypeInput  byte = 0x10 // main to engine: bytes typed in the tab
 	TypeOutput byte = 0x11 // engine to main: bytes for the tab's terminal
-	TypeFatal  byte = 0x7f // engine to main, sent once before the engine exits on a fault
+	TypeResize byte = 0x12 // main to engine: the terminal's new size
+	TypeAck    byte = 0x13 // main to engine: how many Output bytes the tab has taken in all (8 bytes, big endian)
+
+	TypeState       byte = 0x20 // engine to main: where the link is, and when it ends, exactly why
+	TypePulse       byte = 0x21 // engine to main: the keepalive's last word (a round trip, or silence since when)
+	TypeSignRequest byte = 0x22 // engine to main, for the key process: sign this for the box's sign-in
+	TypeSignReply   byte = 0x23 // main to engine: the signature, or why there is none
+	TypeBanner      byte = 0x24 // engine to main: the box's sign-in text, raw. Text from a box: terminal only
+	TypeExit        byte = 0x25 // engine to main: the shell ended, with its status if the box gave one
+	TypeNotice      byte = 0x26 // engine to main: something the tab must say (the box is waiting on the window, typed bytes were dropped)
+
+	TypeFatal byte = 0x7f // engine to main, sent once before the engine exits on a fault
 )
 
 var (

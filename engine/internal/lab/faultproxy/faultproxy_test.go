@@ -257,6 +257,8 @@ func isReset(err error) bool {
 	return errors.Is(err, syscall.ECONNRESET) || (errors.As(err, &no) && no == 10054)
 }
 
+func isBrokenPipe(err error) bool { return errors.Is(err, syscall.EPIPE) }
+
 func isRefused(err error) bool {
 	var no syscall.Errno
 	return errors.Is(err, syscall.ECONNREFUSED) || (errors.As(err, &no) && no == 10061)

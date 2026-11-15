@@ -11,6 +11,15 @@ export const T = {
   Pong: 0x04,
   Input: 0x10,
   Output: 0x11,
+  Resize: 0x12,
+  Ack: 0x13,
+  State: 0x20,
+  Pulse: 0x21,
+  SignRequest: 0x22,
+  SignReply: 0x23,
+  Banner: 0x24,
+  Exit: 0x25,
+  Notice: 0x26,
   Fatal: 0x7f,
 } as const;
 

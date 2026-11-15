@@ -526,3 +526,19 @@ func TestWhatIsOfferedOnTheWire(t *testing.T) {
 		}
 	}
 }
+
+// When our own signer fails, the cause is ours and is said as such, not as the box refusing us.
+func TestOurOwnSignerFailing(t *testing.T) {
+	w := setup(t, nil)
+	_, err := Dial(context.Background(), w.target, failingSigner{w.user}, Options{})
+	var e *Error
+	if !errors.As(err, &e) || e.Cause != NoSignature || e.Phase != SigningIn || !strings.Contains(e.Error(), "the key is locked") {
+		t.Fatalf("%v", err)
+	}
+}
+
+type failingSigner struct{ ssh.Signer }
+
+func (failingSigner) Sign(io.Reader, []byte) (*ssh.Signature, error) {
+	return nil, errors.New("the key is locked")
+}
