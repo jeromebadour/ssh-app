@@ -20,6 +20,7 @@ interface Ctx {
   win: BaseWindow;
   dist: string;
   harden(ses: Session): void;
+  newView(partition: string): WebContentsView;
   openTab(): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
@@ -124,6 +125,27 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const size = ctx.win.getContentBounds();
       const made = await takePicture({ win: ctx.win, views: [ctx.shell, tabs3[1]!.view], file, strip: process.env['SSHAPP_PICTURE_STRIP'] ?? '', dist: ctx.dist, harden: ctx.harden });
       check(`a picture of the whole window: ${made.width} x ${made.height} pixels at scale ${made.scale}`, file !== '' && made.width === Math.round(size.width * made.scale), made);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    }
+
+    // "direction": one of the direction pictures. A sealed view fills the window with the directions page, in
+    // the direction and scene asked for, and the whole window is pictured once its typefaces have loaded.
+    if (ctx.mode === 'direction') {
+      const file = process.env['SSHAPP_PICTURE'] ?? '';
+      const which = /^[abc]$/.test(process.env['SSHAPP_DIRECTION'] ?? '') ? process.env['SSHAPP_DIRECTION'] : 'a';
+      const scene = /^(dialog|paths|plain)$/.test(process.env['SSHAPP_SCENE'] ?? '') ? process.env['SSHAPP_SCENE'] : 'plain';
+      const view = ctx.newView('directions');
+      const size = ctx.win.getContentBounds();
+      view.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
+      ctx.win.contentView.addChildView(view);
+      await view.webContents.loadURL(`app://directions/index.html?d=${which}&scene=${scene}`);
+      const fonts = await js<string>(view, `document.fonts.ready.then(() => [...document.fonts].filter((f) => f.status === 'loaded').length + ' of ' + document.fonts.size)`);
+      const drawn = await js<boolean>(view, `document.documentElement.classList.contains('drawn')`);
+      await sleep(500);
+      const made = await takePicture({ win: ctx.win, views: [view], file, strip: process.env['SSHAPP_PICTURE_STRIP'] ?? '', dist: ctx.dist, harden: ctx.harden });
+      check(`direction ${which}, ${scene}: drawn, typefaces loaded ${fonts}, ${made.width} x ${made.height}`, drawn && file !== '' && !fonts.startsWith('0 '), { fonts, made });
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);

@@ -20,6 +20,8 @@
     "@esbuild/*": "esbuild's own program, one build per platform; only the one for this machine is installed. Build only.",
     "@electron/fuses": "Electron's own tool that sets the fuses in its binary. Build only.",
     "resedit": "Writes a resource into a Windows program file (the app archive's hash, for Electron's integrity check). Build only.",
-    "pe-library": "Reads and writes Windows program files, for resedit. Build only."
+    "pe-library": "Reads and writes Windows program files, for resedit. Build only.",
+    "preact": "The view library the screens are built with (plan B7). Ships.",
+    "@fontsource/*": "Open-licensed typefaces (OFL 1.1), packaged as font files only, no code. One family per direction while the app's world is chosen; the unchosen ones leave with that decision. Ships."
   }
 }

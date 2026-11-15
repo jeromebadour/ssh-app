@@ -31,5 +31,11 @@ cp src/shell/index.html src/shell/shell.css dist/shell/
 esb src/lab/preload.ts    --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-easel.js
 esb src/lab/easel.ts      --platform=browser --format=iife --target=chrome156 --outfile=dist/lab/easel.js
 cp src/lab/index.html dist/lab/
+# The direction pictures: Berth's main window in each of the three directions to choose from. Lab only.
+mkdir -p dist/directions/fonts dist/directions/art
+esb src/directions/app.tsx --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/directions/directions.js
+cp src/directions/index.html src/directions/directions.css src/directions/fonts.css dist/directions/
+cp src/directions/art/*.svg dist/directions/art/
+while read -r f; do [ -n "$f" ] && cp "node_modules/$f" dist/directions/fonts/; done < src/directions/fonts.list
 
 echo "build: done"
