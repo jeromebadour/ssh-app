@@ -1,98 +1,36 @@
-/* Berth's main window, in three directions. One layout; each direction sets its own tokens, type, glyph hand,
-   atmosphere and the one element only it has. Meanings (BUILD-RULES 2.2): --main, --input (arrivals),
-   --remove (removes or stops), --checked (checked or restored), --owner, --problem (real problems only). */
+/* Berth's main window, direction A (Chart), as chosen 2026-11-16, made calm for all-day use: soft contrast, no
+   decoration, nothing that moves unless something changed. The window belongs to the file browser and the terminal;
+   boxes are a menu at the top. Meanings (BUILD-RULES 2.2): --main, --input (arrivals), --remove (removes or stops),
+   --checked (checked or restored), --owner, --problem (real problems only). */
 
-/* ---------- A: Chart. The harbour as a nautical chart: ink-blue water, depth contours, brass fittings. ---------- */
-:root[data-d='a'] {
-  --bg: #0e1922;
-  --panel: #12202b;
-  --panel-2: #172836;
-  --line: #223647;
-  --text: #dce4ea;
-  --text-2: #a9bac7;
-  --text-3: #8b9eae;
-  --term-bg: #0b151d;
-  --term-text: #cfd8df;
-  --main: #4f9c8b;
-  --input: #6693c1;
-  --remove: #c46a5c;
-  --checked: #78ab72;
-  --owner: #bb9b5c;
-  --problem: #dba340;
-  --box-1: #84a9cb;
-  --box-2: #a697c9;
-  --box-3: #c995a6;
-  --box-4: #a2b6a3;
-  --box-5: #b9bd88;
+:root {
+  --bg: #161e25;
+  --panel: #1a232b;
+  --panel-2: #202a33;
+  --line: #27323c;
+  --text: #c3ccd3;
+  --text-2: #96a3ae;
+  --text-3: #808d99;
+  --term-bg: #141b21;
+  --term-text: #bcc5cc;
+  --main: #5a9a8c;
+  --input: #6e92b6;
+  --remove: #b86a5f;
+  --checked: #79a373;
+  --owner: #ad9461;
+  --problem: #cc9b47;
+  --box-1: #86a6c2;
+  --box-2: #a397c0;
+  --box-3: #c098a6;
+  --box-4: #9fb2a0;
+  --box-5: #b3b68a;
   --ui: 'Plex Sans Condensed', sans-serif;
   --mono: 'Plex Mono', monospace;
-  --glyph-stroke: 1.4;
+  --glyph-stroke: 1.35;
   --glyph-cap: round;
   --glyph-join: round;
-  --r: 3px;
-  --r-s: 2px;
-}
-
-/* ---------- B: Lamp. The harbour at night, seen from the light: indigo dark, one beam, lit things glow. ---------- */
-:root[data-d='b'] {
-  --bg: #15151c;
-  --panel: #1a1a23;
-  --panel-2: #21212c;
-  --line: #2d2d3a;
-  --text: #e3e2eb;
-  --text-2: #b0afc1;
-  --text-3: #9695aa;
-  --term-bg: #111117;
-  --term-text: #d9d8e3;
-  --main: #7aaec3;
-  --input: #918fcb;
-  --remove: #c76378;
-  --checked: #82b089;
-  --owner: #c6a765;
-  --problem: #dea842;
-  --box-1: #d5a88f;
-  --box-2: #a9c991;
-  --box-3: #c99dcb;
-  --box-4: #9cb2da;
-  --box-5: #b6bcc8;
-  --ui: 'Barlow Semi Condensed', sans-serif;
-  --mono: 'JetBrains Mono', monospace;
-  --glyph-stroke: 1.6;
-  --glyph-cap: square;
-  --glyph-join: miter;
-  --r: 7px;
-  --r-s: 5px;
-}
-
-/* ---------- C: Drydock. The harbour's workshop: a fitting drawing on steel, plates numbered, a grid underneath. ---------- */
-:root[data-d='c'] {
-  --bg: #171b1a;
-  --panel: #1c2120;
-  --panel-2: #232928;
-  --line: #313938;
-  --text: #dde2df;
-  --text-2: #a9b3af;
-  --text-3: #919c98;
-  --term-bg: #121615;
-  --term-text: #d2d8d5;
-  --main: #7598ba;
-  --input: #53a5a3;
-  --remove: #c5644f;
-  --checked: #86ae70;
-  --owner: #a887b7;
-  --problem: #d9a43c;
-  --box-1: #c99f82;
-  --box-2: #9fc4a8;
-  --box-3: #c8c28d;
-  --box-4: #92c0c9;
-  --box-5: #c9a6b5;
-  --ui: 'Archivo', sans-serif;
-  --mono: 'Martian Mono', monospace;
-  --glyph-stroke: 1.25;
-  --glyph-cap: butt;
-  --glyph-join: miter;
-  --r: 1px;
-  --r-s: 1px;
+  --r: 4px;
+  --r-s: 3px;
 }
 
 /* ================================ the shared layout ================================ */
@@ -111,17 +49,16 @@ ul { list-style: none; }
 }
 
 .window { position: relative; height: 100vh; display: grid; grid-template-rows: 46px 1fr 30px; }
-.atmosphere { position: absolute; inset: 0; pointer-events: none; }
-.body { position: relative; display: grid; grid-template-columns: clamp(212px, 13vw, 240px) clamp(396px, 25vw, 470px) 1fr; min-height: 0; }
+.body { position: relative; display: grid; grid-template-columns: clamp(400px, 29vw, 540px) 1fr; min-height: 0; }
 
 /* ---------- tab bar ---------- */
 .tabbar { position: relative; display: flex; align-items: stretch; gap: 14px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.brand { display: flex; align-items: center; gap: 8px; width: calc(clamp(212px, 13vw, 240px) - 24px); flex: none; }
+.brand { display: flex; align-items: center; gap: 8px; flex: none; padding-right: 4px; }
 .mark { width: 26px; height: 26px; }
-.mark-line { fill: none; stroke: var(--text); stroke-width: 1.8; stroke-linecap: round; }
+.mark-line { fill: none; stroke: var(--text-2); stroke-width: 1.8; stroke-linecap: round; }
 .mark-fill { fill: var(--main); }
 .mark-beam { fill: var(--main); opacity: .35; }
-.wordmark { font-size: 19px; font-weight: 600; letter-spacing: .01em; }
+.wordmark { font-size: 18px; font-weight: 500; letter-spacing: .03em; color: var(--text); }
 .tab-groups { display: flex; align-items: flex-end; gap: 10px; min-width: 0; flex: 1; }
 .tab-group { display: flex; align-items: flex-end; gap: 2px; padding-left: 8px; border-left: 2px solid var(--hue); height: 36px; }
 .group-label { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 2px; color: var(--hue); font-weight: 600; cursor: pointer; }
@@ -140,31 +77,6 @@ ul { list-style: none; }
 .new-tab { align-self: center; display: grid; place-items: center; width: 28px; height: 28px; color: var(--text-2); border-radius: var(--r); }
 .bar-tools { display: flex; align-items: center; gap: 4px; }
 .tool { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-2); border-radius: var(--r); }
-
-/* ---------- box list ---------- */
-.boxes { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 10px 10px 12px; border-right: 1px solid var(--line); background: var(--panel); overflow: hidden; }
-.side-switch { display: flex; gap: 4px; padding: 3px; border-radius: var(--r); background: var(--bg); }
-.switch { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; height: 26px; color: var(--text-2); border-radius: var(--r-s); }
-.switch.on { color: var(--text); background: var(--panel-2); }
-.group-name { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 0 6px 4px; }
-.box { position: relative; padding: 6px 6px 6px 12px; border-radius: var(--r); margin-bottom: 2px; }
-.box::before { content: ''; position: absolute; left: 3px; top: 8px; bottom: 8px; width: 2px; border-radius: 1px; background: var(--hue); opacity: .9; }
-.box.st-reconnecting::before { background: repeating-linear-gradient(to bottom, var(--problem) 0 4px, transparent 4px 7px); }
-.box.st-idle::before { opacity: .35; }
-.box-row { display: flex; align-items: center; gap: 7px; white-space: nowrap; min-width: 0; }
-.box-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.berth-no { display: none; }
-.box-name { font-weight: 600; font-size: 13.5px; }
-.box-state { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
-.st-reconnecting .box-state { color: var(--problem); }
-.st-reconnecting .box-state::before { content: 'retry in '; }
-.box-host { padding-left: 15px; font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 1px; }
-.places { margin-top: 4px; padding-left: 15px; }
-.place { display: flex; align-items: center; gap: 7px; height: 22px; color: var(--text-2); }
-.place-mark { width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--hue); flex: none; }
-.place.open { color: var(--text); }
-.place.open .place-mark { background: var(--hue); }
-.add-box { margin-top: auto; display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; color: var(--main); border: 1px solid color-mix(in srgb, var(--main) 45%, transparent); border-radius: var(--r); align-self: flex-start; }
 
 /* ---------- file panel ---------- */
 .files { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
@@ -275,61 +187,29 @@ ul { list-style: none; }
 .btn:focus, .btn:focus-visible { outline: none; }
 .btn { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: var(--r); font-weight: 500; }
 .btn.keep { background: var(--panel); color: var(--text); box-shadow: inset 0 0 0 1px var(--line), 0 0 0 2px var(--panel-2), 0 0 0 3.5px var(--main); }
-.btn.danger { color: #fff; background: color-mix(in srgb, var(--remove) 88%, #000); }
+.btn.danger { color: #eef0f1; background: color-mix(in srgb, var(--remove) 88%, #000); }
 
-/* ================================ what each direction alone has ================================ */
 
-/* A: Chart. Depth contours behind the chrome (never behind text that is read at length); boxes moored by a
-   line that shows its state: taut when connected, broken while reconnecting, slack and faint when not open. */
-:root[data-d='a'] .tabbar, :root[data-d='a'] .boxes { background: url('art/contours.svg') -40px -20px / 480px 480px, var(--panel); }
-:root[data-d='a'] .tabbar { background-position: 200px -150px, 0 0; }
-:root[data-d='a'] .files, :root[data-d='a'] .status { background: var(--panel); }
-:root[data-d='a'] .wordmark { font-weight: 500; font-size: 20px; letter-spacing: .04em; }
-:root[data-d='a'] .group-name { font-weight: 500; letter-spacing: .02em; }
-:root[data-d='a'] .box-name { font-weight: 500; }
-:root[data-d='a'] .tab-group { border-left-style: solid; border-left-width: 3px; }
-
-/* B: Lamp. One beam from the light across the bar; whatever is live is lit, everything else sits in the dark. */
-:root[data-d='b'] .atmosphere { z-index: 1; bottom: auto; height: 46px; background:
-  conic-gradient(from 96deg at 30px 23px, color-mix(in srgb, var(--main) 20%, transparent) 0deg, color-mix(in srgb, var(--main) 7%, transparent) 9deg, transparent 15deg),
-  radial-gradient(60px 40px at 30px 23px, color-mix(in srgb, var(--main) 28%, transparent), transparent); }
-:root[data-d='b'] .tabbar { background: #131319; }
-:root[data-d='b'] .boxes, :root[data-d='b'] .files, :root[data-d='b'] .status { background: #18181f; }
-:root[data-d='b'] .wordmark { font-weight: 600; font-size: 21px; letter-spacing: .06em; }
-:root[data-d='b'] .tab-group { border-left: 0; padding-left: 0; }
-:root[data-d='b'] .group-label { padding: 0 10px; height: 26px; margin-bottom: 3px; border-radius: 13px; background: color-mix(in srgb, var(--hue) 13%, transparent); }
-:root[data-d='b'] .tab.active { box-shadow: inset 0 2px 0 var(--hue), 0 -10px 24px -10px color-mix(in srgb, var(--hue) 60%, transparent); }
-:root[data-d='b'] .conn-connected { box-shadow: 0 0 6px var(--checked); }
-:root[data-d='b'] .conn-reconnecting { box-shadow: 0 0 6px var(--problem); }
-:root[data-d='b'] .box.st-connected { background: color-mix(in srgb, var(--hue) 6%, transparent); }
-:root[data-d='b'] .box::before { top: 6px; bottom: 6px; width: 3px; box-shadow: 0 0 8px var(--hue); }
-:root[data-d='b'] .box.st-idle::before { box-shadow: none; }
-:root[data-d='b'] .term-frame { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--box-1) 50%, transparent), 0 0 32px -8px color-mix(in srgb, var(--box-1) 30%, transparent); }
-:root[data-d='b'] .g-mark { border-radius: 50%; }
-:root[data-d='b'] .block.running .g-mark { box-shadow: 0 0 8px var(--main); }
-
-/* C: Drydock. A fine grid under the chrome, plates numbered like hull plates, measured edges. */
-:root[data-d='c'] .tabbar, :root[data-d='c'] .boxes { background:
-  linear-gradient(color-mix(in srgb, var(--line) 75%, transparent) 1px, transparent 1px) 0 0 / 48px 48px,
-  linear-gradient(90deg, color-mix(in srgb, var(--line) 75%, transparent) 1px, transparent 1px) 0 0 / 48px 48px,
-  linear-gradient(color-mix(in srgb, var(--line) 30%, transparent) 1px, transparent 1px) 0 0 / 8px 8px,
-  linear-gradient(90deg, color-mix(in srgb, var(--line) 30%, transparent) 1px, transparent 1px) 0 0 / 8px 8px,
-  var(--panel); }
-:root[data-d='c'] .box, :root[data-d='c'] .group-name, :root[data-d='c'] .side-switch { background: var(--panel); }
-:root[data-d='c'] .group-name { align-self: flex-start; padding-right: 8px; }
-:root[data-d='c'] .group { display: flex; flex-direction: column; }
-:root[data-d='c'] .wordmark { font-weight: 800; font-size: 19px; letter-spacing: -.01em; font-stretch: 100%; }
-:root[data-d='c'] .group-name { font-weight: 700; font-size: 11.5px; letter-spacing: .03em; }
-:root[data-d='c'] .berth-no { display: inline; font: 400 10px/1 var(--mono); color: var(--text-3); padding: 2px 4px; border: 1px solid var(--line); }
-:root[data-d='c'] .box::before { display: none; }
-:root[data-d='c'] .box { padding-left: 6px; border: 1px solid transparent; }
-:root[data-d='c'] .box.st-connected { border-color: var(--line); border-left: 2px solid var(--hue); }
-:root[data-d='c'] .box.st-reconnecting { border-color: var(--line); border-left: 2px dashed var(--problem); }
-:root[data-d='c'] .box-host, :root[data-d='c'] .places { padding-left: 4px; }
-:root[data-d='c'] .tab-group { border-left-width: 1px; }
-:root[data-d='c'] .tab.active { box-shadow: inset 0 2px 0 var(--hue), 1px 0 0 var(--line), -1px 0 0 var(--line); }
-:root[data-d='c'] .files::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: radial-gradient(circle, var(--line) 1.4px, transparent 1.6px) 6px 0 / 24px 4px repeat-x; }
-:root[data-d='c'] .term-frame { font-size: 12px; line-height: 1.65; }
-:root[data-d='c'] .term-frame { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--box-1) 55%, transparent); position: relative; }
-:root[data-d='c'] .g-mark { border-radius: 0; transform: rotate(45deg); width: 7px; height: 7px; }
-:root[data-d='c'] .dialog { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 3px 0 0 var(--remove); }
+/* ---------- the Boxes menu (opened from the top, like a sessions menu) ---------- */
+.boxes-btn { align-self: center; display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 9px; border-radius: var(--r); color: var(--text); border: 1px solid var(--line); background: var(--panel-2); }
+.boxes-btn .caret { width: 12px; height: 12px; color: var(--text-3); transform: rotate(90deg); }
+.boxes-btn.open { border-color: var(--main); }
+.box-menu { position: absolute; z-index: 20; top: 42px; left: 128px; width: 400px; max-height: calc(100vh - 90px); overflow: hidden; display: flex; flex-direction: column; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); box-shadow: 0 14px 36px rgba(0, 0, 0, .4); }
+.bm-search { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; margin-bottom: 6px; border-radius: var(--r-s); border: 1px solid var(--main); background: var(--bg); color: var(--text-3); }
+.bm-group { padding: 4px 0; }
+.bm-group + .bm-group { border-top: 1px solid var(--line); }
+.bm-group-name { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 6px 8px 4px; }
+.bm-row { display: grid; grid-template-columns: 8px auto 1fr auto; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: var(--r-s); cursor: pointer; }
+.bm-name { font-weight: 600; font-size: 13.5px; }
+.bm-host { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+.bm-state { font-size: 12px; color: var(--text-3); }
+.st-reconnecting .bm-state { color: var(--problem); }
+.bm-box.st-idle .bm-name { color: var(--text-2); }
+.bm-place { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px 0 27px; border-radius: var(--r-s); color: var(--text-2); cursor: pointer; }
+.bm-place.open { color: var(--text); }
+.bm-box:first-child .bm-row { background: color-mix(in srgb, var(--main) 13%, transparent); }
+.bm-foot { padding-top: 6px; margin-top: 4px; border-top: 1px solid var(--line); }
+.bm-add { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; color: var(--main); border-radius: var(--r-s); }
+.place-mark { width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid var(--hue); flex: none; }
+.bm-place.open .place-mark { background: var(--hue); }
+.tab-group { border-left-width: 2px; }
