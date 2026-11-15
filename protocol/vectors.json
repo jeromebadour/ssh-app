@@ -1,0 +1,87 @@
+{
+  "about": "Shared test vectors for the frame format. Hex strings. Run by the Go and the TypeScript tests.",
+  "max_payload": 1048576,
+  "valid": [
+    {
+      "name": "aim",
+      "type": 1,
+      "body": "7b2276223a312c22746162223a2231222c2273747562223a747275657d",
+      "frame": "0000001e017b2276223a312c22746162223a2231222c2273747562223a747275657d"
+    },
+    {
+      "name": "hello",
+      "type": 2,
+      "body": "7b2276223a312c22726f6c65223a22656e67696e65222c2273747562223a747275657d",
+      "frame": "00000024027b2276223a312c22726f6c65223a22656e67696e65222c2273747562223a747275657d"
+    },
+    {
+      "name": "ping",
+      "type": 3,
+      "body": "0001020304050607",
+      "frame": "00000009030001020304050607"
+    },
+    {
+      "name": "pong",
+      "type": 4,
+      "body": "0001020304050607",
+      "frame": "00000009040001020304050607"
+    },
+    {
+      "name": "input-empty",
+      "type": 16,
+      "body": "",
+      "frame": "0000000110"
+    },
+    {
+      "name": "input-ctrl-c",
+      "type": 16,
+      "body": "03",
+      "frame": "000000021003"
+    },
+    {
+      "name": "output-text",
+      "type": 17,
+      "body": "6c73202d6c610d0a",
+      "frame": "00000009116c73202d6c610d0a"
+    },
+    {
+      "name": "output-binary",
+      "type": 17,
+      "body": "00ff1b5b316d800a",
+      "frame": "000000091100ff1b5b316d800a"
+    },
+    {
+      "name": "fatal",
+      "type": 127,
+      "body": "7b226572726f72223a22626164206672616d65227d",
+      "frame": "000000167f7b226572726f72223a22626164206672616d65227d"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "zero length",
+      "bytes": "00000000",
+      "error": "empty"
+    },
+    {
+      "name": "one byte over the limit",
+      "bytes": "00100001",
+      "error": "too-large"
+    },
+    {
+      "name": "length of four gigabytes",
+      "bytes": "ffffffff",
+      "error": "too-large"
+    },
+    {
+      "name": "header cut short",
+      "bytes": "000000",
+      "error": "truncated"
+    },
+    {
+      "name": "body cut short",
+      "bytes": "0000000510aabb",
+      "error": "truncated"
+    }
+  ]
+}
