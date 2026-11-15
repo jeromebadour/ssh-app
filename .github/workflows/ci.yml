@@ -2,7 +2,8 @@ name: CI
 
 # Every pull request, and main after each merge. Two jobs must pass before merge.yml merges a pull request:
 #   checks: everything that needs no window (types, the no-blocking-calls rule, Go vet and tests, a short fuzz run).
-#   lab:    the real app, started on a virtual screen with Chromium's sandbox on, running its self-test.
+#   lab:    the real app on a virtual screen with Chromium's sandbox on: its self-test in the built tree and in
+#           the lab package, then the release package with no debugger and no test hook.
 # Changes reach main only through a pull request; merge.yml does the merging once both jobs pass.
 # On main a third job, from-a-pull-request, fails the run if a commit got there any other way.
 # Actions are GitHub's own, pinned by commit. Nothing here has write access.
@@ -78,5 +79,11 @@ jobs:
         run: bash scripts/build.sh
       - name: A virtual screen
         run: command -v xvfb-run >/dev/null || (sudo apt-get update -q && sudo apt-get install -y -q xvfb)
-      - name: The self-test, in the real app
-        run: bash scripts/smoke.sh
+      - name: The self-test, in the built tree
+        run: bash scripts/smoke.sh dev
+      - name: The four packages (lab and release, Linux and Windows), fuses and integrity read back
+        run: node scripts/package.mjs
+      - name: The lab package (the same self-test in a packaged app, and a swapped engine)
+        run: bash scripts/smoke.sh lab
+      - name: The release package (no debugger, no test hook, exits on any argument)
+        run: bash scripts/smoke.sh release

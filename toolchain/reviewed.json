@@ -2,7 +2,7 @@
   "about": "Every package that may appear in package-lock.json, with why it is there. The gate fails on any name that is not listed, and on any listed name that is no longer used. A trailing * covers one family of platform builds published together with their parent.",
   "packages": {
     "electron": "The app's shell: Chromium and Node. Ships.",
-    "@electron/get": "Electron's own downloader for its binary, used once by node_modules/electron/install.js. Build only.",
+    "@electron/get": "Electron's own downloader for its binaries, checked against the checksums in the electron package: used by electron's install step and by our packaging script. Build only.",
     "@electron-internal/extract-zip": "Unpacks Electron's binary for @electron/get. Build only.",
     "sumchecker": "Checks Electron's binary against the checksums in its package, for @electron/get. Build only.",
     "debug": "Logging helper inside @electron/get. Build only.",
@@ -17,6 +17,9 @@
     "typescript": "The type checker. Build only.",
     "@typescript/typescript-*": "TypeScript's own program, one build per platform; only the one for this machine is installed. Build only.",
     "esbuild": "The bundler for main, the preloads and the views. Build only.",
-    "@esbuild/*": "esbuild's own program, one build per platform; only the one for this machine is installed. Build only."
+    "@esbuild/*": "esbuild's own program, one build per platform; only the one for this machine is installed. Build only.",
+    "@electron/fuses": "Electron's own tool that sets the fuses in its binary. Build only.",
+    "resedit": "Writes a resource into a Windows program file (the app archive's hash, for Electron's integrity check). Build only.",
+    "pe-library": "Reads and writes Windows program files, for resedit. Build only."
   }
 }

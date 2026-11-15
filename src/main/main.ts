@@ -1,18 +1,46 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Engine } from './engine';
+import { FUSE_NODE_CLI_INSPECT, fuseOf } from './fuse';
 
 // A release build takes no arguments: none of its own, and none of Chromium's (a debugging port, for one).
-if (app.isPackaged && process.argv.length > 1) app.exit(64);
+// The one exception is the lab package, which the test driver must be able to start with a debugger: it says
+// --lab, and that is believed only if the package really is a lab package (see isLabPackage). A release build
+// given --lab finds no proof within a moment and exits like for any other argument.
+// Refusing means ending the process there and then. app.exit() is not used for it: asked to exit while Electron
+// is still starting, it can wait for a start-up that we do not want to happen (seen on GitHub's runner, where
+// a release binary given --lab stayed alive).
+const refuse = (): never => process.exit(64);
+const wantsLab = app.isPackaged && process.argv.includes('--lab');
+if (app.isPackaged && process.argv.length > 1 && !wantsLab) refuse();
+
+// A lab package is one whose binary has the inspect fuse left on and which carries a marker file beside the
+// app archive. Both are outside the archive, so the lab and the release package hold the same app code, byte
+// for byte. A release binary can never pass: its fuse is off, whatever files sit beside it.
+async function isLabPackage(): Promise<boolean> {
+  try {
+    await stat(path.join(process.resourcesPath, 'lab'));
+  } catch {
+    return false;
+  }
+  return (await fuseOf(process.execPath, FUSE_NODE_CLI_INSPECT)) === 'on';
+}
+const labProof: Promise<boolean> = wantsLab ? isLabPackage() : Promise.resolve(false);
+void labProof.then((ok) => {
+  if (wantsLab && !ok) refuse();
+});
 
 const DIST = __dirname;
 const BAR = 44;
-const SELFTEST = !app.isPackaged && process.env['SSHAPP_SELFTEST'] === '1';
-const ENGINE_BIN = path.join(DIST, 'engine', process.platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp-engine');
+const ENGINE_NAME = process.platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp-engine';
+// Packaged: the engine sits beside the app archive (a program cannot be started from inside it).
+const ENGINE_BIN = app.isPackaged ? path.join(process.resourcesPath, 'engine', ENGINE_NAME) : path.join(DIST, 'engine', ENGINE_NAME);
+const ENGINE_HASHES = path.join(DIST, 'engine-hashes.json');
+let SELFTEST = ''; // the self-test to run, or '' for none; decided once it is known what kind of build this is
 
 // A fault in main must never open a blocking error box (Electron's default) and must never pass unseen.
 // For now it is written to stderr; the local log with an id per failure replaces this in step 2.
@@ -153,7 +181,7 @@ function openTab(): Tab | null {
   harden(ses);
   // A tab never slows its box because its view is hidden: background throttling is off for tab views.
   const view = new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-tab.js', false) });
-  const engine = new Engine(ENGINE_BIN, id, {
+  const engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, {
     // An engine can outlive its tab for a moment (it ends after its view is closed): then only the shell is told.
     output: (bytes) => {
       if (tabs.get(id) === tab) sendTo(view, CH.tabOutput, bytes);
@@ -169,7 +197,7 @@ function openTab(): Tab | null {
   win.contentView.addChildView(view);
   view.webContents.once('did-finish-load', () => sendTo(view, CH.tabState, info(tab)));
   void view.webContents.loadURL(`${origin}/index.html`);
-  engine.start();
+  void engine.start();
   active = id;
   layout();
   tellShell();
@@ -237,6 +265,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(async () => {
+    const lab = await labProof;
+    if (wantsLab && !lab) refuse();
+    const kind = !app.isPackaged ? 'dev' : lab ? 'lab' : 'release';
+    const asked = process.env['SSHAPP_SELFTEST'] ?? '';
+    SELFTEST = kind !== 'release' && (asked === 'all' || asked === 'engine-must-be-refused') ? asked : '';
     harden(session.defaultSession);
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
@@ -253,10 +286,12 @@ if (!app.requestSingleInstanceLock()) {
     });
     layout();
     const shellLoaded = shell.webContents.loadURL('app://shell/index.html');
+    // One line for whoever started the app from a terminal or a test: it is up, and what kind of build it is.
+    void shellLoaded.then(() => process.stderr.write(`READY kind=${kind}\n`));
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages });
+      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST });
     } else {
       await shellLoaded;
     }

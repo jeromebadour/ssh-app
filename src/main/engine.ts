@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { encodeFrame, FrameDecoder, T } from '../common/frame';
 import type { EngineState } from '../common/ipc';
+import { engineFault } from './engine-check';
 
 const PING_EVERY_MS = 1000;
 const SILENT_AFTER_MS = 5000;
@@ -28,6 +29,7 @@ export class Engine {
 
   constructor(
     private readonly bin: string,
+    private readonly hashesFile: string,
     private readonly tabId: number,
     private readonly hooks: EngineHooks,
   ) {}
@@ -36,7 +38,15 @@ export class Engine {
     return this.child?.pid ?? 0;
   }
 
-  start(): void {
+  // Checks the engine file first, every time: a file that is not the one this app was built with is not started.
+  async start(): Promise<void> {
+    const fault = await engineFault(this.bin, this.hashesFile, `${process.platform}-${process.arch}`);
+    if (this.closing) return this.gone('closed');
+    if (fault) return this.gone(fault);
+    this.spawn();
+  }
+
+  private spawn(): void {
     // An empty environment: nothing about the PC reaches the engine that it was not given.
     const child = spawn(this.bin, [], { stdio: ['pipe', 'pipe', 'pipe'], env: {}, windowsHide: true });
     this.child = child;
@@ -70,9 +80,9 @@ export class Engine {
 
   // The tab was closed by the user: let the engine end by itself, and only then insist.
   close(): void {
+    this.closing = true;
     const child = this.child;
     if (!child || this.state === 'gone') return;
-    this.closing = true;
     child.stdin.end();
     setTimeout(() => {
       if (this.state !== 'gone') child.kill();

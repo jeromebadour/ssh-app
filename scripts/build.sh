@@ -12,6 +12,13 @@ go_build() { (cd engine && GOOS="$1" GOARCH=amd64 go build -trimpath -buildvcs=f
 go_build linux sshapp-engine
 go_build windows sshapp-engine.exe
 
+# The engines' hashes go into the app's own code: main refuses to start an engine that does not match.
+node -e '
+  const { createHash } = require("node:crypto"); const { readFileSync, writeFileSync } = require("node:fs");
+  const h = (f) => createHash("sha256").update(readFileSync(f)).digest("hex");
+  writeFileSync("dist/engine-hashes.json", JSON.stringify({ "linux-x64": h("dist/engine/sshapp-engine"), "win32-x64": h("dist/engine/sshapp-engine.exe") }, null, 2) + "\n");
+'
+
 esb() { node_modules/.bin/esbuild "$@" --bundle --log-level=warning --legal-comments=none; }
 esb src/main/main.ts      --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/main.js
 esb src/tab/preload.ts    --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-tab.js

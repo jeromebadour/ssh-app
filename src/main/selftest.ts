@@ -11,6 +11,8 @@ import type { Tab } from './main';
 interface Ctx {
   shell: WebContentsView;
   shellLoaded: Promise<void>;
+  kind: string;
+  mode: string;
   openTab(): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
@@ -38,7 +40,19 @@ async function until(what: () => boolean | Promise<boolean>, ms: number): Promis
 const js = <T>(view: WebContentsView, code: string) => view.webContents.executeJavaScript(code, true) as Promise<T>;
 const shown = (t: Tab) => js<string>(t.view, `document.getElementById('out').textContent`);
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
+// Signals go to one real process only. A pid of 0 would mean "every process in our group", main included:
+// an engine that never started has no pid, and must never be signalled.
+const signal = (pid: number, sig: NodeJS.Signals): boolean => {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, sig);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const alive = (pid: number) => {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -55,7 +69,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     results.push({ name, ok, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   };
   const finish = (code: number) => {
-    process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, results })}\n`);
+    process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
   };
   const guard = setTimeout(() => {
@@ -77,11 +91,24 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     stage = 'loading the shell view';
     await ctx.shellLoaded;
     check('the shell view loads', true);
+
+    // The short mode, for a package whose engine file was changed on purpose: one tab, and its engine must be
+    // refused with the reason. Nothing else is probed, because nothing else can work without an engine.
+    if (ctx.mode === 'engine-must-be-refused') {
+      const t = ctx.openTab()!;
+      await until(() => t.engine.state === 'gone', 10_000);
+      check('the engine was not started', t.engine.state === 'gone' && t.engine.pid === 0, [t.engine.state, t.engine.pid]);
+      check('and the tab says why', t.engine.cause === 'the engine file is not the one this app was built with', t.engine.cause);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    }
+
     const a = ctx.openTab()!;
     const b = ctx.openTab()!;
     const views: [string, WebContentsView][] = [['shell', ctx.shell], ['tab a', a.view], ['tab b', b.view]];
 
-    check('two engines answer', await until(() => a.engine.state === 'ready' && b.engine.state === 'ready', 10_000), [a.engine.state, b.engine.state]);
+    check('two engines answer', await until(() => a.engine.state === 'ready' && b.engine.state === 'ready', 10_000), [a.engine.state, b.engine.state, a.engine.cause]);
     await until(async () => (await js<string>(b.view, `document.readyState`)) === 'complete', 10_000);
     await until(async () => (await js<string>(a.view, `document.readyState`)) === 'complete', 10_000);
 
@@ -142,11 +169,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const c = ctx.openTab()!;
       await until(() => c.engine.state === 'ready', 10_000);
       const pid = c.engine.pid;
-      process.kill(pid, 'SIGSTOP');
+      check('there is an engine to freeze', signal(pid, 'SIGSTOP'), pid);
       const noticed = await until(() => c.engine.state === 'not-answering', 9000);
       check('a frozen engine is shown as not answering', noticed, c.engine.state);
       check('and is neither ended nor replaced', alive(pid) && c.engine.pid === pid, [alive(pid), c.engine.pid === pid]);
-      process.kill(pid, 'SIGCONT');
+      signal(pid, 'SIGCONT');
       check('it is ready again when it answers', await until(() => c.engine.state === 'ready', 5000) && c.engine.pid === pid, c.engine.state);
       await type(a, 'still-a-41f');
       check('other tabs worked throughout', await until(async () => (await shown(a)).includes('still-a-41f'), 3000));
@@ -159,16 +186,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const d = ctx.openTab()!;
       await until(() => d.engine.state === 'ready', 10_000);
       const pid = d.engine.pid;
-      process.kill(pid, 'SIGSTOP');
+      signal(pid, 'SIGSTOP');
       ctx.closeTab(d.id);
       await sleep(300);
-      process.kill(pid, 'SIGCONT');
+      signal(pid, 'SIGCONT');
       check('an engine ending after its tab closed harms nothing', await until(() => !alive(pid), 5000) && d.engine.state === 'gone', d.engine.state);
     }
 
     // A killed engine: shown with its cause, not restarted, and no other tab is touched.
     const bPid = b.engine.pid;
-    process.kill(bPid, 'SIGKILL');
+    check('there is an engine to kill', signal(bPid, 'SIGKILL'), bPid);
     check('a killed engine is shown as gone, with why', await until(() => b.engine.state === 'gone' && b.engine.cause !== '', 5000), [b.engine.state, b.engine.cause]);
     await sleep(1500);
     check('it is not restarted', b.engine.state === 'gone' && b.engine.pid === bPid, [b.engine.state, b.engine.pid === bPid]);
