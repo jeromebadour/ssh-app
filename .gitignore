@@ -1,0 +1,7 @@
+# Never in git: secrets, anything built, anything fetched.
+.env*
+node_modules/
+dist/
+.build/
+.tools/
+*.log

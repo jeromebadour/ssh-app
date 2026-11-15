@@ -1,0 +1,61 @@
+name: CI
+
+# Every pull request, and main after each merge. Two jobs, both required by the ruleset on main:
+#   checks: everything that needs no window (types, the no-blocking-calls rule, Go vet and tests, a short fuzz run).
+#   lab:    the real app, started on a virtual screen with Chromium's sandbox on, running its self-test.
+# Changes reach main only through a pull request; merge.yml does the merging once both jobs pass.
+# Actions are GitHub's own, pinned by commit. Nothing here has write access.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the pinned packages (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: Checks
+        run: bash scripts/check.sh
+
+  lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the pinned packages (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Electron's binary, checked against the checksums inside its package
+        run: node node_modules/electron/install.js
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: Build
+        run: bash scripts/build.sh
+      - name: A virtual screen
+        run: command -v xvfb-run >/dev/null || (sudo apt-get update -q && sudo apt-get install -y -q xvfb)
+      - name: The self-test, in the real app
+        run: bash scripts/smoke.sh
