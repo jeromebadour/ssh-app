@@ -15,12 +15,16 @@ async function fixture() {
   const dir = await mkdtemp(path.join(base, 'case-'));
   await mkdir(path.join(dir, 'engine'));
   await cp(path.join(root, 'toolchain'), path.join(dir, 'toolchain'), { recursive: true });
-  for (const f of ['package-lock.json', '.node-version', 'engine/go.mod']) await cp(path.join(root, f), path.join(dir, f));
+  await mkdir(path.join(dir, 'engine', 'vendor'));
+  for (const f of ['package-lock.json', '.node-version', 'engine/go.mod', 'engine/vendor/modules.txt']) await cp(path.join(root, f), path.join(dir, f));
   const lock = JSON.parse(await readFile(path.join(dir, 'package-lock.json'), 'utf8'));
   const times = {};
   for (const [key, e] of Object.entries(lock.packages)) {
     if (key) times[`${key.slice(key.lastIndexOf('node_modules/') + 13)}@${e.version}`] = '2026-01-01T00:00:00.000Z';
   }
+  const goMod = await readFile(path.join(dir, 'engine/go.mod'), 'utf8');
+  for (const m of goMod.matchAll(/^(?:require\s+|\t)([^\s()]+)\s+(v[^\s]+)/gm)) times[`go:${m[1]}@${m[2]}`] = '2026-01-01T00:00:00Z';
+  times[`go:golang.org/x/vuln@${(await readFile(path.join(dir, 'toolchain/govulncheck-version'), 'utf8')).trim()}`] = '2026-01-01T00:00:00Z';
   await writeFile(path.join(dir, 'times.json'), JSON.stringify(times));
   return dir;
 }
@@ -122,6 +126,41 @@ await expect('a toolchain with no support date', 'no support date written for El
 );
 await expect('a Go download without its hash', 'no SHA-256 for the Go download (win32)', (d) => edit(d, 'toolchain/go.env', (s) => s.replace(/^GO_WIN32_X64_SHA256=.*$/m, 'GO_WIN32_X64_SHA256=')));
 await expect('a Go download of another version', 'is not the pinned version from actions/go-versions', (d) => edit(d, 'toolchain/go.env', (s) => s.replace(/^GO_VERSION=.*$/m, 'GO_VERSION=1.27.9')));
+
+// Go modules.
+const goKey = (t, name) => Object.keys(t).find((k) => k.startsWith(`go:${name}@`));
+await expect('a Go module nobody reviewed', 'Go module not on the reviewed list: example.org/evil@v1.0.0', async (d) => {
+  await edit(d, 'engine/go.mod', (s) => `${s}\nrequire example.org/evil v1.0.0\n`);
+  await edit(d, 'engine/vendor/modules.txt', (s) => `${s}\n# example.org/evil v1.0.0\n## explicit\n`);
+  await edit(d, 'times.json', (t) => ({ ...t, 'go:example.org/evil@v1.0.0': '2020-01-01T00:00:00Z' }));
+});
+await expect('a reviewed Go module that is no longer required', 'Go module on the reviewed list but no longer required: example.org/gone', (d) =>
+  edit(d, 'toolchain/reviewed.json', (r) => {
+    r.goModules['example.org/gone'] = 'not used';
+    return r;
+  }),
+);
+await expect('modules required but not vendored', 'engine/vendor/modules.txt is missing', (d) => rm(path.join(d, 'engine/vendor/modules.txt')));
+await expect('the vendored version is not the required one', 'engine/vendor holds golang.org/x/crypto@v0.1.0, engine/go.mod requires', (d) =>
+  edit(d, 'engine/vendor/modules.txt', (s) => s.replace(/^# golang\.org\/x\/crypto .*$/m, '# golang.org/x/crypto v0.1.0')),
+);
+await expect('a vendored module that go.mod does not require', 'engine/vendor holds a module engine/go.mod does not require: example.org/extra@v1.0.0', (d) =>
+  edit(d, 'engine/vendor/modules.txt', (s) => `${s}\n# example.org/extra v1.0.0\n`),
+);
+await expect('a replaced module', 'engine/go.mod replaces or excludes a module', (d) => edit(d, 'engine/go.mod', (s) => `${s}\nreplace golang.org/x/crypto => ../my-crypto\n`));
+await expect('a module replaced inside the vendor folder', 'engine/vendor holds a replaced module', (d) =>
+  edit(d, 'engine/vendor/modules.txt', (s) => s.replace(/^(# golang\.org\/x\/crypto \S+)$/m, '$1 => ../my-crypto')),
+);
+await expect('a Go module five days old', 'younger than 14 days: Go module golang.org/x/crypto@', (d) =>
+  edit(d, 'times.json', (t) => ({ ...t, [goKey(t, 'golang.org/x/crypto')]: '2026-11-10T00:00:00Z' })),
+);
+await expect('a Go module with no publish date', 'no publish date found for Go module golang.org/x/sys@', (d) =>
+  edit(d, 'times.json', (t) => Object.fromEntries(Object.entries(t).filter(([k]) => k !== goKey(t, 'golang.org/x/sys')))),
+);
+await expect('the vulnerability checker five days old', 'younger than 14 days: Go module golang.org/x/vuln@', (d) =>
+  edit(d, 'times.json', (t) => ({ ...t, [goKey(t, 'golang.org/x/vuln')]: '2026-11-10T00:00:00Z' })),
+);
+await expect('the vulnerability checker without a full version', 'toolchain/govulncheck-version is not a full version', (d) => edit(d, 'toolchain/govulncheck-version', () => 'latest'));
 
 await rm(base, { recursive: true, force: true });
 console.log(failures ? `test-gate: ${failures} of ${count} cases FAILED` : `test-gate: ${count} cases held`);

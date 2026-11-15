@@ -2,3 +2,5 @@
 * text=auto eol=lf
 *.png binary
 *.ico binary
+# The vendored Go modules are kept byte for byte.
+/engine/vendor/** -text

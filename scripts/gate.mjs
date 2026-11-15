@@ -3,11 +3,14 @@
 //   - a package does not come from the npm registry with an integrity hash;
 //   - a version is younger than 14 days (unless it is a written exception);
 //   - a compiler or runtime is past its maker's support date;
-//   - the pinned versions disagree with each other (Go in toolchain/go.env and engine/go.mod; Node in .node-version).
+//   - the pinned versions disagree with each other (Go in toolchain/go.env and engine/go.mod; Node in .node-version);
+//   - a Go module is required that is not on the reviewed list, a reviewed one is no longer required, a module is
+//     replaced, or engine/vendor does not hold exactly the modules engine/go.mod names.
+// The age of Go modules is asked from Go's module proxy, which only CI can reach; the workspace says so and skips it.
 // Registry signatures and advisories are checked by npm itself, in scripts/check.sh.
 //
 // GATE_NOW=YYYY-MM-DD sets "today"; GATE_TIMES=<file> gives publish dates as {"name@version": "ISO date"} instead
-// of asking the registry. Both exist for the gate's own tests.
+// of asking the registry (Go modules as "go:path@version"). Both exist for the gate's own tests.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -21,7 +24,9 @@ const problems = [];
 const bad = (msg) => problems.push(msg);
 
 const lock = await read('package-lock.json');
-const reviewed = (await read('toolchain/reviewed.json')).packages;
+const reviewedFile = await read('toolchain/reviewed.json');
+const reviewed = reviewedFile.packages;
+const reviewedGo = reviewedFile.goModules ?? {};
 const exceptions = await read('toolchain/exceptions.json');
 const support = (await read('toolchain/support.json')).items;
 
@@ -74,7 +79,7 @@ for (const pair of pairs.keys()) {
   const age = (now - new Date(when)) / 86_400_000;
   if (age < MIN_AGE_DAYS && !young.has(pair)) bad(`younger than ${MIN_AGE_DAYS} days: ${pair} (published ${String(when).slice(0, 10)})`);
 }
-for (const pair of young) if (!pairs.has(pair)) bad(`an exception for a version that is not installed: ${pair}`);
+for (const pair of young) if (!pairs.has(pair) && !pair.startsWith('go:')) bad(`an exception for a version that is not installed: ${pair}`);
 
 // 3. Compilers and runtimes are still supported by their makers.
 for (const item of support) {
@@ -101,9 +106,58 @@ const want = [`Node ${nodeMajor}`, `Go ${goMinor}`, `Electron ${electron.split('
 for (const w of want) if (!support.some((i) => i.name === w)) bad(`no support date written for ${w}`);
 for (const i of support) if (!want.includes(i.name)) bad(`a support date for something we do not use: ${i.name}`);
 
+// 5. Go modules: reviewed, not replaced, vendored exactly, and at least 14 days old.
+const goModText = await text('engine/go.mod');
+const required = new Map();
+for (const m of goModText.matchAll(/^(?:require\s+|\t)([^\s()]+)\s+(v[^\s]+)(?:\s*\/\/.*)?$/gm)) required.set(m[1], m[2]);
+if (/^replace\b/m.test(goModText) || /^exclude\b/m.test(goModText)) bad('engine/go.mod replaces or excludes a module: every module comes as its maker published it');
+let vendoredText = null;
+try {
+  vendoredText = await text('engine/vendor/modules.txt');
+} catch {
+  if (required.size) bad('engine/go.mod requires modules but engine/vendor/modules.txt is missing: the Vendor workflow makes it');
+}
+const vendored = new Map();
+for (const line of (vendoredText ?? '').split('\n')) {
+  if (!line.startsWith('# ')) continue;
+  const [, name, ver, ...rest] = line.split(' ');
+  if (rest.length) bad(`engine/vendor holds a replaced module: ${line.slice(2)}`);
+  vendored.set(name, ver);
+}
+for (const [name, ver] of required) {
+  if (!(name in reviewedGo)) bad(`Go module not on the reviewed list: ${name}@${ver}`);
+  if (vendoredText !== null && vendored.get(name) !== ver) bad(`engine/vendor holds ${name}@${vendored.get(name) ?? 'nothing'}, engine/go.mod requires ${ver}`);
+}
+for (const [name, ver] of vendored) if (!required.has(name)) bad(`engine/vendor holds a module engine/go.mod does not require: ${name}@${ver}`);
+for (const name of Object.keys(reviewedGo)) if (!required.has(name)) bad(`Go module on the reviewed list but no longer required: ${name}`);
+const goTool = await text('toolchain/govulncheck-version');
+if (!/^v\d+\.\d+\.\d+$/.test(goTool)) bad(`toolchain/govulncheck-version is not a full version: ${goTool}`);
+const goPairs = [...required].map(([n, v]) => `${n}@${v}`).concat(`golang.org/x/vuln@${goTool}`);
+let goAges = 'their age is checked in CI only (Go\'s module proxy cannot be reached from this workspace)';
+if (process.env.GATE_TIMES || process.env.CI === 'true') {
+  for (const pair of goPairs) {
+    let when = times[`go:${pair}`];
+    if (!process.env.GATE_TIMES) {
+      const [name, ver] = [pair.slice(0, pair.lastIndexOf('@')), pair.slice(pair.lastIndexOf('@') + 1)];
+      const escaped = name.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`);
+      const res = await fetch(`https://proxy.golang.org/${escaped}/@v/${ver}.info`, { signal: AbortSignal.timeout(60_000) });
+      if (!res.ok) throw new Error(`Go's module proxy answered ${res.status} for ${pair}`);
+      when = (await res.json()).Time;
+    }
+    if (!when) {
+      bad(`no publish date found for Go module ${pair}`);
+      continue;
+    }
+    const age = (now - new Date(when)) / 86_400_000;
+    if (age < MIN_AGE_DAYS && !young.has(`go:${pair}`)) bad(`younger than ${MIN_AGE_DAYS} days: Go module ${pair} (published ${String(when).slice(0, 10)})`);
+  }
+  goAges = `at least ${MIN_AGE_DAYS} days old`;
+}
+
 if (problems.length) {
   for (const p of problems) console.log(`gate: ${p}`);
   console.log(`gate: ${problems.length} problem(s)`);
   process.exit(1);
 }
 console.log(`gate: ${pairs.size} packages reviewed, pinned and at least ${MIN_AGE_DAYS} days old; ${support.length} toolchains in support`);
+console.log(`gate: ${required.size} Go modules reviewed and vendored as required; ${goAges}`);

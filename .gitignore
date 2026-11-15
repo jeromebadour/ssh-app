@@ -1,8 +1,10 @@
 # Never in git: secrets, anything built, anything fetched.
 .env*
-node_modules/
-dist/
-.build/
-.tools/
+/node_modules/
+/dist/
+/.build/
+/.tools/
 *.log
-out/
+/out/
+# The vendored Go modules are kept whole, whatever their files are called.
+!/engine/vendor/**

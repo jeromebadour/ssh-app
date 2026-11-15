@@ -23,12 +23,15 @@ echo "check: no blocking calls in the app's code"
 node scripts/no-sync.mjs
 
 echo "check: Go format, vet, tests"
-unformatted="$(cd engine && gofmt -l .)"
+unformatted="$(cd engine && gofmt -l cmd internal)"
 [ -z "$unformatted" ] || { echo "not gofmt-formatted: $unformatted" >&2; exit 1; }
 (cd engine && go vet ./... && GOOS=windows go vet ./... && go test -count=1 ./...)
 
 echo "check: a short fuzz run on the frame reader"
 (cd engine && go test -run '^$' -fuzz '^FuzzRead$' -fuzztime 5s ./internal/frame | tail -2)
+
+echo "check: a short fuzz run on opening the locked list"
+(cd engine && go test -run '^$' -fuzz '^FuzzOpen$' -fuzztime 5s ./internal/vault | tail -2)
 
 echo "check: TypeScript tests"
 rm -rf .build/tests && mkdir -p .build/tests
