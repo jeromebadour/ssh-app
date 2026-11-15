@@ -45,7 +45,8 @@ export const tabGroups: TabGroup[] = [
 
 export interface FileRow {
   name: string;
-  kind: 'up' | 'folder' | 'archive' | 'log' | 'text' | 'script';
+  kind: 'up' | 'folder' | 'archive' | 'log' | 'text' | 'markdown' | 'script' | 'config' | 'json' | 'code' | 'sql' | 'image' | 'binary' | 'keyfile' | 'link' | 'other';
+  target?: string;
   size?: string;
   bytes?: string;
   modified?: string;
@@ -60,9 +61,18 @@ export const files: FileRow[] = [
   { name: 'deploy-4f2c1a9.log', kind: 'log', size: '214 KB', modified: '2026-11-15 19:41', fresh: true },
   { name: 'ledger-4f2c1a9.tar.gz', kind: 'archive', size: '48.6 MB', modified: '2026-11-15 19:38', selected: true },
   { name: 'ledger-4e91b07.tar.gz', kind: 'archive', size: '48.1 MB', modified: '2026-11-12 09:15' },
-  { name: 'migrate-041.sql', kind: 'text', size: '6.2 KB', modified: '2026-11-15 19:12' },
+  { name: 'current', kind: 'link', target: 'releases/4f2c1a9', modified: '2026-11-15 19:41' },
+  { name: 'migrate-041.sql', kind: 'sql', size: '6.2 KB', modified: '2026-11-15 19:12' },
   { name: 'restore-check.sh', kind: 'script', size: '1.8 KB', modified: '2026-11-03 22:30' },
-  { name: 'notes-2026-11-15.md', kind: 'text', size: '3.4 KB', modified: '2026-11-15 17:55' },
+  { name: 'ledger.nginx.conf', kind: 'config', size: '2.1 KB', modified: '2026-11-10 14:06' },
+  { name: 'settings.json', kind: 'json', size: '940 B', modified: '2026-11-14 08:31' },
+  { name: 'invoice_batch.py', kind: 'code', size: '11.7 KB', modified: '2026-11-14 21:48' },
+  { name: 'notes-2026-11-15.md', kind: 'markdown', size: '3.4 KB', modified: '2026-11-15 17:55' },
+  { name: 'health-check.txt', kind: 'text', size: '512 B', modified: '2026-11-15 19:41' },
+  { name: 'dashboard-error.png', kind: 'image', size: '284 KB', modified: '2026-11-15 18:20' },
+  { name: 'ledger-cli', kind: 'binary', size: '9.8 MB', modified: '2026-11-12 09:15' },
+  { name: 'deploy_key.pub', kind: 'keyfile', size: '98 B', modified: '2026-10-02 10:00' },
+  { name: 'core.12044', kind: 'other', size: '1.2 MB', modified: '2026-11-08 03:12' },
 ];
 
 export const pins = ['/srv/staging', '/srv/ledger/app', '/var/log/ledger'];
@@ -127,4 +137,27 @@ export const blocks: Block[] = [
     ],
     running: '1:42',
   },
+];
+
+// The logs tab: an application log streaming (tail -f), for the word-colouring picture.
+export const logCmd = 'tail -f /var/log/ledger/app.log';
+export const logLines = [
+  '2026-11-15T19:41:52.204Z [http] GET /invoices?page=2 200 41ms from 203.0.113.88',
+  '2026-11-15T19:41:52.611Z [http] POST /invoices/batch 202 118ms from 203.0.113.88',
+  '2026-11-15T19:41:53.020Z [batch] job 7731 loading 214 invoices',
+  '2026-11-15T19:41:53.402Z [batch] job 7731 settled 214 of 214, ok',
+  '2026-11-15T19:41:54.118Z [mail] receipt queued for 214 customers',
+  '2026-11-15T19:41:55.730Z [http] GET /health 200 3ms from 127.0.0.1',
+  '2026-11-15T19:41:56.904Z [ws] client 4412 disconnected (idle 300s) from 198.51.100.23',
+  '2026-11-15T19:41:57.336Z [http] POST /login 401 12ms from 198.51.100.77, refused: bad password (3 of 5)',
+  '2026-11-15T19:41:58.002Z [db] pool 18 of 40 busy, wait p95 4ms',
+  '2026-11-15T19:41:58.940Z [http] GET /reports/monthly 200 380ms from 203.0.113.12',
+  '2026-11-15T19:41:59.511Z [mail] smtp 451 temporary failure for 1 receipt, retry in 60s',
+  '2026-11-15T19:42:00.006Z [cron] backup started',
+  '2026-11-15T19:42:00.880Z [http] GET /invoices/9921/pdf 200 96ms from 203.0.113.88',
+  '2026-11-15T19:42:01.214Z [ws] client 4419 connected from 203.0.113.40',
+  '2026-11-15T19:42:02.650Z [http] GET /api/rates 503 2004ms from 203.0.113.12, upstream timeout',
+  '2026-11-15T19:42:03.115Z [batch] job 7732 loading 9 invoices',
+  '2026-11-15T19:42:03.290Z [batch] job 7732 settled 9 of 9, ok',
+  '2026-11-15T19:42:04.007Z [cron] backup done, 412 MB, verified',
 ];
