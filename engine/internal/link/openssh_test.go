@@ -180,6 +180,84 @@ func TestOpenSSH(t *testing.T) {
 				}
 			})
 
+			// A place opens in its folder, as the user's own login shell, with a real terminal of the size we
+			// said; a quote in the folder's name is only part of the name; a resize reaches the terminal.
+			t.Run("a place's shell: its folder, a terminal, a resize", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				folder := "/tmp/it's a $(place) `here`"
+				run(t, l, "mkdir -p \"/tmp/it's a \\$(place) \\`here\\`\"", 10*time.Second)
+				sh, err := l.OpenShell(ShellOptions{Folder: folder, Term: "xterm-256color", Cols: 100, Rows: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer sh.Close()
+				if err := sh.Resize(132, 43); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(300 * time.Millisecond)
+				_, _ = sh.Write([]byte("echo \"in <$PWD> size <$(stty size)> term <$TERM> tty <$(tty | cut -c1-8)>\"; exit 3\n"))
+				out := make(chan string, 1)
+				go func() { b, _ := io.ReadAll(sh); out <- string(b) }()
+				var got string
+				select {
+				case got = <-out:
+				case <-time.After(15 * time.Second):
+					t.Fatal("the shell did not finish")
+				}
+				want := "in <" + folder + "> size <43 132> term <xterm-256color> tty </dev/pts>"
+				if !strings.Contains(got, want) {
+					t.Fatalf("the shell printed %q; wanted a line with %q", got, want)
+				}
+				<-sh.Exited()
+				if code, ok := sh.ExitStatus(); !ok || code != 3 {
+					t.Fatalf("exit status %d %v", code, ok)
+				}
+			})
+
+			t.Run("a folder that is not there: the shell does not start, and says so", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				sh, err := l.OpenShell(ShellOptions{Folder: "/tmp/not-there", Term: "xterm", Cols: 80, Rows: 24})
+				if err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-sh.Exited():
+				case <-time.After(10 * time.Second):
+					t.Fatal("a shell stayed open in a folder that does not exist")
+				}
+				if code, ok := sh.ExitStatus(); !ok || code == 0 {
+					t.Fatalf("exit status %d %v", code, ok)
+				}
+			})
+
+			t.Run("the keepalive is answered by a real server", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				pulses := make(chan Pulse, 16)
+				l.Watch(100*time.Millisecond, 2*time.Second, func(p Pulse) { pulses <- p })
+				for i := 0; i < 3; i++ {
+					select {
+					case p := <-pulses:
+						if p.Silent || p.RoundTrip <= 0 || p.RoundTrip > time.Second {
+							t.Fatalf("%+v", p)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("no answer to the keepalive")
+					}
+				}
+			})
+
 			// The case the app exists for: the link goes silent for a while and comes back. The job that was
 			// running on the box is still running, in the same session, and its output arrives.
 			t.Run("a silent link comes back to the same running job", func(t *testing.T) {

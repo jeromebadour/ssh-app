@@ -20,6 +20,9 @@ type Config struct {
 	Banner       string // its sign-in text
 	Silent       bool   // take the connection and never say a word
 	StallSignIn  bool   // never answer a sign-in
+	// Sessions makes it take terminal sessions, the way a box does, and remember exactly what it was asked
+	// (Box.Sessions). Its "shell" sends back every byte it is given; the bytes "exit\n" end it with status 7.
+	Sessions bool
 	// OnUp runs once a client is signed in, with the connection: the place to try things against the client.
 	OnUp func(conn *ssh.ServerConn)
 }
@@ -32,6 +35,109 @@ type Box struct {
 	once   sync.Once
 	mu     sync.Mutex
 	conns  []net.Conn
+	seen   []*Session
+}
+
+// Session is everything one terminal session asked of the box, in order.
+type Session struct {
+	Asked   []string // the request types, in the order they came
+	Term    string
+	Cols    uint32
+	Rows    uint32
+	Command string // the start command; empty for a plain shell
+	Resizes [][2]uint32
+}
+
+// Sessions is a copy of what every session so far asked for.
+func (b *Box) Sessions() []Session {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]Session, len(b.seen))
+	for i, s := range b.seen {
+		out[i] = *s
+		out[i].Asked = append([]string(nil), s.Asked...)
+		out[i].Resizes = append([][2]uint32(nil), s.Resizes...)
+	}
+	return out
+}
+
+func (b *Box) session(nc ssh.NewChannel) {
+	ch, reqs, err := nc.Accept()
+	if err != nil {
+		return
+	}
+	defer ch.Close()
+	b.mu.Lock()
+	s := &Session{}
+	b.seen = append(b.seen, s)
+	b.mu.Unlock()
+	started := make(chan struct{})
+	go func() {
+		running := false
+		for r := range reqs {
+			b.mu.Lock()
+			s.Asked = append(s.Asked, r.Type)
+			ok := false
+			switch r.Type {
+			case "pty-req":
+				var p struct {
+					Term                   string
+					Cols, Rows, Wide, High uint32
+					Modes                  string
+				}
+				if ssh.Unmarshal(r.Payload, &p) == nil {
+					s.Term, s.Cols, s.Rows, ok = p.Term, p.Cols, p.Rows, true
+				}
+			case "exec":
+				var p struct{ Command string }
+				if ssh.Unmarshal(r.Payload, &p) == nil && !running {
+					s.Command, ok, running = p.Command, true, true
+					close(started)
+				}
+			case "shell":
+				if !running {
+					ok, running = true, true
+					close(started)
+				}
+			case "window-change":
+				var p struct{ Cols, Rows, Wide, High uint32 }
+				if ssh.Unmarshal(r.Payload, &p) == nil {
+					s.Resizes = append(s.Resizes, [2]uint32{p.Cols, p.Rows})
+					ok = true
+				}
+			}
+			b.mu.Unlock()
+			if r.WantReply {
+				_ = r.Reply(ok, nil)
+			}
+		}
+	}()
+	select {
+	case <-started:
+	case <-b.closed:
+		return
+	}
+	buf := make([]byte, 32*1024)
+	var tail []byte
+	for {
+		n, err := ch.Read(buf)
+		if n > 0 {
+			if _, werr := ch.Write(buf[:n]); werr != nil {
+				return
+			}
+			tail = append(tail, buf[:n]...)
+			if len(tail) > 5 {
+				tail = tail[len(tail)-5:]
+			}
+			if string(tail) == "exit\n" {
+				_, _ = ch.SendRequest("exit-status", false, []byte{0, 0, 0, 7})
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // Start runs a server on a free local port.
@@ -107,7 +213,11 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 	go ssh.DiscardRequests(reqs)
 	go func() {
 		for ch := range chans {
-			_ = ch.Reject(ssh.UnknownChannelType, "not yet")
+			if cfg.Sessions && ch.ChannelType() == "session" {
+				go b.session(ch)
+				continue
+			}
+			_ = ch.Reject(ssh.UnknownChannelType, "not that")
 		}
 	}()
 	if cfg.OnUp != nil {
