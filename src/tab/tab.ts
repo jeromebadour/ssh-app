@@ -15,20 +15,25 @@ const state = document.getElementById('state') as HTMLDivElement;
 const decoder = new TextDecoder('utf-8', { fatal: false });
 const encoder = new TextEncoder();
 
-// Output is taken at once and painted at most once a frame: however fast bytes arrive, the page does one small
-// piece of work per frame and stays free for input.
+// Output is taken at once and shown at most once a frame: however fast bytes arrive, the page does one small
+// piece of work per frame and stays free for input. Taking output never waits for a frame, though: a tab that is
+// not in front may get no frames at all for a while, so a timer shows what arrived within a quarter of a second.
 let text = '';
-let scheduled = false;
+let frame = 0;
+let timer = 0;
+const show = () => {
+  cancelAnimationFrame(frame);
+  clearTimeout(timer);
+  frame = 0;
+  out.textContent = text;
+  out.scrollTop = out.scrollHeight;
+};
 window.tabPort.onOutput((bytes) => {
   text += decoder.decode(bytes, { stream: true });
   if (text.length > KEEP) text = text.slice(text.length - KEEP);
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
-    out.textContent = text;
-    out.scrollTop = out.scrollHeight;
-  });
+  if (frame !== 0) return;
+  frame = requestAnimationFrame(show);
+  timer = window.setTimeout(show, 250);
 });
 
 window.tabPort.onState((info) => {
