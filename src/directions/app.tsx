@@ -10,33 +10,24 @@ import { Mark } from './marks';
 
 const q = new URLSearchParams(location.search);
 const scene = q.get('scene') ?? '';
+// In the logs picture the logs tab is the one in front.
+if (scene === 'logs') for (const g of tabGroups) for (const t of g.tabs) t.active = g.box === 'relay-fra' && t.place === 'logs';
 
 const stateWords: Record<Box['state'], string> = { connected: 'connected', reconnecting: 'reconnecting', idle: 'not open' };
 
+// The Boxes menu: your saved boxes, one line each, like a sessions menu. A box with places shows an arrow; its
+// places open beside it on hover. Typing while the menu is open filters it (no field until you type).
 function BoxMenu() {
+  const all = groups.flatMap((g) => g.boxes);
   return (
     <div class="box-menu" role="menu" aria-label="Boxes">
-      <div class="bm-search"><Glyph name="search" /><span class="bm-placeholder">Find a box or place</span></div>
-      {groups.map((g) => (
-        <section class="bm-group" key={g.name}>
-          <h2 class="bm-group-name">{g.name}</h2>
-          {g.boxes.map((b) => (
-            <div class={`bm-box st-${b.state}`} key={b.name} style={{ '--hue': b.hue }}>
-              <div class="bm-row" role="menuitem">
-                <span class="box-dot" />
-                <span class="bm-name">{b.name}</span>
-                <span class="bm-host">{b.host}</span>
-                <span class="bm-state">{b.state === 'reconnecting' ? b.detail : b.state === 'connected' ? `${b.places.filter((p) => p.open).length} open` : ''}</span>
-              </div>
-              {b.places.map((p) => (
-                <div class={`bm-place ${p.open ? 'open' : ''}`} key={p.name} role="menuitem">
-                  <span class="place-mark" />
-                  {p.name}
-                </div>
-              ))}
-            </div>
-          ))}
-        </section>
+      {all.map((b) => (
+        <div class={`bm-row st-${b.state}`} key={b.name} role="menuitem" style={{ '--hue': b.hue }}>
+          <span class="box-dot" />
+          <span class="bm-name">{b.name}</span>
+          {b.state !== 'idle' && <span class={`conn conn-${b.state}`} title={b.state} />}
+          {b.places.length > 0 && <Glyph name="chevron" class="bm-more" />}
+        </div>
       ))}
       <div class="bm-foot"><button class="bm-add"><Glyph name="plus" />Add box</button></div>
     </div>
