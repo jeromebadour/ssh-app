@@ -182,7 +182,7 @@ func TestWatch(t *testing.T) {
 
 	got := waitFor("three answers", func(x []Pulse) bool { return len(x) >= 3 })
 	for _, x := range got {
-		if x.Silent || x.RoundTrip <= 0 || x.RoundTrip > 250*time.Millisecond {
+		if x.Silent || x.RoundTrip < 0 || x.RoundTrip > 250*time.Millisecond { // zero is a real answer: faster than the clock ticks (seen on Windows)
 			t.Fatalf("on a good link: %+v", x)
 		}
 	}
