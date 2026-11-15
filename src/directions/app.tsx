@@ -1,56 +1,45 @@
-// Berth's main window in use, as if it were finished, in one of three directions. Built from the components the
+// Berth's main window in use, as if it were finished, in its chosen direction (A, Chart). Built from the components the
 // screens will be made of; drawn with invented data. A lab page: it exists to be pictured and chosen from.
-//   ?d=a|b|c         the direction
 //   ?scene=dialog    the "close a tab with a running command" dialog is open
 //   ?scene=paths     the path bar's pinned and recent folders are open
+//   ?scene=boxes     the Boxes menu is open
 import { render } from 'preact';
 import { blocks, files, groups, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
 import { Glyph } from './glyphs';
-import { marks } from './marks';
+import { Mark } from './marks';
 
 const q = new URLSearchParams(location.search);
-const d = (['a', 'b', 'c'].includes(q.get('d') ?? '') ? q.get('d') : 'a') as 'a' | 'b' | 'c';
 const scene = q.get('scene') ?? '';
-document.documentElement.dataset['d'] = d;
-const Mark = marks[d];
 
 const stateWords: Record<Box['state'], string> = { connected: 'connected', reconnecting: 'reconnecting', idle: 'not open' };
 
-function BoxList() {
+function BoxMenu() {
   return (
-    <nav class="boxes" aria-label="Boxes">
-      <div class="side-switch" role="tablist">
-        <button class="switch on" role="tab" aria-selected="true"><Glyph name="boxes" />Boxes</button>
-        <button class="switch" role="tab" aria-selected="false"><Glyph name="search" />Find</button>
-      </div>
+    <div class="box-menu" role="menu" aria-label="Boxes">
+      <div class="bm-search"><Glyph name="search" /><span class="bm-placeholder">Find a box or place</span></div>
       {groups.map((g) => (
-        <section class="group" key={g.name}>
-          <h2 class="group-name">{g.name}</h2>
-          {g.boxes.map((b, i) => (
-            <div class={`box st-${b.state}`} key={b.name} style={{ '--hue': b.hue }}>
-              <div class="box-row">
-                <span class="berth-no">{d === 'c' ? `P-${String(i + 1 + (g.name === 'Studio' ? 3 : 0)).padStart(2, '0')}` : ''}</span>
+        <section class="bm-group" key={g.name}>
+          <h2 class="bm-group-name">{g.name}</h2>
+          {g.boxes.map((b) => (
+            <div class={`bm-box st-${b.state}`} key={b.name} style={{ '--hue': b.hue }}>
+              <div class="bm-row" role="menuitem">
                 <span class="box-dot" />
-                <span class="box-name">{b.name}</span>
-                <span class="box-state">{b.state === 'reconnecting' ? b.detail?.replace('retry in ', '') : b.places.some((p) => p.open) ? `${b.places.filter((p) => p.open).length} open` : ''}</span>
+                <span class="bm-name">{b.name}</span>
+                <span class="bm-host">{b.host}</span>
+                <span class="bm-state">{b.state === 'reconnecting' ? b.detail : b.state === 'connected' ? `${b.places.filter((p) => p.open).length} open` : ''}</span>
               </div>
-              <div class="box-host">{b.host}</div>
-              {b.places.length > 0 && (
-                <ul class="places">
-                  {b.places.map((p) => (
-                    <li class={`place ${p.open ? 'open' : ''}`} key={p.name}>
-                      <span class="place-mark" />
-                      {p.name}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {b.places.map((p) => (
+                <div class={`bm-place ${p.open ? 'open' : ''}`} key={p.name} role="menuitem">
+                  <span class="place-mark" />
+                  {p.name}
+                </div>
+              ))}
             </div>
           ))}
         </section>
       ))}
-      <button class="add-box"><Glyph name="plus" />Add box</button>
-    </nav>
+      <div class="bm-foot"><button class="bm-add"><Glyph name="plus" />Add box</button></div>
+    </div>
   );
 }
 
@@ -61,6 +50,9 @@ function TabBar() {
         <Mark />
         <span class="wordmark">Berth</span>
       </div>
+      <button class={`boxes-btn ${scene === 'boxes' ? 'open' : ''}`} aria-haspopup="menu" aria-expanded={scene === 'boxes'}>
+        <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />
+      </button>
       <div class="tab-groups">
         {tabGroups.map((g) => (
           <div class={`tab-group st-${g.state}`} key={g.box} style={{ '--hue': g.hue }}>
@@ -246,10 +238,9 @@ function CloseDialog() {
 function Window() {
   return (
     <div class="window">
-      <div class="atmosphere" aria-hidden="true" />
       <TabBar />
+      {scene === 'boxes' && <BoxMenu />}
       <div class="body">
-        <BoxList />
         <FilePanel />
         <Terminal />
       </div>
