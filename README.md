@@ -25,8 +25,8 @@ bash scripts/build.sh    # dist/: the engine (Linux and Windows), main, preloads
 bash scripts/smoke.sh    # the real app on a virtual screen, sandbox on, running its self-test
 ```
 
-CI runs the same scripts on every pull request (`checks` and `lab`), and `main` only accepts a pull request on which
-both passed.
+CI runs the same scripts on every pull request (`checks` and `lab`). A pull request is merged, by a workflow, only
+after both passed on its head commit; on `main`, CI fails any commit that did not come from a merged pull request.
 
 ## Layout
 
