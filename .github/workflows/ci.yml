@@ -1,9 +1,10 @@
 name: CI
 
-# Every pull request, and main after each merge. Two jobs, both required by the ruleset on main:
+# Every pull request, and main after each merge. Two jobs must pass before merge.yml merges a pull request:
 #   checks: everything that needs no window (types, the no-blocking-calls rule, Go vet and tests, a short fuzz run).
 #   lab:    the real app, started on a virtual screen with Chromium's sandbox on, running its self-test.
 # Changes reach main only through a pull request; merge.yml does the merging once both jobs pass.
+# On main a third job, from-a-pull-request, fails the run if a commit got there any other way.
 # Actions are GitHub's own, pinned by commit. Nothing here has write access.
 on:
   push:
@@ -35,6 +36,26 @@ jobs:
         run: bash scripts/get-go.sh
       - name: Checks
         run: bash scripts/check.sh
+
+  # GitHub offers no ruleset for a private repo on the free plan, so nothing there blocks a direct push to main.
+  # This job makes one loud: on main, the commit must be the merge of a pull request, or the run fails.
+  from-a-pull-request:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: This commit on main must be the merge of a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash scripts/from-pr.sh
 
   lab:
     runs-on: ubuntu-24.04

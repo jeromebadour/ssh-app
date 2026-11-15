@@ -26,4 +26,7 @@ for t in tests/*.test.ts; do
 done
 node --test .build/tests/*.mjs | grep -E '^(not ok|# (tests|pass|fail))'
 
+echo "check: the rule that a commit on main must come from a pull request"
+bash scripts/test-from-pr.sh
+
 echo "check: all passed"
