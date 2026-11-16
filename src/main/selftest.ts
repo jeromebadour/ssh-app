@@ -42,6 +42,8 @@ interface Ctx {
   tabs: Map<number, Tab>;
   shellState(): ShellState;
   dropped(): number;
+  droppedOn(): Record<string, number>;
+  lateFromClosed(): number;
 }
 
 interface Result {
@@ -845,7 +847,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
-    check('no message was dropped, but the ones the lock refused on purpose', ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock]);
+    check(`no message was dropped, but the ones the lock refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
   } catch (err) {
     check('no probe threw', false, err instanceof Error ? (err.stack ?? err.message) : String(err));
   }

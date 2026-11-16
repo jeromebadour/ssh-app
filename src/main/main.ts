@@ -164,6 +164,19 @@ let active = 0;
 let win: BaseWindow | null = null;
 let shell: WebContentsView | null = null;
 let droppedMessages = 0;
+const droppedOn = new Map<string, number>(); // which kind of message was dropped, for the self-test to say
+// A view that was just closed may have a message on its way (the meter reports twice a second): that one is
+// late, not refused, and is counted apart. Nothing from a closed view is ever acted on either way.
+const closedViews = new Set<number>();
+let lateFromClosed = 0;
+function drop(on: string, e?: IpcMainEvent): void {
+  if (e && closedViews.has(e.sender.id)) {
+    lateFromClosed++;
+    return;
+  }
+  droppedMessages++;
+  droppedOn.set(on, (droppedOn.get(on) ?? 0) + 1);
+}
 const meter = new Meter();
 let keys: KeyProc | null = null;
 let gate: Gate | null = null;
@@ -305,6 +318,7 @@ function closeTab(id: number): void {
   tabs.delete(id);
   tabByContents.delete(tab.view.webContents.id);
   win.contentView.removeChildView(tab.view);
+  closedViews.add(tab.view.webContents.id);
   tab.view.webContents.close();
   meter.forget(id);
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
@@ -321,7 +335,7 @@ function fromMainFrameOf(e: IpcMainEvent, origin: string): boolean {
 ipcMain.on(CH.tabInput, (e, bytes: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || !(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > INPUT_MAX) {
-    droppedMessages++;
+    drop('tab:input', e);
     return;
   }
   tab.engine.input(bytes);
@@ -329,18 +343,18 @@ ipcMain.on(CH.tabInput, (e, bytes: unknown) => {
 
 ipcMain.on(CH.tabTaken, (e, total: unknown) => {
   const tab = tabByContents.get(e.sender.id);
-  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof total !== 'number' || !tab.engine.taken(total)) droppedMessages++;
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof total !== 'number' || !tab.engine.taken(total)) drop('tab:taken', e);
 });
 
 ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   if (!shell || e.sender.id !== shell.webContents.id || !fromMainFrameOf(e, 'app://shell')) {
-    droppedMessages++;
+    drop('shell:cmd');
     return;
   }
   const c = cmd as Partial<ShellCmd> | null;
   // Without the password nothing opens: before unlock the shell's only messages are the gate's.
   if (!gate?.unlocked) {
-    droppedMessages++;
+    drop('shell:cmd');
     return;
   }
   const isBox = (v: unknown): v is string => typeof v === 'string' && !!boxes?.get(v);
@@ -402,24 +416,24 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     sendTo(tabs.get(c.id)!.view, CH.tabShown, null);
     tellShell();
   } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
-  else droppedMessages++;
+  else drop('shell:cmd');
 });
 
 // The gate's three messages: from the shell view's own main frame only.
 const fromShell = (e: IpcMainEvent): boolean => !!shell && e.sender.id === shell.webContents.id && fromMainFrameOf(e, 'app://shell');
 
 ipcMain.on(CH.gateCreate, (e, password: unknown) => {
-  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void droppedMessages++;
+  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void drop('gate');
   void gate.create(password);
 });
 
 ipcMain.on(CH.gateUnlock, (e, password: unknown) => {
-  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void droppedMessages++;
+  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void drop('gate');
   void gate.unlock(password);
 });
 
 ipcMain.on(CH.gatePickBackup, (e) => {
-  if (!fromShell(e) || !gate || !win || gate.state.phase !== 'create') return void droppedMessages++;
+  if (!fromShell(e) || !gate || !win || gate.state.phase !== 'create') return void drop('gate');
   const g = gate;
   void dialog.showOpenDialog(win, { title: 'Backup folder', defaultPath: g.state.backupDir, properties: ['openDirectory', 'createDirectory'] }).then((picked) => {
     const dir = picked.filePaths[0];
@@ -437,13 +451,13 @@ function knownView(e: IpcMainEvent): { tab: Tab | null } | null {
 
 ipcMain.on(CH.meterReport, (e, numbers: unknown) => {
   const from = knownView(e);
-  if (!from || !meter.fromView(numbers, from.tab ? from.tab.id : 0)) droppedMessages++;
+  if (!from || !meter.fromView(numbers, from.tab ? from.tab.id : 0)) drop('meter:report', e);
 });
 
 ipcMain.on(CH.meterFrame, (e) => {
   const from = knownView(e);
   if (!from) {
-    droppedMessages++;
+    drop('meter:frame', e);
     return;
   }
   if (from.tab) meter.tabPainted(from.tab.id);
@@ -523,7 +537,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
         const ses = session.fromPartition(partition, { cache: false });
         harden(ses);
         return new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-shell.js', false) });
