@@ -85,6 +85,7 @@ export interface Term {
   fit(): boolean; // true when the size changed
   focus(): void;
   text(): string; // everything on screen and scrolled out, for the lab
+  held(): number; // how many lines the terminal is holding, on screen and scrolled out
   spot(text: string): { x: number; y: number; hand: boolean } | null; // where these words are drawn, and whether the pointer is a hand; for the lab
   links(row: number): string[]; // what the app would treat as an address to open on this row; for the lab
   bracketedPaste(): boolean;
@@ -199,6 +200,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     size: () => ({ cols: term.cols, rows: term.rows }),
     fit,
     focus: () => term.focus(),
+    held: () => term.buffer.active.length,
     text: () => {
       const b = term.buffer.active;
       const lines: string[] = [];

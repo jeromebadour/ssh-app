@@ -27,6 +27,13 @@ unformatted="$(cd engine && gofmt -l cmd internal)"
 [ -z "$unformatted" ] || { echo "not gofmt-formatted: $unformatted" >&2; exit 1; }
 (cd engine && go vet ./... && GOOS=windows go vet ./... && go test -count=1 ./...)
 
+# The listener in the smoke runs (scripts/lib/net-canary.mjs) sits in front of the app as its proxy, and the
+# app's promise is that it never hears a thing. The one way the app could step around it is by setting a proxy
+# of its own, so it never does, and this is where that is kept true.
+echo "check: the app sets no proxy of its own, so the listener cannot be stepped around"
+proxied="$(grep -rn 'setProxy\|proxyRules\|resolveProxy\|proxy-server' src/ || true)"
+[ -z "$proxied" ] || { echo "the app sets a proxy: $proxied" >&2; exit 1; }
+
 echo "check: lab tools are in no program that ships"
 shipped="$(cd engine && go list -deps ./cmd/... && GOOS=windows go list -deps ./cmd/...)"
 ! grep -q 'internal/lab' <<<"$shipped" || { echo "a shipped program imports a lab package" >&2; exit 1; }
