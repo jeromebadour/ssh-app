@@ -232,12 +232,14 @@ function tellGate(): void {
 }
 
 function info(t: Tab): TabInfo {
-  const place = t.box?.places.find((p) => p.name === t.place);
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place, addr: addrOf(t.box), user: t.box.user, folder: place?.folder ?? t.box.folder, pinType: t.box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
+  // The box as it stands now: a box that was edited while its tabs are open says its new name on them.
+  const box = t.box ? (boxes?.get(t.box.id) ?? t.box) : null;
+  const place = box?.places.find((p) => p.name === t.place);
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
 }
 
 function boxView(b: Box): BoxView {
-  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => p.name), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
+  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => ({ name: p.name, folder: p.folder })), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
 }
 
 function checkShown(): CheckShown | null {
@@ -658,6 +660,35 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
         b.reach(r.id);
         done = `Added ${b.get(r.id)!.name}: its key was made, and Berth is asking it who it is`;
       }
+      tellShell();
+    });
+  } else if (c?.op === 'editBox' && typeof c.req === 'number' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    const was = b.get(id)!.name;
+    void b.edit(id, c.draft as BoxDraft).then((r) => {
+      added = { req: c.req!, ok: r.ok, id: r.ok ? r.id : '', error: r.ok ? '' : r.error, fields: r.ok ? {} : (r.fields ?? {}) };
+      if (r.ok) {
+        const now = b.get(id)!;
+        done = now.pin === '' ? `Saved ${now.name}: its address changed, so it is checked again before it opens` : `Saved ${was === now.name ? now.name : `${was}, now ${now.name}`}`;
+      }
+      tellShell();
+    });
+  } else if (c?.op === 'forgetIdentity' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    void b.forget(id).then((r) => {
+      done = r.ok ? `${b.get(id)?.name ?? 'The box'} is checked again before it opens` : `Its identity could not be forgotten: ${r.error}`;
+      tellShell();
+    });
+  } else if (c?.op === 'removeBox' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    const name = b.get(id)!.name;
+    // Every tab on that box goes with it: there is nothing left for them to be on.
+    for (const t of [...tabs.values()]) if (t.box?.id === id) closeTab(t.id);
+    void b.remove(id).then((r) => {
+      done = r.ok ? `Deleted ${name}, and its key with it` : `${name} was not deleted: ${r.error}`;
       tellShell();
     });
   } else if (c?.op === 'check' && isBox(c.box)) {
