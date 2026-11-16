@@ -3,16 +3,19 @@
 //   long task: the longest single stretch the page was busy (the engine's "longtask" record)
 //   reaction:  the longest time from a real click or key reaching the page to the next painted frame
 //              (the engine's "event" record; anything under 16 ms is not recorded and counts as 0)
-import type { ViewNumbers } from './ipc';
+import { REACTION_KINDS, type ViewNumbers } from './ipc';
 
 export function watchView(port: { meter(n: ViewNumbers): void; frame(): void }): void {
   let longTaskMs = 0;
   let reactionMs = 0;
+  let reactionKind = 0;
+  let reactionWaitMs = 0;
+  let reactionHandlerMs = 0;
   let changed = false;
-  const watch = (type: string, take: (ms: number) => void, extra: object = {}) => {
+  const watch = (type: string, take: (ms: number, entry: PerformanceEntry) => void, extra: object = {}) => {
     try {
       new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) take(entry.duration);
+        for (const entry of list.getEntries()) take(entry.duration, entry);
       }).observe({ type, buffered: true, ...extra } as PerformanceObserverInit);
     } catch {
       /* a record this engine does not offer is simply not reported */
@@ -26,9 +29,13 @@ export function watchView(port: { meter(n: ViewNumbers): void; frame(): void }):
   });
   watch(
     'event',
-    (ms) => {
+    (ms, entry) => {
       if (ms > reactionMs) {
+        const e = entry as PerformanceEventTiming;
         reactionMs = ms;
+        reactionKind = Math.max(0, (REACTION_KINDS as readonly string[]).indexOf(e.name));
+        reactionWaitMs = Math.max(0, e.processingStart - e.startTime);
+        reactionHandlerMs = Math.max(0, e.processingEnd - e.processingStart);
         changed = true;
       }
     },
@@ -36,9 +43,12 @@ export function watchView(port: { meter(n: ViewNumbers): void; frame(): void }):
   );
   setInterval(() => {
     if (!changed) return;
-    port.meter({ longTaskMs: Math.round(longTaskMs), reactionMs: Math.round(reactionMs) });
+    port.meter({ longTaskMs: Math.round(longTaskMs), reactionMs: Math.round(reactionMs), reactionKind, reactionWaitMs: Math.round(reactionWaitMs), reactionHandlerMs: Math.round(reactionHandlerMs) });
     longTaskMs = 0;
     reactionMs = 0;
+    reactionKind = 0;
+    reactionWaitMs = 0;
+    reactionHandlerMs = 0;
     changed = false;
   }, 500);
   painted(port);

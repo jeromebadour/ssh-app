@@ -58,11 +58,22 @@ export interface ShellState {
 
 export type ShellCmd = { op: 'new' } | { op: 'select'; id: number } | { op: 'close'; id: number };
 
-// What a view may tell the meter: two numbers, in milliseconds.
+// What a view may tell the meter: numbers only, in milliseconds.
+// The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:
+//   reactionKind       which kind of event it was, as its place in REACTION_KINDS (0 = any other)
+//   reactionWaitMs     from the event reaching the page to its handlers starting (the page was busy)
+//   reactionHandlerMs  inside the handlers
+//   the rest of reactionMs is the wait for the next painted frame
 export interface ViewNumbers {
   longTaskMs: number;
   reactionMs: number;
+  reactionKind: number;
+  reactionWaitMs: number;
+  reactionHandlerMs: number;
 }
+
+// A fixed list: a view names an event by its place here, never by a text of its own.
+export const REACTION_KINDS = ['other', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'keydown', 'keypress', 'keyup', 'input', 'beforeinput', 'pointerover', 'pointerenter', 'pointerout', 'pointerleave', 'mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'auxclick', 'contextmenu', 'dblclick', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
 
 export interface TabPort {
   readonly sandboxed: boolean;

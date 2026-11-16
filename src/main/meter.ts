@@ -7,14 +7,29 @@
 //   reactionMs    the longest time from a real click or key to the next painted frame (budget 100 ms)
 //   tabSwitchMs   from the click on a tab to that tab's painted frame (budget 100 ms)
 //   startMs       from the process starting to the first painted frame (budget 2000 ms)
+import { REACTION_KINDS } from '../common/ipc';
+
 export const BUDGET = { mainDelayMs: 50, viewTaskMs: 100, reactionMs: 100, tabSwitchMs: 100, startMs: 2000 } as const;
 export type Worst = { -readonly [K in keyof typeof BUDGET]: number };
+
+// Where the slowest reaction's time went, so a slow one is explained and never guessed at.
+//   view: 0 is the bar, any other number is that tab.   kind: the event, from the fixed list.
+//   waitMs: the page was busy before its handlers ran.   handlerMs: inside the handlers.
+//   paintMs: waiting for the next painted frame.
+export interface SlowestReaction {
+  view: number;
+  kind: (typeof REACTION_KINDS)[number];
+  waitMs: number;
+  handlerMs: number;
+  paintMs: number;
+}
 
 const TICK_MS = 20;
 const SANE_MAX_MS = 10 * 60 * 1000;
 
 export class Meter {
   readonly worst: Worst = { mainDelayMs: 0, viewTaskMs: 0, reactionMs: 0, tabSwitchMs: 0, startMs: 0 };
+  slowest: SlowestReaction | null = null;
   private expected = 0;
   private switchStarted = new Map<number, number>();
 
@@ -28,10 +43,18 @@ export class Meter {
   }
 
   // Numbers reported by a view. Anything that is not a sane number is ignored: a view is never trusted.
-  fromView(n: unknown): boolean {
-    const v = n as { longTaskMs?: unknown; reactionMs?: unknown } | null;
-    if (!v || !sane(v.longTaskMs) || !sane(v.reactionMs)) return false;
+  fromView(n: unknown, view = 0): boolean {
+    const v = n as { longTaskMs?: unknown; reactionMs?: unknown; reactionKind?: unknown; reactionWaitMs?: unknown; reactionHandlerMs?: unknown } | null;
+    if (!v || !sane(v.longTaskMs) || !sane(v.reactionMs) || !sane(v.reactionWaitMs) || !sane(v.reactionHandlerMs)) return false;
+    const kind = REACTION_KINDS[v.reactionKind as number];
+    if (!Number.isInteger(v.reactionKind) || kind === undefined) return false;
     this.take('viewTaskMs', v.longTaskMs as number);
+    const total = Math.round(v.reactionMs as number);
+    if (total > this.worst.reactionMs) {
+      const waitMs = Math.round(v.reactionWaitMs as number);
+      const handlerMs = Math.round(v.reactionHandlerMs as number);
+      this.slowest = { view, kind, waitMs, handlerMs, paintMs: Math.max(0, total - waitMs - handlerMs) };
+    }
     this.take('reactionMs', v.reactionMs as number);
     return true;
   }
@@ -57,6 +80,7 @@ export class Meter {
 
   reset(): void {
     for (const k of Object.keys(this.worst) as (keyof Worst)[]) if (k !== 'startMs') this.worst[k] = 0;
+    this.slowest = null;
   }
 
   private take(key: keyof Worst, ms: number): void {

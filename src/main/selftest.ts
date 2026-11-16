@@ -365,7 +365,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       };
       within('mainDelayMs', 'main was never later than', true);
       within('viewTaskMs', 'no view was busy in one stretch longer than', false);
-      within('reactionMs', 'a real click or key was painted within', false);
+      // The slowest one also says where its time went: a slow reaction is explained, never guessed at.
+      const slow = ctx.meter.slowest;
+      within('reactionMs', `a real click or key was painted within (slowest: ${slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms'})`, false);
       within('tabSwitchMs', 'a tab switch was painted within', true);
       within('startMs', 'from process start to the first painted frame', true);
 

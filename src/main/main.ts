@@ -308,7 +308,8 @@ function knownView(e: IpcMainEvent): { tab: Tab | null } | null {
 }
 
 ipcMain.on(CH.meterReport, (e, numbers: unknown) => {
-  if (!knownView(e) || !meter.fromView(numbers)) droppedMessages++;
+  const from = knownView(e);
+  if (!from || !meter.fromView(numbers, from.tab ? from.tab.id : 0)) droppedMessages++;
 });
 
 ipcMain.on(CH.meterFrame, (e) => {
