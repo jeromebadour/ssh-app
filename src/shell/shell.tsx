@@ -8,6 +8,7 @@ import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateNotice, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
+import { Mark } from '../ui/marks';
 
 declare global {
   interface Window {
@@ -77,11 +78,19 @@ function Unlocked(props: { s: ShellState }) {
       <main class="middle">
         {s.tabs.length === 0 && (
           <div class="first-use" id="first-use">
-            {s.boxes.length === 0 ? (
-              <button type="button" class="btn primary" id="first-add" onClick={act.addBox}><Glyph name="plus" />Add box</button>
-            ) : (
-              <span class="first-hint"><Glyph name="boxes" />{s.boxes.length} {s.boxes.length === 1 ? 'box' : 'boxes'}: open one from Boxes</span>
+            <Mark />
+            {s.boxes.length > 0 && (
+              <div class="fu-boxes">
+                {s.boxes.map((b) => (
+                  <button type="button" class="fu-box" key={b.id} data-open={b.name} style={{ '--hue': `var(--box-${b.colour})` }} onClick={() => act.open(b.id, '')}>
+                    <span class="box-dot" />
+                    <span class="fu-name">{b.name}</span>
+                    {!b.pinned && <Glyph name="identity" class="bm-unchecked" label="not checked yet" />}
+                  </button>
+                ))}
+              </div>
             )}
+            <button type="button" class={`btn ${s.boxes.length === 0 ? 'primary' : 'quiet'}`} id="first-add" onClick={act.addBox}><Glyph name="plus" />Add box</button>
           </div>
         )}
       </main>

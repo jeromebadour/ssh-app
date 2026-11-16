@@ -355,6 +355,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const printed = String(first['printed'] ?? '');
 
         check('a first start with no box shows one thing: Add box', await until(() => has('#first-add'), 5000), '');
+        await shot('first-use', 'a first start: no box yet');
         await clickOn('#first-add');
         check('Add box opens, with the shell above the tabs', (await until(() => has('#add-box'), 3000)) && (await until(shellOnTop, 1000)), '');
         await shot('add-empty', 'Add box, empty');
@@ -462,7 +463,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('check-unreachable', 'the first-connection check, the box cannot be reached');
         await clickOn('#check-close');
         check('Close: no dialog, the box is kept, never checked', (await until(async () => !(await has('#check')), 2000)) && ctx.boxes.list.find((b) => b.name === 'quiet-box')?.pin === '', '');
+        check('no tab open, boxes saved: the window offers each of them, and Add box', await until(async () => (await has('[data-open="lab-box"]')) && (await has('[data-open="quiet-box"]')) && (await has('#first-add')), 2000), await text('#first-use'));
+        await shot('no-tab', 'no tab open, two boxes saved');
         await clickOn('#boxes');
+        await until(() => has('#box-menu'), 2000);
+        await shot('boxes-unchecked', 'the Boxes menu, a box not checked yet');
         await clickOn('[data-box="quiet-box"]');
         check('a box never checked, picked from Boxes, opens its check and no tab', (await until(() => has('#check'), 3000)) && ctx.shellState().tabs.length === 0, '');
         await clickOn('#check-close');
