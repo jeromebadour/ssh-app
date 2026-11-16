@@ -7,6 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { availableParallelism } from 'node:os';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { COPY_MAX, type ShellState } from '../common/ipc';
@@ -17,6 +18,7 @@ import type { KeyProc } from './keyproc';
 import type { Tab } from './main';
 import { memory } from './memory';
 import { BUDGET, type Meter } from './meter';
+import { shareFor, type Pace } from './pace';
 import { takePicture } from './picture';
 
 interface Ctx {
@@ -45,6 +47,8 @@ interface Ctx {
   droppedOn(): Record<string, number>;
   lateFromClosed(): number;
   missing(): Record<string, number>;
+  pace: Pace;
+  forcePace(share: number | null): void;
 }
 
 interface Result {
@@ -580,11 +584,41 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       return;
     }
 
-    // "seven": the fullest day. Seven tabs, each with its own view and engine, all answering, none leaking into
-    // another; with what it costs in memory.
+    // "seven": the fullest day. Seven tabs on a box, each with its own view, engine and SSH link, all answering,
+    // none leaking into another; flooded all at once while the window is used; with what it costs in memory.
+    // The box is the lab's own SSH server: its sessions print as fast as each link takes it, so every byte is
+    // encrypted, carried, held to the fixed amount a box may be ahead, and drawn by a real terminal.
     if (ctx.mode === 'seven') {
-      const all = Array.from({ length: 7 }, () => ctx.openTab()!);
-      check('seven engines answer', await until(() => all.every((t) => t.engine.state === 'ready'), 30_000), all.map((t) => t.engine.state));
+      const labBin = process.env['SSHAPP_LABBOX'] ?? '';
+      if (labBin === '') {
+        check('a lab box to connect to', false, 'SSHAPP_LABBOX is not set: the seven tabs need the lab\'s SSH server');
+        canary.close();
+        clearTimeout(guard);
+        return finish(1);
+      }
+      // Three boxes: four tabs on one, two on another, one on the last, as a full day has it.
+      const labs: LabBox[] = [];
+      const boxIds: string[] = [];
+      for (const [n, name] of ['lab-box', 'lab-two', 'lab-three'].entries()) {
+        const { box: lab, first } = await LabBox.start(labBin);
+        const added = await ctx.boxes.add({ name, colour: n + 2, host: '127.0.0.1', port: String(first['addr'] ?? '').split(':')[1] ?? '', user: 'demo', folder: '', places: [] });
+        const boxId = added.ok ? added.id : '';
+        ctx.boxes.reach(boxId);
+        await until(() => ctx.boxes.check(boxId).step === 'reached', 20_000);
+        ctx.boxes.paste(boxId, String(first['printed'] ?? ''));
+        const trusted = await ctx.boxes.trust(boxId);
+        await lab.tell(`accept ${ctx.boxes.get(boxId)?.publicKey ?? ''}`);
+        check(`${name} is added, checked and pinned`, added.ok && trusted.ok, [added, trusted]);
+        labs.push(lab);
+        boxIds.push(boxId);
+      }
+      const everyLab = async (line: string, key: string): Promise<number> => {
+        let sum = 0;
+        for (const lab of labs) sum += Number((await lab.tell(line))[key] ?? 0);
+        return sum;
+      };
+      const all = [0, 0, 0, 0, 1, 1, 2].map((n) => ctx.openTab(boxIds[n])!);
+      check('seven links are up, each signed in', await until(() => all.every((t) => t.engine.link.phase === 'up'), 30_000), all.map((t) => t.engine.link.phase));
       for (const t of all) await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
       const ids = [process.pid, ctx.shell.webContents.getOSProcessId(), ...all.map((t) => t.view.webContents.getOSProcessId()), ...all.map((t) => t.engine.pid)];
       check('sixteen processes, each its own', new Set(ids).size === 16 && !ids.includes(0), ids);
@@ -597,47 +631,109 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (text) arrived++;
         if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
       }
-      check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
+      check('each of the seven hears its own link only', arrived === 7 && leaks === 0, { arrived, leaks });
       // Every tab, and the button that opens one more, is in sight, whatever the window's width. A tab that has
       // slid out of the bar cannot be pressed, and what cannot be seen is not there (found 2026-11-16 on a
       // 1024-wide screen: tabs six and seven were past the window's edge).
-      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') ? 'tab ' + el.getAttribute('data-tab') : 'the new-tab button') + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); } return { width: w, out }; })()`);
-      check(`all seven tabs and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
-      // The promises, measured under load: every tab floods its engine for four seconds while real clicks switch
-      // tabs and real keys are typed. Budgets are the plan's (B8), times the stated factor for slow test machines.
+      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], [data-fold], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') || el.id || 'fold') + ' ' + Math.round(r.left) + '-' + Math.round(r.right)); } return { width: w, out }; })()`);
+      check(`every tab and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
+
+      // The promises, measured under load: for four seconds every session on the box prints as fast as its link
+      // takes it, while tabs are brought to the front one after another and real keys are typed into each.
+      // Budgets are the plan's (B8), times the stated factor for slow test machines.
       const factor = Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
+      const paceOf = (t: Tab) => js<{ front: boolean; share: number; rested: number; taken: number; waiting: number }>(t.view, `window.berthTerm.pace()`);
+      const takenAll = async () => {
+        let sum = 0;
+        for (const t of all) sum += (await paceOf(t)).taken;
+        return sum;
+      };
+      const bringToFront = async (t: Tab) => {
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        return until(() => ctx.shellState().active === t.id, 1000);
+      };
+      const pressAndType = async (t: Tab): Promise<boolean> => {
+        // A box with several tabs in a narrow window folds them into one tab with a count: then the tab is
+        // chosen the way the count's list chooses it. Otherwise by a real press on the tab itself.
+        const at = await js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector('[data-tab="${t.id}"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+        if (at && ctx.shellState().active !== t.id) {
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+        } else if (!at) await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        // The key follows the press at once, as a hand does, before the tab has been painted.
+        t.view.webContents.focus();
+        for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
+        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
+        return until(() => ctx.shellState().active === t.id, 1000);
+      };
+      const slowestSaid = (): string => {
+        const slow = ctx.meter.slowest;
+        return slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms';
+      };
       await sleep(1200); // let start-up noise be reported, then begin clean
+
+      // First with nothing printing: tabs brought to the front one after another, a key typed into each.
+      ctx.meter.reset();
+      let calmOk = 0;
+      for (let i = 0; i < 12; i++) {
+        const began = Date.now();
+        if (await pressAndType(all[i % all.length]!)) calmOk++;
+        await sleep(Math.max(0, 200 - (Date.now() - began)));
+      }
+      await sleep(1200); // the views report twice a second
+      const calm = { ...ctx.meter.worst };
+      check(`with nothing printing: a click or key was painted within ${calm.reactionMs} ms and a tab switch within ${calm.tabSwitchMs} ms (budget ${BUDGET.reactionMs} ms${factor > 1 ? `, times ${factor} on this machine` : ''}; slowest: ${slowestSaid()})`, calmOk === 12 && calm.reactionMs <= BUDGET.reactionMs * factor && calm.tabSwitchMs <= BUDGET.tabSwitchMs * factor && calm.tabSwitchMs > 0, { calmOk, calm });
+
+      // Then one tab in front whose box prints as fast as the link takes it (a "yes", a huge file to the
+      // screen), with keys typed into it all the while.
+      const alone = all[6]!;
+      await bringToFront(alone);
+      await sleep(300);
+      ctx.meter.reset();
+      const aloneBefore = Number((await labs[2]!.tell('flooded'))['bytes'] ?? 0);
+      await labs[2]!.tell('flood 3000');
+      for (const until3 = Date.now() + 3000; Date.now() < until3; ) {
+        for (const type of ['keyDown', 'char', 'keyUp'] as const) alone.view.webContents.sendInputEvent({ type, keyCode: 'k' });
+        await sleep(150);
+      }
+      await until(() => alone.engine.waiting() === 0, 20_000);
+      await sleep(1200);
+      const flat = { ...ctx.meter.worst };
+      const aloneRate = ((Number((await labs[2]!.tell('flooded'))['bytes'] ?? 0) - aloneBefore) / 1048576 / 3).toFixed(1);
+      check(`one tab flooded as fast as its link takes it, ${aloneRate} MB/s: a key typed into it was painted within ${flat.reactionMs} ms (budget ${BUDGET.reactionMs} ms${factor > 1 ? `, times ${factor} on this machine` : ''}; slowest: ${slowestSaid()})`, Number(aloneRate) > 1 && flat.reactionMs > 0 && flat.reactionMs <= BUDGET.reactionMs * factor, flat);
+
+      // Last, all seven at once.
       ctx.meter.reset();
       const FLOOD_MS = 4000;
-      for (const t of all) {
-        await js(t.view, `(() => { const chunk = new Uint8Array(16384).fill(120); const end = Date.now() + ${FLOOD_MS}; window.__sent = 0; const go = () => { if (Date.now() > end) return; window.tabPort.send(chunk); window.__sent += chunk.length; setTimeout(go, 0); }; go(); })()`);
-      }
+      const PER_TAB = 2 * 1024 * 1024; // bytes a second each session prints: far more than a busy build's log
+      const takenBefore = await takenAll();
+      const floodedBefore = await everyLab('flooded', 'bytes');
+      const flooding = await everyLab(`flood ${FLOOD_MS} ${PER_TAB}`, 'flooding');
       const until4 = Date.now() + FLOOD_MS;
       let turn = 0;
       let presses = 0;
       let switches = 0;
       while (Date.now() < until4) {
-        const t = all[turn++ % all.length]!;
-        const at = await js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector('[data-tab="${t.id}"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
-        if (at) {
-          ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          presses++;
-        }
-        // The key follows the press at once, as a hand does, before the tab has been painted.
-        t.view.webContents.focus();
-        for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
-        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
         const began = Date.now();
-        if (at && (await until(() => ctx.shellState().active === t.id, 1000))) switches++;
+        presses++;
+        if (await pressAndType(all[turn++ % all.length]!)) switches++;
         await sleep(Math.max(0, 200 - (Date.now() - began)));
       }
+      const lowest = ctx.pace.lowest;
+      // The flood is over when the box has stopped and every tab has worked through what it was sent.
+      const drained = await until(async () => all.every((t) => t.engine.waiting() === 0) && (await Promise.all(all.map(paceOf))).every((p) => p.waiting === 0), 20_000);
       await sleep(1500); // the views report twice a second
-      let sent = 0;
-      for (const t of all) sent += await js<number>(t.view, `window.__sent || 0`);
+      const flooded = (await everyLab('flooded', 'bytes')) - floodedBefore;
+      const drawn = (await takenAll()) - takenBefore;
       const w = { ...ctx.meter.worst };
-      const mbps = (sent / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
-      check(`under load: ${switches} of ${presses} presses on a tab brought it to the front, ${mbps} MB/s through seven engines`, presses >= 7 && switches === presses && turn === presses && sent > 0, { turn, presses, switches, sent });
+      const mbps = (flooded / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
+      check(`under load: ${switches} of ${presses} presses brought their tab to the front, ${mbps} MB/s from the box through seven links and terminals`, flooding === 7 && presses >= 7 && switches === presses && flooded > 1048576, { turn, presses, switches, flooded, flooding });
+      // Nothing is lost on the way, held back or not: what the terminals worked through is what the box
+      // printed, and the few keys it sent back.
+      check('every byte the box printed was worked through by its terminal, and no more than the keys typed besides', drained && drawn >= flooded && drawn <= flooded + presses * 8, { drained, flooded, drawn, waiting: all.map((t) => t.engine.waiting()) });
+      const processors = availableParallelism();
+      const rests = (await Promise.all(all.map(paceOf))).map((p) => p.rested);
+      check(`the tab in front came first: with ${processors} processors, a flooded tab behind was allowed ${lowest === 1 ? 'all of its time' : `${Math.round(lowest * 100)} % of its time at the least`} (the rule allows ${Math.round(shareFor(processors, 6) * 100)} % with six flooded behind)`, lowest >= shareFor(processors, 6) && (lowest < 1 || rests.every((n) => n === 0)), { lowest, rests });
       const within = (key: keyof typeof BUDGET, what: string, mustMeasure: boolean) => {
         const limit = BUDGET[key] * factor;
         check(`${what}: ${w[key]} ms (budget ${BUDGET[key]} ms${factor > 1 ? `, times ${factor} on this machine` : ''})`, w[key] <= limit && (!mustMeasure || w[key] > 0), w);
@@ -645,12 +741,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       within('mainDelayMs', 'main was never later than', true);
       within('viewTaskMs', 'no view was busy in one stretch longer than', false);
       // The slowest one also says where its time went: a slow reaction is explained, never guessed at.
-      const slow = ctx.meter.slowest;
-      within('reactionMs', `a real click or key was painted within (slowest: ${slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms'})`, false);
+      within('reactionMs', `a real click or key was painted within (slowest: ${slowestSaid()})`, false);
       within('tabSwitchMs', 'a tab switch was painted within', true);
       within('startMs', 'from process start to the first painted frame', true);
 
+      // The rest itself, by hand: told a small share, a flooded tab behind works through far less than the tab
+      // in front, which never rests; told the whole of its time, no tab rests at all.
+      const frontTab = all[0]!;
+      await bringToFront(frontTab);
+      const behindTab = all[3]!;
+      const measure = async (share: number) => {
+        ctx.forcePace(share);
+        await sleep(200);
+        const before = [await paceOf(frontTab), await paceOf(behindTab)];
+        await everyLab('flood 1500', 'flooding');
+        await sleep(1500);
+        const after = [await paceOf(frontTab), await paceOf(behindTab)];
+        await until(async () => all.every((t) => t.engine.waiting() === 0), 20_000);
+        return { front: after[0]!.taken - before[0]!.taken, behind: after[1]!.taken - before[1]!.taken, frontRested: after[0]!.rested - before[0]!.rested, behindRested: after[1]!.rested - before[1]!.rested };
+      };
+      const small = await measure(0.05);
+      const whole = await measure(1);
+      ctx.forcePace(null);
+      check('told a small share, a flooded tab behind rests and works through far less than the tab in front, which never rests', small.behindRested > 0 && small.frontRested === 0 && small.behind * 3 < small.front, small);
+      check('told the whole of its time, no tab rests', whole.behindRested === 0 && whole.frontRested === 0 && whole.behind > 0, whole);
       const mem = await memory(all.map((t) => t.engine.pid));
+      for (const lab of labs) lab.end();
       const budget = 300 + 7 * 220;
       check(`memory with seven tabs: ${mem.fairMB} MB (${mem.how}); budget ${budget} MB; plain per-process sum ${mem.plainMB} MB`, mem.fairMB > 0 && mem.fairMB < budget, mem);
       canary.close();
@@ -673,7 +789,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onBanner,onOutput,onShown,onState,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onBanner,onOutput,onPace,onShown,onState,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

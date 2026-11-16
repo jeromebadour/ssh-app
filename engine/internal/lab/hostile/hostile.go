@@ -5,8 +5,11 @@ package hostile
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -42,9 +45,24 @@ type Box struct {
 	tries  int // sign-in attempts of any kind, "none" included
 	users  []string
 	accept ssh.PublicKey // set by Accept: the key let in from then on
-	live   []ssh.Channel // the sessions' channels that are open now
+	live   []*out        // the sessions that are open now: each one's way out
 	quiet  bool          // Quiet: the shells send nothing back by themselves
 	got    []byte        // every byte the shells were given since the last Received
+	flood  atomic.Int64  // Flood: bytes the sessions took, in all
+}
+
+// out is one session's way out. Its shell, Print and Flood take turns writing: the library's channel must not be
+// written from two goroutines at once (they would share one packet buffer, and the client would be sent a
+// packet that says one length and holds another; found 2026-11-16, when Flood first printed beside the shell).
+type out struct {
+	mu sync.Mutex
+	ch ssh.Channel
+}
+
+func (o *out) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.ch.Write(p)
 }
 
 // Quiet makes the shells stop sending back what they are given (true), or do so again (false).
@@ -57,12 +75,61 @@ func (b *Box) Quiet(on bool) {
 // Print writes bytes to every open session, as a program on the box printing them.
 func (b *Box) Print(p []byte) {
 	b.mu.Lock()
-	chans := append([]ssh.Channel(nil), b.live...)
+	chans := append([]*out(nil), b.live...)
 	b.mu.Unlock()
 	for _, ch := range chans {
 		_, _ = ch.Write(p)
 	}
 }
+
+// Flood makes every open session print for the given time: lines of a log with a colour here and there, the way
+// a busy program prints. perSecond is how many bytes each session prints a second; 0 is as fast as its client
+// takes it. It returns at once with how many sessions print. Each stops by itself; a client that takes nothing
+// just makes its session wait, as a real box's program would.
+func (b *Box) Flood(d time.Duration, perSecond int) int {
+	b.mu.Lock()
+	chans := append([]*out(nil), b.live...)
+	b.mu.Unlock()
+	block := make([]byte, 0, 40*1024)
+	for i := 0; len(block) < 32*1024; i++ {
+		line := fmt.Sprintf("2026-11-16T07:%02d:%02d.%03dZ worker-%d \x1b[32mok\x1b[0m   request %08x served in %d ms, %d bytes, cache %s\r\n", i%60, (i*7)%60, (i*37)%1000, i%8, i*2654435761, 3+i%40, 512+i*97%9000, []string{"hit", "miss", "stale"}[i%3])
+		if i%29 == 0 {
+			line = fmt.Sprintf("2026-11-16T07:%02d:%02d.%03dZ worker-%d \x1b[33mwarn\x1b[0m retry %d of 5 for /var/lib/app/queue/%06d.job\r\n", i%60, (i*7)%60, (i*37)%1000, i%8, 1+i%5, i)
+		}
+		block = append(block, line...)
+	}
+	began := time.Now()
+	until := began.Add(d)
+	piece := len(block)
+	if perSecond > 0 && perSecond/50 < piece {
+		piece = max(256, perSecond/50) // about fifty pieces a second, so the pace is even
+	}
+	for _, ch := range chans {
+		go func(ch *out) {
+			sent := 0
+			// The block goes round and round, piece after piece, so what is printed is always whole lines.
+			for at := 0; time.Now().Before(until); {
+				n, err := ch.Write(block[at:min(at+piece, len(block))])
+				b.flood.Add(int64(n))
+				sent += n
+				at = (at + n) % len(block)
+				if err != nil {
+					return
+				}
+				if perSecond > 0 {
+					// Never ahead of the pace: wait until this much is due.
+					if due := began.Add(time.Duration(float64(sent) / float64(perSecond) * float64(time.Second))); time.Until(due) > 0 {
+						time.Sleep(time.Until(due))
+					}
+				}
+			}
+		}(ch)
+	}
+	return len(chans)
+}
+
+// Flooded is how many bytes the sessions took from Flood, in all.
+func (b *Box) Flooded() int64 { return b.flood.Load() }
 
 // Received gives every byte the shells were given since it was last asked, and forgets them.
 func (b *Box) Received() []byte {
@@ -166,13 +233,14 @@ func (b *Box) session(nc ssh.NewChannel) {
 	case <-b.closed:
 		return
 	}
+	way := &out{ch: ch}
 	b.mu.Lock()
-	b.live = append(b.live, ch)
+	b.live = append(b.live, way)
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
 		for i, c := range b.live {
-			if c == ch {
+			if c == way {
 				b.live = append(b.live[:i], b.live[i+1:]...)
 				break
 			}
@@ -191,7 +259,7 @@ func (b *Box) session(nc ssh.NewChannel) {
 			}
 			b.mu.Unlock()
 			if !quiet {
-				if _, werr := ch.Write(buf[:n]); werr != nil {
+				if _, werr := way.Write(buf[:n]); werr != nil {
 					return
 				}
 			}

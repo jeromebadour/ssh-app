@@ -115,6 +115,11 @@ export class Engine {
     return true;
   }
 
+  // Output handed on that the view has not yet taken: what its box is ahead by.
+  waiting(): number {
+    return this.aim.stub ? 0 : this.forwarded - this.acked; // the skeleton's echo knows no credit: nothing of it is ever held back
+  }
+
   // The view says how many output bytes it has taken in all. The engine sends at most a fixed amount ahead of
   // this, so a slow window makes the box wait instead of filling memory. A count that cannot be true (more
   // than was handed on, or going backwards) is not passed on.

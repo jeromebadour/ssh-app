@@ -16,6 +16,9 @@
 //	quiet on|off                    the shells stop (or start again) sending back what they are given
 //	print <hex>                     print these bytes in every open session, as a program on the box would
 //	received                        {"hex":"..."}: every byte the shells were given since this was last asked
+//	flood <ms> [bytes a second]     every open session prints for this long: so much a second each, or (none
+//	                                given) as fast as its client takes it
+//	flooded                         {"bytes":N}: how much the sessions took from flood, in all
 //
 // It ends when its input closes.
 package main
@@ -28,11 +31,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sshapp/engine/internal/lab/hostile"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
-
-	"sshapp/engine/internal/lab/hostile"
 )
 
 func say(v any) {
@@ -95,6 +98,15 @@ func main() {
 			}
 			box.Print(raw)
 			say(map[string]any{"printed": len(raw)})
+		case "flood":
+			var ms, perSecond int
+			if n, _ := fmt.Sscanf(rest, "%d %d", &ms, &perSecond); n < 1 || ms < 1 || ms > 60000 || perSecond < 0 {
+				say(map[string]any{"error": "flood <milliseconds> [bytes a second for each session]"})
+				continue
+			}
+			say(map[string]any{"flooding": box.Flood(time.Duration(ms)*time.Millisecond, perSecond)})
+		case "flooded":
+			say(map[string]any{"bytes": box.Flooded()})
 		case "received":
 			say(map[string]any{"hex": hex.EncodeToString(box.Received())})
 		case "rekey":

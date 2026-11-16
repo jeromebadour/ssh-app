@@ -7,7 +7,7 @@ import { openTerminal, type Term } from './term';
 declare global {
   interface Window {
     tabPort: TabPort;
-    berthTerm: Term & { policyFaults(): string[] }; // read by the lab's self-test, which runs in main
+    berthTerm: Term & { policyFaults(): string[]; pace(): { front: boolean; share: number; rested: number; taken: number; waiting: number } }; // read by the lab's self-test, which runs in main
   }
 }
 
@@ -26,17 +26,48 @@ const term = openTerminal(host, {
   },
   selected: (text) => port.copy(text),
 });
-window.berthTerm = { ...term, policyFaults: () => policyFaults.slice(0, 20) };
+window.berthTerm = { ...term, policyFaults: () => policyFaults.slice(0, 20), pace: () => ({ front, share, rested, taken: total, waiting: waiting.length }) };
 
-// Output is counted as taken once the terminal has worked through it: the box sends on only then.
+// Output goes to the terminal one piece after another, and is counted as taken once the terminal has worked
+// through it: the box sends on only then, so what waits here is never more than the fixed amount a box may be
+// ahead (512 KiB).
+//
+// The tab in front works through output as fast as it can. So does a tab behind, shown or not, with one
+// exception: when the PC is out of processor time, main tells the tabs behind a share, and a tab behind then
+// rests after each piece for as long as keeps its work to that share. The tab in front never rests.
 let total = 0;
-port.onOutput((bytes) => {
-  const n = bytes.byteLength;
+let front = true;
+let share = 1;
+let rested = 0; // how often this tab rested, for the lab
+const waiting: Uint8Array[] = [];
+let feeding = false;
+let ack = 0;
+const taken = (n: number): void => {
+  total += n;
+  // Told to main a few times a frame at most, not once a piece: the count is cumulative, so nothing is lost.
+  if (ack === 0) ack = window.setTimeout(() => { ack = 0; port.taken(total); }, 8);
+};
+const feed = (): void => {
+  const bytes = waiting.shift();
+  if (!bytes) {
+    feeding = false;
+    return;
+  }
+  feeding = true;
+  const began = performance.now();
   term.write(bytes, () => {
-    total += n;
-    port.taken(total);
+    taken(bytes.byteLength);
+    const rest = front || share >= 1 ? 0 : Math.min(250, (performance.now() - began) * (1 / share - 1));
+    if (rest < 1) return feed();
+    rested++;
+    setTimeout(feed, rest);
   });
+};
+port.onOutput((bytes) => {
+  waiting.push(bytes);
+  if (!feeding) feed();
 });
+port.onPace((now) => { share = now; });
 
 // The box's sign-in text, before anything else it prints. It is words, not a program's output: it is drawn
 // as words, and nothing in it is obeyed or answered.
@@ -91,7 +122,9 @@ void term.ready.then(() => {
 });
 
 watchView(port);
-port.onShown(() => {
+port.onShown((now) => {
+  front = now;
+  if (!front) return;
   refit();
   term.focus();
   painted(port);
