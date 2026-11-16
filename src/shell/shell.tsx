@@ -3,8 +3,11 @@
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
+import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
+import { LinkDialog } from '../ui/linkdialog';
+import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateNotice, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
@@ -21,7 +24,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '' };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -113,6 +116,12 @@ function Unlocked(props: { s: ShellState }) {
           close: () => port.cmd({ op: 'closeCheck', box: s.check!.boxId }),
         }} />
       )}
+      {s.link && (
+        <LinkDialog l={s.link} act={{ open: () => port.cmd({ op: 'openLink' }), drop: () => port.cmd({ op: 'dropLink' }) }} />
+      )}
+      {s.paste && (
+        <PasteDialog p={s.paste} act={{ send: () => port.cmd({ op: 'sendPaste' }), drop: () => port.cmd({ op: 'dropPaste' }) }} />
+      )}
       {changedTab && changedBox && (
         <ChangedDialog name={changedBox.name} addr={`${changedBox.host}:${changedBox.port}`} pinType={changedBox.pinType} pinFingerprint={changedBox.pinFingerprint} pinnedAt={changedBox.pinnedAt} shownFingerprint={changedTab.link.shownFingerprint} onClose={() => { setSeenChanged([...seenChanged, changedTab.id]); setDialog({ kind: 'none' }); }} />
       )}
@@ -132,7 +141,7 @@ function statusWords(t: TabInfo): string {
     if (l.silentSinceMs > 0) return `no answer for ${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s, the link is kept`;
     return `${l.rttMs >= 0 ? `round trip ${l.rttMs} ms` : 'connected'}${l.postQuantum ? ', post-quantum' : ''}`;
   }
-  if (l.phase === 'ended') return `ended: ${l.cause.replace(/-/g, ' ')}`;
+  if (l.phase === 'ended') return ending(l.cause).short;
   return tabLook(t).words;
 }
 

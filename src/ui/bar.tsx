@@ -6,6 +6,7 @@
 // pressed, and keeps it until main says which tab is in front.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { BoxView, ShellState, TabInfo } from '../common/ipc';
+import { ending } from '../common/link-words';
 import { Glyph } from './glyphs';
 import { Mark } from './marks';
 
@@ -33,7 +34,7 @@ export function tabLook(t: TabInfo): { mark: string; words: string; sig: string 
     case 'up':
       return l.silentSinceMs > 0 ? { mark: 'silent', words: 'no answer', sig: `${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s` } : { mark: 'connected', words: 'connected', sig: '' };
     case 'ended':
-      return l.cause === 'identity-changed' ? { mark: 'stopped', words: 'stopped: another identity', sig: 'stopped' } : { mark: 'gone', words: 'gone', sig: '' };
+      return l.cause === 'identity-changed' ? { mark: 'stopped', words: ending(l.cause).short, sig: 'stopped' } : { mark: 'gone', words: 'gone', sig: '' };
   }
 }
 

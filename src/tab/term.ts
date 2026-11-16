@@ -86,10 +86,16 @@ export interface Term {
   focus(): void;
   text(): string; // everything on screen and scrolled out, for the lab
   spot(text: string): { x: number; y: number; hand: boolean } | null; // where these words are drawn, and whether the pointer is a hand; for the lab
+  links(row: number): string[]; // what the app would treat as an address to open on this row; for the lab
   bracketedPaste(): boolean;
 }
 
-export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void }): Term {
+// A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
+// never a trailing character that is almost always the sentence's, not the address's.
+const ADDRESS = /\bhttps?:\/\/[^\s<>"'`{}|\\^[\]]+/g;
+const TRAILING = /[.,;:!?)\]}'"]+$/;
+
+export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void; link(url: string): void }): Term {
   stylesWithoutInline();
   const term = new Terminal({
     fontFamily: "'Plex Mono', monospace",
@@ -115,6 +121,35 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   term.onBinary((data) => out.typed(Uint8Array.from(data, (c) => c.charCodeAt(0) & 0xff)));
   // The terminal is drawn once its typeface is there: a cell measured in another face has another size, and
   // the box would be told a size that is not the view's. What arrives before is kept and drawn then.
+  // Addresses a box prints are found here, by us: the library opens nothing by itself (its own handler is off,
+  // and a link hidden behind other words is refused before the library sees it, in guards.ts). A plain click
+  // does nothing at all; Ctrl+click asks main, which shows the whole address on the window's own surface.
+  const addresses = (row: number): { text: string; at: number }[] => {
+    // The row is the window's own, counted from the top of what is shown; the buffer counts from the top of
+    // everything, scrolled-out lines included.
+    const text = term.buffer.active.getLine(term.buffer.active.viewportY + row - 1)?.translateToString(true) ?? '';
+    const found: { text: string; at: number }[] = [];
+    for (const m of text.matchAll(ADDRESS)) {
+      const url = m[0].replace(TRAILING, '');
+      if (url.length >= 11 && url.length <= 2048) found.push({ text: url, at: m.index });
+    }
+    return found;
+  };
+  const provider: import('@xterm/xterm').ILinkProvider = {
+    provideLinks(row, give) {
+      const found = addresses(row).map((a) => ({
+        range: { start: { x: a.at + 1, y: row }, end: { x: a.at + a.text.length, y: row } },
+        text: a.text,
+        activate: (e: MouseEvent, where: string) => {
+          if (!e.ctrlKey) return; // a plain click in a terminal is a selection, never an opening
+          out.link(where);
+        },
+      }));
+      give(found.length > 0 ? found : undefined);
+    },
+  };
+  term.registerLinkProvider(provider);
+
   const FACE = "13.5px 'Plex Mono'";
   const ready = Promise.all([document.fonts.load(FACE), document.fonts.load(`600 ${FACE}`)]).then(
     () => undefined,
@@ -158,7 +193,8 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   return {
     ready,
     write: (bytes, done) => term.write(bytes, done),
-    note: (text) => term.write(`\x1b[2m${inert(text).replace(/[\r\n\t]+/g, ' ')}\x1b[0m\r\n`),
+    // A line of Berth's own always starts a line of its own: a box's output rarely ends at a line's end.
+    note: (text) => term.write(`${term.buffer.active.cursorX > 0 ? '\r\n' : ''}\x1b[2m${inert(text).replace(/[\r\n\t]+/g, ' ')}\x1b[0m\r\n`),
     words: (text) => term.write(inert(text)),
     size: () => ({ cols: term.cols, rows: term.rows }),
     fit,
@@ -169,6 +205,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
       return lines.join('\n').replace(/\n+$/, '');
     },
+    links: (row) => addresses(row).map((a) => a.text),
     spot: (text) => {
       const b = term.buffer.active;
       const c = cell();

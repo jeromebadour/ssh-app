@@ -1,12 +1,13 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { look } from '../common/paste';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -160,9 +161,31 @@ interface Tab {
   view: WebContentsView;
   engine: Engine;
   begin(cols: number, rows: number): void; // starts the engine, once, at the view's size
+  reopen(now: boolean): void; // a new session on the same box and place (a new engine: an engine is one link)
+  stopReopen(): void;
+  againAt: number; // when the new session opens; 0 when none is coming
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
+}
+
+// An ending Berth never opens a new session after: the same thing would happen again, or it is the person's
+// own doing. A changed identity and a refused key are stops, not hiccups (plan A3 decision 6, B8).
+const NEVER_AGAIN: readonly string[] = ['identity-changed', 'sign-in-failed', 'no-signature', 'weak-offer', 'cancelled', 'shell-exited'];
+const AGAIN_AFTER_MS = 5000;
+
+// New connections to one box are paced: at most five in any thirty seconds, whatever asks for them (plan B1).
+const OPENED_MAX = 5;
+const OPENED_WITHIN_MS = 30_000;
+const opened = new Map<string, number[]>();
+function waitForBox(boxId: string): number {
+  const now = Date.now();
+  const when = (opened.get(boxId) ?? []).filter((t) => now - t < OPENED_WITHIN_MS);
+  opened.set(boxId, when);
+  return when.length < OPENED_MAX ? 0 : OPENED_WITHIN_MS - (now - when[when.length - OPENED_MAX]!);
+}
+function boxOpened(boxId: string): void {
+  opened.set(boxId, [...(opened.get(boxId) ?? []), Date.now()]);
 }
 
 const tabs = new Map<number, Tab>();
@@ -209,7 +232,8 @@ function tellGate(): void {
 }
 
 function info(t: Tab): TabInfo {
-  return { id: t.id, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place } : null, link: t.engine.link };
+  const place = t.box?.places.find((p) => p.name === t.place);
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place, addr: addrOf(t.box), user: t.box.user, folder: place?.folder ?? t.box.folder, pinType: t.box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
 }
 
 function boxView(b: Box): BoxView {
@@ -223,7 +247,120 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink };
+}
+
+// ---- An address a box printed (plan B2.7) ----
+// A box can print whatever it likes, so nothing it prints opens by itself: the terminal's own opening is off,
+// a link hidden behind other words is refused before the terminal sees it, and a plain click does nothing. A
+// Ctrl+click asks here, and the whole address is shown on the window's own surface before anything opens.
+let waitingLink: LinkAsked | null = null;
+let linksRefused = 0;
+let lastOpened = ''; // the last address handed to Windows, for the lab
+let opensAsked = 0;
+
+function linkAsked(tab: Tab, url: string): void {
+  if (tab.id !== active || overlay || !win?.isFocused() || !tab.box || waitingLink || url.length > 2048) {
+    linksRefused++;
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    linksRefused++;
+    return;
+  }
+  // Only the two schemes a browser takes. Anything else a box prints is not an address to open.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    linksRefused++;
+    return;
+  }
+  waitingLink = { tab: tab.id, box: tab.box.name, place: tab.place, url: parsed.href, host: parsed.host, scheme: parsed.protocol.replace(':', '') };
+  overlay = true;
+  stack();
+  tellShell();
+}
+
+function closeLink(open: boolean): void {
+  const asked = waitingLink;
+  waitingLink = null;
+  overlay = false;
+  stack();
+  if (asked && open) {
+    opensAsked++;
+    lastOpened = asked.url;
+    done = `Opened ${asked.host} in the browser`;
+    // The app opens nothing itself: the address is handed to Windows, which opens it where the person's
+    // own browser is. Nothing of Berth goes with it.
+    void osShell.openExternal(asked.url).catch(() => undefined);
+  } else if (asked) done = 'The address was not opened';
+  tellShell();
+}
+
+// ---- Paste (plan B2.7, B3) ----
+// The clipboard is read here, and only for a paste a person made themselves: a paste key main saw before the
+// page did, or a paste from the menu of a right-click main saw. A view cannot ask for it, and a box cannot
+// make one happen. What is read is taken apart (common/paste.ts), and a paste of more than one line is shown
+// on the shell before anything is sent, because a line ending in it would run as a command on arrival.
+let waitingPaste: { shown: PasteShown; text: string } | null = null;
+let pastesRefused = 0; // a paste asked for where it is not the person's own: counted, never acted on
+const protectedPaste = new Map<number, boolean>(); // per tab: its box asked to be told where a paste begins
+const pasteAgainAfterMs = 150;
+let lastPasteAt = 0;
+
+// Only the tab in front, in a window in use, with nothing of the shell's over it, and not twice in a moment.
+function mayPaste(tab: Tab): boolean {
+  return tab.id === active && !overlay && !!win?.isFocused() && !!tab.box && tabs.get(tab.id) === tab;
+}
+
+async function pasteInto(tab: Tab, how: string): Promise<void> {
+  if (!mayPaste(tab) || Date.now() - lastPasteAt < pasteAgainAfterMs) {
+    pastesRefused++;
+    return;
+  }
+  lastPasteAt = Date.now();
+  const seen = look(await clipboard.readText());
+  // Reading the clipboard is awaited, so everything that made this paste the person's own is asked again.
+  if (!mayPaste(tab)) {
+    pastesRefused++;
+    return;
+  }
+  if (seen.text === '') {
+    done = 'Nothing to paste';
+    tellShell();
+    return;
+  }
+  if (seen.oneLine && seen.odd.length === 0 && !seen.cut) {
+    sendTo(tab.view, CH.tabPaste, seen.text);
+    done = `Pasted ${seen.text.length} characters into ${tab.box!.name}`;
+    tellShell();
+    return;
+  }
+  // More than one line, or something in it a person cannot see: it is shown first, never sent on a key.
+  waitingPaste = {
+    text: seen.text,
+    shown: { tab: tab.id, box: tab.box!.name, place: tab.place, lines: seen.lines.slice(0, 400), endsWithLineEnding: seen.endsWithLineEnding, odd: seen.odd.slice(0, 200), cut: seen.cut, controlsRemoved: seen.controlsRemoved, protectedPaste: protectedPaste.get(tab.id) === true },
+  };
+  overlay = true;
+  stack();
+  tellShell();
+  void how;
+}
+
+function closePaste(send: boolean): void {
+  const waiting = waitingPaste;
+  waitingPaste = null;
+  overlay = false;
+  stack();
+  if (waiting && send) {
+    const tab = tabs.get(waiting.shown.tab);
+    if (tab && tab.box) {
+      sendTo(tab.view, CH.tabPaste, waiting.text);
+      done = `Pasted ${waiting.shown.lines.length} lines into ${tab.box.name}`;
+    }
+  } else if (waiting) done = 'The paste was not sent';
+  tellShell();
 }
 
 // The shell is above the tabs while one of its menus or dialogs is open, so nothing a tab draws can cover them
@@ -295,44 +432,107 @@ function openTab(boxId = '', place = ''): Tab | null {
   }
   const aimedAt = box;
   const id = nextTabId++;
+  // When a link is certainly gone, a new session opens by itself, after a wait the tab counts down.
+  const maybeAgain = (): void => {
+    const t = tabs.get(id);
+    if (!t || t !== tab || !box || t.againAt > 0) return;
+    const l = t.engine.link;
+    if (l.phase !== 'ended' || NEVER_AGAIN.includes(l.cause)) return;
+    t.reopen(false);
+  };
   const origin = `app://tab-${id}`;
   // Its own partition (in memory only) and its own origin: nothing is shared with another tab.
   const ses = session.fromPartition(`tab-${id}`, { cache: false });
   harden(ses);
   // A tab never slows its box because its view is hidden: background throttling is off for tab views.
   const view = new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-tab.js', false) });
-  const engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, {
+  const hooks = {
     // An engine can outlive its tab for a moment (it ends after its view is closed): then only the shell is told.
-    output: (bytes) => {
+    output: (bytes: Uint8Array) => {
       if (tabs.get(id) === tab) sendTo(view, CH.tabOutput, bytes);
     },
     state: () => {
+      maybeAgain();
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     link: () => {
+      maybeAgain();
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     // Text a box sent before sign-in: it goes to the tab's own view, for its terminal, and nowhere else.
-    banner: (bytes) => {
+    banner: (bytes: Uint8Array) => {
       if (tabs.get(id) === tab) sendTo(view, CH.tabBanner, bytes);
     },
-    sign: (req) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
-  }, aim);
+    sign: (req: SignRequest) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
+  };
+  let engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, aim);
   // A box's terminal is opened at the size its view really has, so the engine starts when the view has said
   // its size. A view that says nothing does not hold the tab up: after two seconds the engine starts anyway.
   let begun = false;
+  const lastSize = { cols: 120, rows: 40 };
   const begin = (cols: number, rows: number): void => {
+    if (cols >= 1 && rows >= 1) {
+      lastSize.cols = cols;
+      lastSize.rows = rows;
+    }
     if (begun) return;
     begun = true;
+    if (box) boxOpened(box.id);
     engine.openAt(cols, rows);
     void engine.start();
   };
-  const tab: Tab = { id, view, engine, begin, origin, box, place };
+  // A new session: a new engine, aimed at the same box and place, opened at the size the view has now.
+  // The view keeps everything it has drawn, and is told plainly that this is a new session.
+  let againTimer: NodeJS.Timeout | null = null;
+  const stopReopen = (): void => {
+    if (againTimer) clearTimeout(againTimer);
+    againTimer = null;
+    tab.againAt = 0;
+    if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
+    tellShell();
+  };
+  const reopen = (now: boolean): void => {
+    if (!box || tabs.get(id) !== tab) return;
+    const wait = now ? waitForBox(box.id) : Math.max(AGAIN_AFTER_MS, waitForBox(box.id));
+    if (againTimer) clearTimeout(againTimer);
+    tab.againAt = Date.now() + wait;
+    if (wait > 0) {
+      againTimer = setTimeout(() => reopen(true), wait);
+      againTimer.unref();
+      sendTo(view, CH.tabState, info(tab));
+      tellShell();
+      return;
+    }
+    againTimer = null;
+    tab.againAt = 0;
+    tab.engine.close();
+    boxOpened(box.id);
+    engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, structuredClone(aim));
+    tab.engine = engine;
+    engine.openAt(lastSize.cols, lastSize.rows);
+    sendTo(view, CH.tabAgain, null);
+    void engine.start();
+    sendTo(view, CH.tabState, info(tab));
+    tellShell();
+  };
+  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
+  // A paste is a person's own doing, and main must have seen it: these two events reach main before the page
+  // sees anything. The view is never asked, and never asks.
+  view.webContents.on('before-input-event', (_e, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase();
+    const paste = (input.control && input.shift && key === 'v') || (input.control && key === 'v') || (input.shift && key === 'insert');
+    if (paste) void pasteInto(tab, 'a paste key');
+  });
+  view.webContents.on('context-menu', (_e, params) => {
+    // Right-click pastes, as MobaXterm does. Only a real click on the terminal, never a menu asked for in code.
+    if (params.x >= 0 && params.y >= 0) void pasteInto(tab, 'a right-click');
+  });
   view.webContents.once('did-finish-load', () => {
     sendTo(view, CH.tabState, info(tab));
     sendTo(view, CH.tabShown, id === active);
@@ -358,6 +558,10 @@ function closeTab(id: number): void {
   tab.view.webContents.close();
   meter.forget(id);
   frontTold.delete(id);
+  protectedPaste.delete(id);
+  if (waitingPaste?.shown.tab === id) closePaste(false);
+  if (waitingLink?.tab === id) closeLink(false);
+  tab.stopReopen();
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
   layout();
   tellShell();
@@ -391,6 +595,27 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
 
 // Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window
 // that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
+// A new session, asked for by the tab (the picture's Reconnect, Now and Cancel; R while a bar is showing).
+// A tab's box asked to be told where a paste begins and ends (or stopped asking): its own view says so.
+ipcMain.on(CH.tabLink, (e, url: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof url !== 'string' || url === '') return drop('tab:link', e);
+  linkAsked(tab, url);
+});
+
+ipcMain.on(CH.tabPasteMode, (e, on: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof on !== 'boolean') return drop('tab:paste-mode', e);
+  protectedPaste.set(tab.id, on);
+});
+
+ipcMain.on(CH.tabReopen, (e, now: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof now !== 'boolean' || !tab.box) return drop('tab:reopen', e);
+  if (now) tab.reopen(true);
+  else tab.stopReopen();
+});
+
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof text !== 'string' || text.length === 0 || text.length > COPY_MAX) return drop('tab:copy', e);
@@ -470,7 +695,11 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     frontTold.delete(c.id); // told again even if it was in front already: its frame ends the switch
     layout();
     tellShell();
-  } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
+  } else if (c?.op === 'openLink' && waitingLink) closeLink(true);
+  else if (c?.op === 'dropLink' && waitingLink) closeLink(false);
+  else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
+  else if (c?.op === 'dropPaste' && waitingPaste) closePaste(false);
+  else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
 });
 
@@ -594,7 +823,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
         pace.force(share);
         lookPace();
       }, win, dist: DIST, harden, newView: (partition: string) => {

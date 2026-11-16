@@ -282,6 +282,8 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .dialog.dlg-checked .btn.primary { background: color-mix(in srgb, var(--checked) 70%, #000); }
 .dialog.dlg-problem { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--problem); }
 .dialog.dlg-problem h1 .glyph { color: var(--problem); }
+/* One colour per dialog: its action button takes it too, and nothing in it carries a second accent. */
+.dialog.dlg-problem .btn.primary { background: color-mix(in srgb, var(--problem) 62%, #000); }
 .dialog .input.focus { border-color: var(--text-3); box-shadow: none; }
 .dlg-fact { margin: 0 0 18px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
 
@@ -367,7 +369,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .g-mark.now { background: var(--box-1); }
 .s-rtt.problem, .s-conn.st-silent, .s-conn.st-gone { color: var(--problem); }
 
-/* ---------- fields, as every field in Berth is drawn (Kami, 2026-11-16, from his console's Add region) ---------- */
+/* ---------- fields, as every field in Berth is drawn (decided 2026-11-16, from an Add region dialog) ---------- */
 .field-label { display: flex; align-items: center; gap: 6px; }
 .field-label .glyph { width: 14px; height: 14px; color: var(--text-3); }
 .input.sized { width: calc(var(--w) + 24px); max-width: 100%; }
@@ -514,7 +516,7 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 /* One colour per dialog: a field being typed in is outlined in a quiet neutral, not the main colour. */
 .dialog .input:focus-within { border-color: var(--text-3); box-shadow: none; }
 .dialog .input.wrong:focus-within { border-color: var(--problem); box-shadow: none; }
-/* The box's colour as an option inside its name field (Kami, 2026-11-16 06:43: the row of colours took the
+/* The box's colour as an option inside its name field (decided 2026-11-16: the row of colours took the
    middle of the dialog from the values that matter). */
 .input.hued input { color: var(--hue); font-weight: 600; }
 .hue-pick-wrap { position: relative; display: flex; align-items: center; margin-right: -6px; }
@@ -523,3 +525,26 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 .hue-pick .caret { width: 11px; height: 11px; color: var(--text-3); transform: rotate(90deg); }
 .swatch.small { width: 14px; height: 14px; opacity: 1; cursor: pointer; }
 .hue-menu { position: absolute; z-index: 5; top: 30px; right: -6px; display: flex; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); box-shadow: 0 12px 30px rgba(0, 0, 0, .4); }
+
+/* A paste, read before it is sent (ui/pastedialog.tsx). */
+#paste .said { margin: 0 0 10px; }
+#paste .said.quiet { color: var(--text-3); }
+#paste .odd { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 6px; border-radius: 4px; background: color-mix(in srgb, var(--problem) 10%, transparent); }
+#paste .odd li { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+#paste .odd li .glyph { color: var(--problem); flex: none; }
+#paste .odd li .where { color: var(--text-3); min-width: 150px; }
+#paste .odd li .what { flex: 1; }
+#paste .odd li .shown { font-family: var(--mono); color: var(--text-3); }
+#paste .odd li.more { color: var(--text-3); padding-left: 26px; }
+#paste .paste-lines { margin: 0 0 14px; padding: 10px 0; max-height: 320px; overflow: auto; list-style: none; counter-reset: line; border-radius: 4px; background: var(--term-bg); }
+#paste .paste-lines li { counter-increment: line; display: flex; gap: 12px; padding: 0 12px; }
+#paste .paste-lines li::before { content: counter(line); min-width: 28px; text-align: right; color: var(--text-3); font: 400 12px/1.6 var(--mono); }
+#paste .paste-lines li code { font: 400 12.5px/1.6 var(--mono); white-space: pre; }
+#paste .paste-lines li[data-odd] { background: color-mix(in srgb, var(--problem) 12%, transparent); }
+#paste .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
+
+/* An address a box printed, shown whole before anything opens (ui/linkdialog.tsx). */
+#link .said { margin: 0 0 10px; }
+#link .link-url { margin: 0 0 14px; padding: 10px 12px; border-radius: 4px; background: var(--term-bg); }
+#link .link-url code { font: 400 13px/1.5 var(--mono); color: var(--text); word-break: break-all; }
+#link .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }

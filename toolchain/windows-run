@@ -14,3 +14,6 @@
 2026-11-16: the box screens by real clicks and keys (Add box, the check, the Boxes menu, folded tabs) on Windows.
 2026-11-16: the box's colour as an option in its name field.
 2026-11-16: the terminal for real (xterm.js in the tab's view, its guards, the clipboard rule) on Windows.
+2026-11-16: the terminal's link states (the stages, the folded sign-in line, the bars) and a new session, on Windows.
+2026-11-16: the paste path: the clipboard read by main for a key or click it saw, and the preview, on Windows.
+2026-11-16: addresses a box prints: a plain click opens nothing, Ctrl+click asks first, on Windows.

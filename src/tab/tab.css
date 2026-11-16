@@ -1,12 +1,57 @@
 /* The tab's view: one line for the link's state, and the terminal. Colours are Berth's (direction A). */
 html, body { margin: 0; height: 100%; background: #161e25; color: #c3ccd3; overflow: hidden; }
 body { position: relative; display: flex; flex-direction: column; font: 400 12px/1.35 'Plex Sans Condensed', sans-serif; }
-/* Where the link stands, while that is not plainly "connected". It lies over the terminal's corner and takes no
-   room: the terminal's size, which the box is told, never changes because a link went quiet. */
+/* Where a tab with no box stands (the skeleton's tab, which the self-test runs). A tab on a box says all of
+   this in its chrome instead: the opening stages, the folded sign-in line, the bars. */
 #state { position: absolute; top: 16px; right: 20px; z-index: 2; max-width: 70%; height: 24px; line-height: 24px; padding: 0 10px; color: #96a3ae; background: #1f2932; border-radius: 4px; box-shadow: inset 0 0 0 1px #27323c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #state[data-phase='ended'], #state[data-phase='gone'] { color: #cc9b47; }
 /* A link that is plainly up says so on its tab and in the status line, not here. */
-#state[data-phase='up']:not([data-held]) { display: none; }
+#state[data-phase='up']:not([data-held]), #state[data-box] { display: none; }
 #term { flex: 1; min-height: 0; margin: 8px 8px 8px 10px; padding: 8px 0 0 10px; border-radius: 4px; background: #141b21; box-shadow: inset 0 0 0 1px #27323c; overflow: hidden; }
 .xterm { height: 100%; }
 .xterm .xterm-viewport { background: transparent !important; }
+
+/* Where the link stands, drawn over the terminal (chrome.tsx), as the approved pictures show it. It lies over
+   the terminal's first rows and takes no room of its own: the terminal's size, which the box is told, never
+   changes because a link went quiet. */
+#chrome { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 5; pointer-events: none; }
+#chrome > * { pointer-events: auto; }
+.mark { width: 16px; height: 16px; flex: none; }
+.mark.done { color: #79a373; }
+.mark.now { color: #86a6c2; animation: turn 1.1s linear infinite; }
+.mark.waiting { color: #4e5c68; }
+h1 .mark.now { animation: none; }
+@keyframes turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mark.now { animation: none; } }
+
+/* Opening a tab: the stages, in the middle of where the terminal will be. */
+.opening { position: absolute; left: 0; right: 0; top: 24%; display: flex; flex-direction: column; align-items: center; gap: 18px; pointer-events: none; }
+.opening h1 { display: flex; align-items: center; gap: 10px; margin: 0; font: 500 15px/1.3 'Plex Sans Condensed', sans-serif; color: #dfe5ea; }
+.opening ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; min-width: 600px; }
+.opening li { display: flex; align-items: center; gap: 12px; font: 400 13px/1.4 'Plex Sans Condensed', sans-serif; color: #c3ccd3; }
+.opening li[data-mark='waiting'] { color: #7b8893; }
+.opening li .said { flex: 1; }
+.opening li .aside { font: 400 12px/1.4 'Plex Mono', monospace; color: #8b97a2; white-space: nowrap; }
+
+/* The one folded line of what the box said at sign-in, and the bars. They lie over the terminal's first rows,
+   so the terminal's size, which the box is told, never changes because a link went quiet. */
+/* The strip the folded sign-in line sits in. It is there from the first frame, empty or not: the box is told
+   the terminal's size once, before it opens the terminal, and a line arriving later must not change it. */
+#signin-at { flex: none; height: 34px; margin: 12px 18px 0; }
+.signin, .bar { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px 0 12px; border-radius: 4px; font: 400 12.5px/1.35 'Plex Sans Condensed', sans-serif; }
+.bar { position: absolute; left: 18px; right: 18px; top: 16px; z-index: 2; width: auto; }
+.signin { width: auto; text-align: left; border: 0; background: #1b242c; box-shadow: inset 0 0 0 1px #2b3642; color: #aab5bf; cursor: pointer; }
+.signin:hover { background: #1f2932; color: #c3ccd3; }
+.signin .said { flex: none; }
+.signin .notice { flex: 1; font: 400 12.5px/1.35 'Plex Mono', monospace; color: #cc9b47; }
+.signin .chevron, .signin .glyph, .bar .glyph { width: 16px; height: 16px; flex: none; color: #7f8c97; }
+.signin .chevron { margin-left: auto; }
+.bar { background: #2a2419; box-shadow: inset 0 0 0 1px #4a3d20; color: #d6cdb6; }
+.bar .glyph { color: #cc9b47; }
+.bar .words { flex: 1; }
+.bar .words b { color: #e0b765; font-weight: 600; }
+.bar .aside { font: 400 12px/1.35 'Plex Sans Condensed', sans-serif; color: #8d8674; white-space: nowrap; }
+.bar button { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border: 0; border-radius: 3px; background: #3a2f1a; color: #e6ddc8; font: 500 12.5px/1 'Plex Sans Condensed', sans-serif; cursor: pointer; }
+.bar button:hover { background: #46381f; }
+.bar button kbd { padding: 1px 5px; border-radius: 2px; background: #1f1a10; color: #cbb68c; font: 500 11px/1.4 'Plex Mono', monospace; }
+.bar button .glyph { color: #e0b765; }

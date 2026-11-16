@@ -25,7 +25,7 @@ if (scene === 'connecting' || scene === 'fresh') {
   for (const g of tabGroups) for (const t of g.tabs) t.active = false;
   tabGroups.find((g) => g.box === 'relay-fra')?.tabs.push(scene === 'connecting' ? { place: 'staging', active: true, state: 'connecting' } : { place: 'staging', active: true });
 }
-// Seven tabs, the most Kami opens: four boxes, four tabs on one of them.
+// Seven tabs, the most this app is asked for: four boxes, four tabs on one of them.
 const sevenScene = scene === 'seven' || scene === 'sevenopen';
 if (sevenScene) {
   for (const g of tabGroups) for (const t of g.tabs) t.active = false;

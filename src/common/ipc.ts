@@ -10,6 +10,11 @@ export const CH = {
   shellCmd: 'shell:cmd', // shell view to main: new, select or close a tab
   shellState: 'shell:state', // main to shell view: the tabs and their states
   tabShown: 'tab:shown', // main to tab view: you were just brought to the front, or put behind another tab
+  tabLink: 'tab:link', // tab view to main: Ctrl+click on an address its box printed
+  tabPaste: 'tab:paste', // main to tab view: put this text in, as a paste (main read the clipboard itself)
+  tabPasteMode: 'tab:paste-mode', // tab view to main: whether its box asked for protected paste
+  tabAgain: 'tab:again', // main to tab view: this is a new session on the same box, from here on
+  tabReopen: 'tab:reopen', // tab view to main: open a new session now, or stop the one that is coming
   tabPace: 'tab:pace', // main to tab view: the share of its time a tab behind may spend on output (1: all of it)
   tabBanner: 'tab:banner', // main to tab view: the box's sign-in text, for the terminal only
   tabTaken: 'tab:taken', // tab view to main: output bytes taken in all (a number)
@@ -83,10 +88,15 @@ export interface TabBox {
   name: string;
   colour: number;
   place: string;
+  addr: string; // host:port, for the tab to say what it connected to
+  user: string;
+  folder: string; // the place's folder, or the box's starting folder
+  pinType: string; // 'ED25519' or 'RSA': the kind of identity pinned for this box
 }
 
 export interface TabInfo {
   id: number;
+  againAt: number; // when a new session opens by itself (ms since the epoch); 0 when none is coming
   state: EngineState;
   cause: string; // why it is gone, in plain words; empty otherwise
   box: TabBox | null;
@@ -136,6 +146,33 @@ export interface ShellState {
   check: CheckShown | null;
   added: { req: number; ok: boolean; id: string; error: string; fields: Record<string, string> } | null;
   done: string; // the last thing done, for the status line; empty for nothing yet
+  paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
+  link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
+}
+
+// An address a box printed, Ctrl+clicked, and shown whole before anything opens (plan B2.7). A box can print
+// anything, so the address is Berth's to show and the person's to allow; the app itself opens nothing.
+export interface LinkAsked {
+  tab: number;
+  box: string;
+  place: string;
+  url: string;
+  host: string; // its host alone, which is what decides where it really goes
+  scheme: string;
+}
+
+// A paste of more than one line, shown before it is sent: its own lines, and what in it cannot be seen by
+// looking (plan B3). The text itself is main's; the shell only draws it and says yes or no.
+export interface PasteShown {
+  tab: number;
+  box: string; // the box it would go to, by name
+  place: string;
+  lines: string[];
+  endsWithLineEnding: boolean;
+  odd: { line: number; at: number; what: string; shown: string }[];
+  cut: boolean;
+  controlsRemoved: number;
+  protectedPaste: boolean; // the box asked for protected paste, so a shell can tell it was pasted
 }
 
 export type ShellCmd =
@@ -147,6 +184,10 @@ export type ShellCmd =
   | { op: 'addBox'; req: number; draft: BoxDraft }
   | { op: 'check'; box: string } // open the first-connection check for a box, and ask it who it is
   | { op: 'paste'; box: string; text: string }
+  | { op: 'openLink' } // the address being shown: open it in the browser
+  | { op: 'dropLink' } // the address being shown: open nothing
+  | { op: 'sendPaste' } // the paste being shown: send it to its box
+  | { op: 'dropPaste' } // the paste being shown: send nothing
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'closeCheck'; box: string }
   | { op: 'copyBlock'; box: string };
@@ -178,9 +219,14 @@ export interface TabPort {
   onState(cb: (info: TabInfo) => void): void;
   onShown(cb: (front: boolean) => void): void; // brought to the front, or put behind another tab
   onPace(cb: (share: number) => void): void; // how much of its time a tab behind may spend on output
+  onAgain(cb: () => void): void; // a new session has begun on the same box
+  onPaste(cb: (text: string) => void): void; // put this text in, as a paste
+  pasteMode(protectedPaste: boolean): void; // its box asked for protected paste, or stopped asking
+  reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   resize(cols: number, rows: number): void;
-  copy(text: string): void; // selected text, offered for the clipboard: taken only from the tab in front of an active window
+  copy(text: string): void;
+  link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
   taken(total: number): void; // how many output bytes this view has taken in all: the box sends ahead of this by a fixed amount at most
   meter(n: ViewNumbers): void;
   frame(): void;
