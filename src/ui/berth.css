@@ -434,3 +434,6 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .gate-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
 .tab-close { display: grid; place-items: center; }
 .tabbar.scaffold { height: 44px; }
+/* Every press answers at once: whatever can be pressed shows the press itself, before anything it causes. */
+.new-tab:active, .tab-close:active, .pick:active, .tool:active, .ft-btn:active { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.btn:active { filter: brightness(1.12); }

@@ -33,13 +33,18 @@ port.onState((s) => {
 });
 const act = { create: (p: Uint8Array) => port.gateCreate(p), unlock: (p: Uint8Array) => port.gateUnlock(p), pickBackup: () => port.gatePickBackup() };
 
+// Every press answers at once (BUILD-RULES 2.18): the pressed tab takes its selected look the moment it is
+// pressed, here in the view, and keeps it until main says which tab is in front. It never waits for main.
 function Bar(props: { s: ShellState }) {
+  const [pressed, setPressed] = useState(0);
+  useEffect(() => setPressed(0), [props.s.active]);
+  const front = pressed || props.s.active;
   return (
     <header class="tabbar scaffold" id="bar">
       <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
       <div class="tab-groups">
         {props.s.tabs.map((t) => (
-          <span class={`tab ${t.id === props.s.active ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={t.state} aria-selected={t.id === props.s.active} style={{ '--hue': 'var(--box-1)' }} onClick={() => port.cmd({ op: 'select', id: t.id })}>
+          <span class={`tab ${t.id === front ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={t.state} aria-selected={t.id === front} style={{ '--hue': 'var(--box-1)' }} onPointerDown={() => setPressed(t.id)} onClick={() => port.cmd({ op: 'select', id: t.id })}>
             <span class={`conn conn-${t.state === 'ready' ? 'connected' : t.state === 'starting' ? 'connecting' : 'gone'}`} />
             <span class="tab-box">tab {t.id}</span>
             <span class="tab-place">{t.state}</span>
