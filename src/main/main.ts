@@ -1,12 +1,12 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, dialog, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
-import { addrOf, type Box } from '../common/boxes';
-import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { addrOf, type Box, type BoxDraft } from '../common/boxes';
+import { CH, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -36,7 +36,8 @@ const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SS
 if (LAB_PROFILE) app.setPath('userData', path.join(LAB_PROFILE, 'profile'));
 
 const DIST = __dirname;
-const BAR = 44;
+const BAR = 46; // the shell's bar above the tabs
+const STATUS = 30; // and its status line below them
 const ENGINE_NAME = process.platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp-engine';
 // Packaged: the engine sits beside the app archive (a program cannot be started from inside it).
 const ENGINE_BIN = app.isPackaged ? path.join(process.resourcesPath, 'engine', ENGINE_NAME) : path.join(DIST, 'engine', ENGINE_NAME);
@@ -168,6 +169,11 @@ let keys: KeyProc | null = null;
 let gate: Gate | null = null;
 let boxes: Boxes | null = null;
 let signsRefused = 0;
+let overlay = false; // a menu or dialog of the shell is open: the shell is above the tabs
+let openCheck = ''; // the box whose first-connection check is open in a dialog
+const askedAt = new Map<string, string[]>(); // per box: when it was asked who it is
+let added: ShellState['added'] = null;
+let done = '';
 let signsPassedOn = 0; // requests main let through to the key process
 
 function tellGate(): void {
@@ -178,8 +184,26 @@ function info(t: Tab): TabInfo {
   return { id: t.id, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place } : null, link: t.engine.link };
 }
 
+function boxView(b: Box): BoxView {
+  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => p.name), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
+}
+
+function checkShown(): CheckShown | null {
+  const box = openCheck ? boxes?.get(openCheck) : undefined;
+  if (!boxes || !box) return null;
+  return { ...boxes.check(box.id), name: box.name, addr: addrOf(box), block: boxes.block(box.id), askedAt: askedAt.get(box.id) ?? [] };
+}
+
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done };
+}
+
+// The shell is above the tabs while one of its menus or dialogs is open, so nothing a tab draws can cover them
+// and no click reaches a tab meanwhile; otherwise the tab in front is above the shell's empty middle.
+function stack(): void {
+  if (!win || !shell) return;
+  if (overlay) win.contentView.addChildView(shell);
+  else for (const t of tabs.values()) win.contentView.addChildView(t.view);
 }
 
 // A view that was closed has no contents any more: every send goes through here, and a late message to a
@@ -198,7 +222,7 @@ function layout(): void {
   const { width, height } = win.getContentBounds();
   shell.setBounds({ x: 0, y: 0, width, height });
   for (const t of tabs.values()) {
-    t.view.setBounds({ x: 0, y: BAR, width, height: Math.max(0, height - BAR) });
+    t.view.setBounds({ x: 0, y: BAR, width, height: Math.max(0, height - BAR - STATUS) });
     t.view.setVisible(t.id === active);
   }
 }
@@ -319,8 +343,59 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     droppedMessages++;
     return;
   }
+  const isBox = (v: unknown): v is string => typeof v === 'string' && !!boxes?.get(v);
   if (c?.op === 'new') openTab();
-  else if (c?.op === 'select' && typeof c.id === 'number' && tabs.has(c.id)) {
+  else if (c?.op === 'open' && isBox(c.box) && typeof c.place === 'string') {
+    const box = boxes!.get(c.box)!;
+    const t = openTab(c.box, c.place);
+    done = t ? '' : box.pin === '' ? `${box.name} was never checked: open its check first` : `no more tabs: ${TABS_MAX} at most`;
+    tellShell();
+  } else if (c?.op === 'overlay' && typeof c.on === 'boolean') {
+    overlay = c.on;
+    stack();
+  } else if (c?.op === 'addBox' && typeof c.req === 'number' && boxes) {
+    const b = boxes;
+    void b.add(c.draft as BoxDraft).then((r) => {
+      added = { req: c.req!, ok: r.ok, id: r.ok ? r.id : '', error: r.ok ? '' : r.error, fields: r.ok ? {} : (r.fields ?? {}) };
+      if (r.ok) {
+        // A new box goes straight to its check: there is no other way to its first sign-in.
+        openCheck = r.id;
+        askedAt.set(r.id, [new Date().toISOString()]);
+        b.reach(r.id);
+        done = `Added ${b.get(r.id)!.name}: its key was made, and Berth is asking it who it is`;
+      }
+      tellShell();
+    });
+  } else if (c?.op === 'check' && isBox(c.box)) {
+    openCheck = c.box;
+    askedAt.set(c.box, [...(askedAt.get(c.box) ?? []).slice(-3), new Date().toISOString()]);
+    boxes!.reach(c.box);
+  } else if (c?.op === 'paste' && isBox(c.box) && c.box === openCheck && typeof c.text === 'string' && c.text.length <= 64 * 1024) {
+    boxes!.paste(c.box, c.text);
+  } else if (c?.op === 'trust' && isBox(c.box) && c.box === openCheck) {
+    const b = boxes!;
+    const id = c.box;
+    void b.trust(id).then((r) => {
+      if (r.ok) {
+        openCheck = '';
+        overlay = false;
+        const box = b.get(id)!;
+        done = `Trusted ${box.name}: ${box.pinFingerprint}`;
+        openTab(id, '');
+        stack();
+      } else done = `Not trusted: ${r.error}`;
+      tellShell();
+    });
+  } else if (c?.op === 'closeCheck' && isBox(c.box)) {
+    boxes!.cancelCheck(c.box);
+    if (openCheck === c.box) openCheck = '';
+    tellShell();
+  } else if (c?.op === 'copyBlock' && isBox(c.box)) {
+    // Main writes only the text it made itself: the block, with the box's own key line in it.
+    void clipboard.writeText(boxes!.block(c.box));
+    done = `Copied the block for ${boxes!.get(c.box)!.name}`;
+    tellShell();
+  } else if (c?.op === 'select' && typeof c.id === 'number' && tabs.has(c.id)) {
     active = c.id;
     meter.tabSwitchBegins(c.id);
     layout();
@@ -395,7 +470,7 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     const kind = !app.isPackaged ? 'dev' : LAB ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-shot'].includes(asked) ? asked : '';
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-shot', 'boxes-ui'].includes(asked) ? asked : '';
     if (SELFTEST === 'direction') await listFiles('directions');
     await listFiles('shell');
     // A lab or development run may ask for a window size (for pictures). A release build never reads this.
@@ -409,6 +484,8 @@ if (!app.requestSingleInstanceLock()) {
     if (asksSize) win.setContentSize(Number(asksSize[1]), Number(asksSize[2]));
     win.setMenu(null);
     shell = new WebContentsView({ webPreferences: viewPrefs(shellSession, 'preload-shell.js', true) });
+    // The shell's middle is clear: when it is above the tabs (a menu or dialog open), the tab shows through it.
+    shell.setBackgroundColor('#00000000');
     win.contentView.addChildView(shell);
     shell.webContents.once('did-finish-load', () => {
       tellShell();

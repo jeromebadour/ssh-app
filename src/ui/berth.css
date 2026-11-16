@@ -478,3 +478,35 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .fm-glyph { width: 14px; height: 14px; color: var(--text-3); }
 .fm-place { flex: 1; font-size: 13.5px; }
 .fm-x { width: 13px; height: 13px; color: var(--text-3); }
+
+/* ---------- the window, unlocked: the bar and the status line are the shell's; the middle is the tab in front ---------- */
+html[data-gate='unlocked'], html[data-gate='unlocked'] body { background: transparent; }
+.window.live { grid-template-rows: 46px 1fr 30px; }
+.window.live .middle { position: relative; display: grid; place-items: center; min-height: 0; }
+.first-use { display: grid; place-items: center; }
+.first-hint { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
+.first-hint .glyph { width: 16px; height: 16px; color: var(--text-3); }
+.tab .tab-close { display: grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; border-radius: var(--r-s); }
+.tab .tab-close:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.menu-away { position: fixed; inset: 0; z-index: 15; }
+.box-menu { z-index: 20; }
+.bm-filter { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; font-family: var(--mono); font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.bm-filter .glyph { width: 13px; height: 13px; color: var(--text-3); }
+.bm-fault { display: flex; align-items: center; gap: 7px; padding: 6px 8px; font-size: 12px; color: var(--problem); }
+.bm-fault .glyph { width: 13px; height: 13px; }
+.bm-row { position: relative; }
+.bm-row.hot, .bm-row:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.bm-unchecked { width: 13px; height: 13px; color: var(--text-3); }
+.bm-places { position: absolute; top: -5px; left: calc(100% + 6px); width: 190px; padding: 4px; border: 1px solid var(--line); border-top: 2px solid var(--hue); border-radius: var(--r); background: var(--panel-2); box-shadow: 0 12px 30px rgba(0, 0, 0, .4); }
+.pl-x-btn, .fm-x-btn { display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-s); color: var(--text-3); }
+.pl-x-btn:hover, .fm-x-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+textarea.pastebox { display: block; box-sizing: border-box; width: 100%; min-height: 64px; resize: none; outline: none; }
+textarea.pastebox::placeholder { color: var(--text-3); }
+textarea.pastebox:focus { border-color: var(--text-2); }
+.step-main .check { margin-top: 7px; white-space: normal; }
+.wait-ring.small { width: 11px; height: 11px; border-width: 1.5px; }
+.status .s-tab { color: var(--text); }
+.status .s-last { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+/* One colour per dialog: a field being typed in is outlined in a quiet neutral, not the main colour. */
+.dialog .input:focus-within { border-color: var(--text-3); box-shadow: none; }
+.dialog .input.wrong:focus-within { border-color: var(--problem); box-shadow: none; }

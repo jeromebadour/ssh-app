@@ -1,3 +1,5 @@
+import type { BoxDraft } from './boxes';
+
 // The whole list of messages a view may exchange with main. A message not listed here does not exist.
 // Views get no Node and no Electron object: each preload exposes only the functions below.
 
@@ -87,12 +89,63 @@ export interface TabInfo {
   link: LinkInfo;
 }
 
+// A box as the shell may draw it: no key, nothing secret. The identity is told only once it is pinned.
+export interface BoxView {
+  id: string;
+  name: string;
+  colour: number;
+  host: string;
+  port: number;
+  user: string;
+  folder: string;
+  places: string[];
+  pinned: boolean;
+  pinFingerprint: string;
+  pinType: string; // 'ED25519' or 'RSA' once pinned
+  pinnedAt: string;
+}
+
+// The one first-connection check open in a dialog. What the box showed is in it only after a paste was compared.
+export interface CheckShown {
+  boxId: string;
+  name: string;
+  addr: string;
+  block: string; // the one block to run on the box, with its key in it
+  step: 'idle' | 'reaching' | 'reached' | 'unreachable' | 'match' | 'mismatch';
+  phase: string;
+  cause: string;
+  detail: string;
+  what: string;
+  ours: string[];
+  theirs: string[];
+  shownType: string;
+  shownFingerprint: string;
+  pasted: string[];
+  askedAt: string[]; // when the box was asked (UTC), the latest last
+}
+
 export interface ShellState {
   tabs: TabInfo[];
   active: number; // tab id, or 0 for none
+  boxes: BoxView[];
+  boxesFault: string; // the boxes in the list could not be read: said, never guessed at
+  check: CheckShown | null;
+  added: { req: number; ok: boolean; id: string; error: string; fields: Record<string, string> } | null;
+  done: string; // the last thing done, for the status line; empty for nothing yet
 }
 
-export type ShellCmd = { op: 'new' } | { op: 'select'; id: number } | { op: 'close'; id: number };
+export type ShellCmd =
+  | { op: 'new' } // the skeleton's tab with no box: the self-test's
+  | { op: 'select'; id: number }
+  | { op: 'close'; id: number }
+  | { op: 'open'; box: string; place: string } // a tab on a pinned box, in one of its places or its starting folder
+  | { op: 'overlay'; on: boolean } // a menu or dialog is open: the shell must be above the tabs
+  | { op: 'addBox'; req: number; draft: BoxDraft }
+  | { op: 'check'; box: string } // open the first-connection check for a box, and ask it who it is
+  | { op: 'paste'; box: string; text: string }
+  | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
+  | { op: 'closeCheck'; box: string }
+  | { op: 'copyBlock'; box: string };
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:

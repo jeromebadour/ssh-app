@@ -1,0 +1,225 @@
+// The bar at the top of the window, as approved in pictures on 2026-11-16: the mark, the Boxes menu, the tabs
+// grouped by box (each saying its box in the box's colour, then its place), and when the tabs would not fit, a
+// box with several tabs folded into one with a count that opens them as a list.
+//
+// Every press answers at once (BUILD-RULES 2.18): a pressed tab takes its selected look the moment it is
+// pressed, and keeps it until main says which tab is in front.
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import type { BoxView, ShellState, TabInfo } from '../common/ipc';
+import { Glyph } from './glyphs';
+import { Mark } from './marks';
+
+export interface BarActions {
+  select(id: number): void;
+  close(id: number): void;
+  open(box: string, place: string): void; // a pinned box: a tab; a box never checked: its check
+  addBox(): void;
+  menu(open: boolean): void; // a menu is open: the shell must be above the tabs
+}
+
+const TAB_MIN = 168 + 10; // a tab's width and the room beside it, while there is room
+
+// A tab's mark and its words, from where its link stands.
+export function tabLook(t: TabInfo): { mark: string; words: string; sig: string } {
+  const l = t.link;
+  if (!t.box) return { mark: t.state === 'ready' ? 'connected' : t.state === 'starting' ? 'connecting' : 'gone', words: t.state, sig: '' };
+  if (t.state === 'not-answering') return { mark: 'silent', words: 'not answering', sig: '' };
+  switch (l.phase) {
+    case 'none':
+    case 'connecting':
+    case 'key-exchange':
+    case 'signing-in':
+      return { mark: 'connecting', words: l.phase === 'signing-in' ? 'signing in' : 'connecting', sig: '' };
+    case 'up':
+      return l.silentSinceMs > 0 ? { mark: 'silent', words: 'no answer', sig: `${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s` } : { mark: 'connected', words: 'connected', sig: '' };
+    case 'ended':
+      return l.cause === 'identity-changed' ? { mark: 'stopped', words: 'stopped: another identity', sig: 'stopped' } : { mark: 'gone', words: 'gone', sig: '' };
+  }
+}
+
+export function placeLabel(t: TabInfo, boxes: BoxView[]): string {
+  if (!t.box) return t.state;
+  if (t.box.place) return t.box.place;
+  const box = boxes.find((b) => b.id === t.box!.id);
+  const folder = box?.folder ?? '';
+  return folder === '' ? 'home' : folder.split('/').filter(Boolean).pop() ?? '/';
+}
+
+interface Group {
+  key: string;
+  box: TabInfo['box'];
+  tabs: TabInfo[];
+}
+
+function groupsOf(tabs: TabInfo[]): Group[] {
+  const out: Group[] = [];
+  for (const t of tabs) {
+    const key = t.box ? `box:${t.box.id}` : `tab:${t.id}`;
+    const g = out.find((x) => x.key === key);
+    if (g) g.tabs.push(t);
+    else out.push({ key, box: t.box, tabs: [t] });
+  }
+  return out;
+}
+
+// Which groups fold: the ones with most tabs first, until what is left fits at a tab's full width.
+function foldsFor(groups: Group[], room: number): Set<string> {
+  const folded = new Set<string>();
+  const count = () => groups.reduce((n, g) => n + (folded.has(g.key) ? 1 : g.tabs.length), 0);
+  const many = groups.filter((g) => g.tabs.length > 1).sort((a, b) => b.tabs.length - a.tabs.length);
+  for (const g of many) {
+    if (count() * TAB_MIN <= room) break;
+    folded.add(g.key);
+  }
+  return folded;
+}
+
+function TabMark(props: { t: TabInfo }) {
+  const look = tabLook(props.t);
+  return <span class={`conn conn-${look.mark}`} title={look.words} />;
+}
+
+export function Bar(props: { s: ShellState; act: BarActions }) {
+  const [pressed, setPressed] = useState(0);
+  const [menu, setMenu] = useState<'' | 'boxes' | string>(''); // '' none, 'boxes', or a group's key for its fold
+  const [room, setRoom] = useState(10_000);
+  const groupsEl = useRef<HTMLDivElement>(null);
+  useEffect(() => setPressed(0), [props.s.active]);
+  useLayoutEffect(() => {
+    const el = groupsEl.current;
+    if (!el) return;
+    const measure = () => setRoom(el.clientWidth - 48);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const showMenu = (m: string) => {
+    setMenu(m);
+    props.act.menu(m !== '');
+  };
+  const front = pressed || props.s.active;
+  const groups = groupsOf(props.s.tabs);
+  const folded = foldsFor(groups, room);
+  const n = groups.reduce((k, g) => k + (folded.has(g.key) ? 1 : g.tabs.length), 0);
+  const hue = (b: TabInfo['box']) => `var(--box-${b?.colour ?? 1})`;
+  const pick = (id: number) => {
+    setPressed(id);
+    props.act.select(id);
+  };
+
+  const tabEl = (t: TabInfo, fold?: Group) => {
+    const look = tabLook(t);
+    const isFront = t.id === front;
+    return (
+      <span class={`tab ${isFront ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={look.mark} aria-selected={isFront} title={`${t.box?.name ?? `tab ${t.id}`} · ${placeLabel(t, props.s.boxes)} · ${look.words}`} onPointerDown={() => setPressed(t.id)} onClick={() => props.act.select(t.id)}>
+        <TabMark t={t} />
+        <span class="tab-box">{t.box ? t.box.name : `tab ${t.id}`}</span>
+        <span class="tab-place">{placeLabel(t, props.s.boxes)}</span>
+        <span class="tab-end">
+          {look.sig === 'stopped' ? <Glyph name="identityBroken" class="sig sig-stopped" label="identity changed" /> : look.sig !== '' && <span class="sig sig-silent">{look.sig}</span>}
+          {fold && (
+            <button type="button" class={`fold-n ${menu === fold.key ? 'open' : ''}`} data-fold={fold.key} aria-haspopup="menu" aria-expanded={menu === fold.key} aria-label={`${fold.tabs.length} tabs on ${t.box?.name ?? ''}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); showMenu(menu === fold.key ? '' : fold.key); }}>
+              {fold.tabs.length}
+              <Glyph name="chevron" class="caret" />
+            </button>
+          )}
+          {(!fold || isFront) && <button type="button" class="tab-close" data-close={t.id} aria-label={`Close ${t.box?.name ?? `tab ${t.id}`} ${placeLabel(t, props.s.boxes)}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); props.act.close(t.id); }}><Glyph name="close" class="tab-x" /></button>}
+        </span>
+      </span>
+    );
+  };
+
+  return (
+    <header class="tabbar" id="bar">
+      <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
+      <button type="button" class={`boxes-btn ${menu === 'boxes' ? 'open' : ''}`} id="boxes" aria-haspopup="menu" aria-expanded={menu === 'boxes'} onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}>
+        <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />
+      </button>
+      <div class="tab-groups" ref={groupsEl} style={{ '--n': n }}>
+        {groups.map((g) => {
+          if (!folded.has(g.key)) {
+            return (
+              <div class="tab-group" key={g.key} style={{ '--hue': hue(g.box) }}>
+                {g.tabs.map((t) => tabEl(t))}
+              </div>
+            );
+          }
+          const shown = g.tabs.find((t) => t.id === front) ?? g.tabs[g.tabs.length - 1]!;
+          return (
+            <div class="tab-group folded" key={g.key} style={{ '--hue': hue(g.box) }}>
+              {tabEl(shown, g)}
+              {menu === g.key && (
+                <div class="fold-menu" role="menu" id="fold-menu" aria-label={`Tabs on ${g.box?.name ?? ''}`}>
+                  {g.tabs.map((t) => (
+                    <div class={`fm-row ${t.id === shown.id ? 'front' : ''}`} key={t.id} role="menuitem" data-fold-tab={t.id} onClick={() => { showMenu(''); pick(t.id); }}>
+                      <TabMark t={t} />
+                      <Glyph name="place" class="fm-glyph" />
+                      <span class="fm-place">{placeLabel(t, props.s.boxes)}</span>
+                      <button type="button" class="fm-x-btn" aria-label={`Close ${placeLabel(t, props.s.boxes)}`} onClick={(e) => { e.stopPropagation(); props.act.close(t.id); }}><Glyph name="close" class="fm-x" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button type="button" class="new-tab" id="new" aria-label="Open a box" onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}><Glyph name="plus" /></button>
+      </div>
+      {menu === 'boxes' && <BoxMenu s={props.s} act={props.act} done={() => showMenu('')} />}
+      {menu !== '' && <div class="menu-away" onPointerDown={() => showMenu('')} />}
+    </header>
+  );
+}
+
+// The Boxes menu: the saved boxes, one line each. A box with places shows an arrow; its places open beside it.
+// Typing while the menu is open filters it. A box never checked opens its check, the only way to its first sign-in.
+function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
+  const [filter, setFilter] = useState('');
+  const [places, setPlaces] = useState('');
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return props.done();
+      if (e.key === 'Backspace') return setFilter((f) => f.slice(0, -1));
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) setFilter((f) => (f + e.key).slice(0, 32));
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  const open = (box: BoxView, place: string) => {
+    props.done();
+    props.act.open(box.id, place);
+  };
+  const shown = props.s.boxes.filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()));
+  const openNow = (id: string) => props.s.tabs.filter((t) => t.box?.id === id);
+  return (
+    <div class="box-menu" id="box-menu" role="menu" aria-label="Boxes">
+      {filter !== '' && <div class="bm-filter"><Glyph name="find" />{filter}</div>}
+      {props.s.boxesFault !== '' && <div class="bm-fault"><Glyph name="fix" />{props.s.boxesFault}</div>}
+      {shown.map((b) => {
+        const open1 = openNow(b.id);
+        const state = open1.length === 0 ? '' : open1.some((t) => ['gone', 'silent', 'stopped'].includes(tabLook(t).mark)) ? 'reconnecting' : 'connected';
+        return (
+          <div class={`bm-row ${places === b.id ? 'hot' : ''}`} key={b.id} role="menuitem" data-box={b.name} style={{ '--hue': `var(--box-${b.colour})` }} onClick={() => open(b, '')} onPointerEnter={() => setPlaces(b.places.length > 0 && b.pinned ? b.id : '')}>
+            <span class="box-dot" />
+            <span class="bm-name">{b.name}</span>
+            {!b.pinned && <Glyph name="identity" class="bm-unchecked" label="not checked yet" />}
+            {state !== '' && <span class={`conn conn-${state}`} title={state} />}
+            {b.places.length > 0 && b.pinned && <Glyph name="chevron" class="bm-more" />}
+            {places === b.id && (
+              <div class="bm-places" role="menu" aria-label={`Places on ${b.name}`}>
+                {b.places.map((p) => (
+                  <div class="bm-row" key={p} role="menuitem" data-place={p} onClick={(e) => { e.stopPropagation(); open(b, p); }}>
+                    <Glyph name="place" class="fm-glyph" />
+                    <span class="bm-name">{p}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div class="bm-foot"><button type="button" class="bm-add" id="add-box-open" onClick={() => { props.done(); props.act.addBox(); }}><Glyph name="plus" />Add box</button></div>
+    </div>
+  );
+}

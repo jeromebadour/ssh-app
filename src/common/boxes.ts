@@ -111,7 +111,7 @@ export function portOf(port: string): number {
 
 export function checkPort(port: string): Check {
   if (port === '') return hint('empty = 22');
-  return portOf(port) ? ok('a valid port') : fix('1 to 65535');
+  return portOf(port) ? ok('valid') : fix('1 to 65535');
 }
 
 export function checkUser(user: string): Check {
