@@ -31,6 +31,9 @@ export const CH = {
   gateUsePrevious: 'gate:use-previous', // shell view to main: restore from the copy saved before this one
   gateForgetRestore: 'gate:forget-restore', // shell view to main: put the chosen backup aside and choose again
   gateRestore: 'gate:restore', // shell view to main: the chosen backup's password (Uint8Array)
+  // The passphrase of a chosen key file (plan O1). Its own channel, as every password has: it travels as raw
+  // bytes, is used at once and is wiped, and is never part of a command a view builds.
+  keyPassphrase: 'key:passphrase', // shell view to main: the passphrase (Uint8Array)
 } as const;
 
 // A password is at least this many characters (counted as the key process counts them) and at most this many bytes.
@@ -155,6 +158,19 @@ export interface ShellState {
   link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
   maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
+  keyFile: KeyFileChosen | null; // a key file chosen for the box being added (plan O1)
+}
+
+// A key file the person chose for the box being added. Its bytes live in main alone and are never told to a
+// view: what a view learns is the file's name, the public half of the key inside it, and what is in the way.
+export interface KeyFileChosen {
+  name: string; // the file's own name, not its path
+  publicKey: string; // the public half, once the file has opened; empty until then
+  keyType: string; // the kind of key it is, as SSH names it; empty until then
+  fingerprint: string; // SHA256:..., worked out by main from the key's own bytes; empty until the file opens
+  needsPassphrase: boolean; // the file has a passphrase and none, or the wrong one, has been given
+  wrongPassphrase: boolean; // one was given and it did not open the file
+  fault: string; // why the file cannot be used at all; empty when it can
 }
 
 // Closing the window while sessions are open. Berth asks first and names what would go, rather than ending them
@@ -210,7 +226,9 @@ export type ShellCmd =
   | { op: 'copyBlock'; box: string }
   | { op: 'window'; do: 'minimize' | 'maximize' | 'close' } // the window's own three buttons, which Berth draws
   | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
-  | { op: 'keepApp' }; // the asking answered: keep everything open
+  | { op: 'keepApp' } // the asking answered: keep everything open
+  | { op: 'pickKeyFile' } // open the system's file chooser for a key file to bring in (plan O1)
+  | { op: 'dropKeyFile' }; // the chosen key file is put aside; the box gets a key Berth makes
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:
@@ -263,6 +281,7 @@ export interface ShellPort {
   gatePickRestore(): void;
   gateUsePrevious(): void;
   gateRestore(password: Uint8Array): void;
+  keyPassphrase(passphrase: Uint8Array): void; // the passphrase of the chosen key file (plan O1)
   gateForgetRestore(): void;
   meter(n: ViewNumbers): void;
   frame(): void;

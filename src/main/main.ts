@@ -6,11 +6,11 @@ import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
-import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type KeyFileChosen, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
-import { Boxes } from './boxes';
+import { Boxes, fingerprintOf } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
 import { identifyWith } from './identify';
@@ -268,7 +268,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -280,6 +280,80 @@ let linksRefused = 0;
 // Closing the window with sessions open asks first, and nothing is ended until the answer comes back
 // (BUILD-RULES 2.20). While this holds the question, the window's own close has been refused once.
 let closingAsked: ClosingAsked | null = null;
+
+// A key file chosen for the box being added (plan O1). Its bytes live here and nowhere else: no view is ever
+// told them, and they are wiped as soon as the box is made or the file is put aside. What a view learns is the
+// file's name, the public half of the key inside it, and what is in the way.
+let keyFile: { shown: KeyFileChosen; bytes: Buffer; passphrase: Buffer } | null = null;
+
+function dropKeyFile(): void {
+  if (!keyFile) return;
+  keyFile.bytes.fill(0);
+  keyFile.passphrase.fill(0);
+  keyFile = null;
+}
+
+// A key file is chosen. Main reads it and holds the bytes; the lab reaches this the same way the window does,
+// because the chooser itself is the system's and cannot be driven.
+async function chooseKeyFile(file: string): Promise<void> {
+  const blank = { name: path.basename(file), publicKey: '', keyType: '', fingerprint: '', needsPassphrase: false, wrongPassphrase: false };
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(file);
+  } catch (err) {
+    dropKeyFile();
+    keyFile = { shown: { ...blank, fault: `That file could not be read: ${String(err)}`.slice(0, 120) }, bytes: Buffer.alloc(0), passphrase: Buffer.alloc(0) };
+    tellShell();
+    return;
+  }
+  dropKeyFile();
+  keyFile = { shown: { ...blank, fault: '' }, bytes, passphrase: Buffer.alloc(0) };
+  tellShell();
+  await tryKeyFile();
+}
+
+// Read the chosen file again through the key process, with whatever passphrase has been given, and say what it
+// holds. Nothing is kept by that: it is the same parse the add will do, done early so the person finds out here.
+async function tryKeyFile(): Promise<void> {
+  const k = keyFile;
+  if (!k || !keys) return;
+  const r = await keys.request('tryKeyFile', { file: k.bytes.toString('base64'), passphrase: k.passphrase.toString('base64') });
+  if (keyFile !== k) return; // put aside, or another file chosen, while this was asked
+  const line = r['publicKey'];
+  const kind = r['keyType'];
+  if (r.ok && typeof line === 'string' && typeof kind === 'string') {
+    k.shown = { ...k.shown, publicKey: line, keyType: kind, fingerprint: fingerprintOf(line), needsPassphrase: false, wrongPassphrase: false, fault: '' };
+  } else {
+    const code = String(r.error ?? '');
+    k.shown = {
+      ...k.shown,
+      publicKey: '',
+      keyType: '',
+      fingerprint: '',
+      needsPassphrase: code === 'needs-passphrase' || code === 'wrong-passphrase',
+      wrongPassphrase: code === 'wrong-passphrase',
+      fault: keyFileFault(code),
+    };
+  }
+  tellShell();
+}
+
+// Each refusal of a key file in the words the person needs, and nothing else.
+function keyFileFault(code: string): string {
+  switch (code) {
+    case 'needs-passphrase':
+    case 'wrong-passphrase':
+      return '';
+    case 'not-a-key':
+      return 'That file is not a private key.';
+    case 'key-kind':
+      return 'That is a kind of key Berth will not sign with.';
+    case 'key-too-small':
+      return 'That RSA key is smaller than 2048 bits.';
+    default:
+      return 'That key file could not be read.';
+  }
+}
 let closingForReal = false;
 
 // The sessions that would end if the window closed now, and the tabs that have nothing to lose.
@@ -456,7 +530,9 @@ function layout(): void {
 // engine was aimed at when its tab was opened: nothing the engine says can name another. The key process then
 // checks every field of the request itself.
 async function signFor(box: Box, req: SignRequest): Promise<SignAnswer> {
-  if (!keys || !gate?.unlocked || req.key !== box.id || req.algorithm !== 'ssh-ed25519') {
+  // Which algorithm this box's key may be asked for comes from the key itself, not from a constant: a key
+  // brought in from a file (plan O1) can be of another kind than the ed25519 ones Berth makes.
+  if (!keys || !gate?.unlocked || req.key !== box.id || !signsWith(box.publicKey).includes(req.algorithm)) {
     signsRefused++;
     return { error: 'refused' };
   }
@@ -705,14 +781,29 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     stack();
   } else if (c?.op === 'addBox' && typeof c.req === 'number' && boxes) {
     const b = boxes;
-    void b.add(c.draft as BoxDraft).then((r) => {
+    // A key file chosen for this box is used in place of a key made here. It must have opened first: adding
+    // with a file that has not opened would be adding with no key at all.
+    const chosen = keyFile;
+    const withKey = chosen && chosen.shown.publicKey !== '' ? { file: chosen.bytes, passphrase: chosen.passphrase } : undefined;
+    if (chosen && !withKey) {
+      added = { req: c.req, ok: false, id: '', error: chosen.shown.fault || 'that key file has not opened yet', fields: {} };
+      tellShell();
+      return;
+    }
+    void b.add(c.draft as BoxDraft, withKey).then((r) => {
       added = { req: c.req!, ok: r.ok, id: r.ok ? r.id : '', error: r.ok ? '' : r.error, fields: r.ok ? {} : (r.fields ?? {}) };
       if (r.ok) {
-        // A new box goes straight to its check: there is no other way to its first sign-in.
+        const brought = withKey !== undefined;
+        dropKeyFile();
+        // A box whose key came from a file is still checked before it opens: the check is about who the box
+        // is, not about how Berth got its key. What it does not need is the block run on the box, because the
+        // box already holds this key: that is the whole point of bringing one in (plan O1).
         openCheck = r.id;
         askedAt.set(r.id, [new Date().toISOString()]);
         b.reach(r.id);
-        done = `Added ${b.get(r.id)!.name}: its key was made, and Berth is asking it who it is`;
+        done = brought
+          ? `Added ${b.get(r.id)!.name} with your own key, and Berth is asking it who it is`
+          : `Added ${b.get(r.id)!.name}: its key was made, and Berth is asking it who it is`;
       }
       tellShell();
     });
@@ -799,6 +890,20 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     closingAsked = null;
     closingForReal = true;
     win?.close();
+  } else if (c?.op === 'pickKeyFile') {
+    // Which file it is stays main's own, from the system's chooser: a view may type a passphrase, never name a
+    // file (the same rule the way back from a damaged list follows).
+    if (!win || !gate?.unlocked) return;
+    const w = win;
+    void dialog
+      .showOpenDialog(w, { title: 'A key file you already have', properties: ['openFile', 'dontAddToRecent'] })
+      .then((picked) => {
+        const file = picked.filePaths[0];
+        if (!picked.canceled && file) void chooseKeyFile(file);
+      });
+  } else if (c?.op === 'dropKeyFile') {
+    dropKeyFile();
+    tellShell();
   } else if (c?.op === 'keepApp') {
     closingAsked = null;
     done = 'The window was kept open';
@@ -818,6 +923,17 @@ ipcMain.on(CH.gateCreate, (e, password: unknown) => {
 ipcMain.on(CH.gateUnlock, (e, password: unknown) => {
   if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void drop('gate');
   void gate.unlock(password);
+});
+
+// The passphrase of a chosen key file. Raw bytes on their own channel, as every password is; used at once to
+// open the file again and kept only while that file is chosen, so that adding the box can use it.
+ipcMain.on(CH.keyPassphrase, (e, bytes: unknown) => {
+  if (!fromShell(e) || !gate?.unlocked || !keyFile) return void drop('key');
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength > 1024) return void drop('key');
+  keyFile.passphrase.fill(0);
+  keyFile.passphrase = Buffer.from(bytes);
+  bytes.fill(0);
+  void tryKeyFile();
 });
 
 // A list that cannot be read: the ways back. The file is always main's own, never named by a view.
@@ -981,7 +1097,12 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], chooseKeyFile, keyPassphrase: (p: string) => {
+        if (!keyFile) return;
+        keyFile.passphrase.fill(0);
+        keyFile.passphrase = Buffer.from(p, 'utf8');
+        return tryKeyFile();
+      }, kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
         pace.force(share);
         lookPace();
       }, win, dist: DIST, harden, newView: (partition: string) => {

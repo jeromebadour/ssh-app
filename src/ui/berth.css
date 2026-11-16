@@ -609,4 +609,10 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 #remove-box .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
 /* The identity a box is pinned to, in Edit box. */
 #add-box .key-sub.mono { font-family: var(--mono); font-size: 11.5px; }
+/* The key section carries its own button at the end of the row: use a key file, or let Berth make one. The
+   name of a chosen file can be long, so the words take what room is left and the button keeps its own. */
+.key-sect .key-main { min-width: 0; }
+.key-sect .key-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-sect > .btn { flex: none; margin-left: auto; }
+.key-sect .check { margin-top: 3px; }
 #add-box #edit-pinned .btn { margin-left: auto; }

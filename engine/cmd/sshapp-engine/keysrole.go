@@ -89,6 +89,10 @@ type keyRequest struct {
 	Data      string          `json:"data"`
 	Dir       string          `json:"dir"`
 	Public    json.RawMessage `json:"public"`
+	// Bringing in a key file (plan O1). Both are base64: the file's own bytes, and the passphrase if it has
+	// one. Neither is kept anywhere after the key is in the list.
+	File       string `json:"file"`
+	Passphrase string `json:"passphrase"`
 }
 
 func runKeys(o *out, target aim) int {
@@ -207,6 +211,38 @@ func (k *keyProc) handle(f frame.Frame) {
 			return
 		}
 		k.saved(q.ID, map[string]any{"publicKey": info.PublicKey}, func() { _ = u.Delete(q.Name) })
+	case "tryKeyFile":
+		// Says what a key file holds and keeps nothing. No password is needed for this: it reads a file main
+		// chose and already holds, and tells the window only the public half.
+		file, err1 := base64.StdEncoding.DecodeString(q.File)
+		pass, err2 := base64.StdEncoding.DecodeString(q.Passphrase)
+		defer clear(file)
+		defer clear(pass)
+		if err1 != nil || err2 != nil {
+			k.fail(q.ID, "refused", errors.New("the key file did not arrive whole"))
+			return
+		}
+		line, kind, err := keys.TryKeyFile(file, pass)
+		if err != nil {
+			k.fail(q.ID, takeCode(err), err)
+			return
+		}
+		k.reply(q.ID, map[string]any{"publicKey": line, "keyType": kind})
+	case "takeKey":
+		file, err1 := base64.StdEncoding.DecodeString(q.File)
+		pass, err2 := base64.StdEncoding.DecodeString(q.Passphrase)
+		defer clear(file)
+		defer clear(pass)
+		if err1 != nil || err2 != nil {
+			k.fail(q.ID, "refused", errors.New("the key file did not arrive whole"))
+			return
+		}
+		info, err := u.TakeKey(q.Name, q.Box, q.User, file, pass, time.Now())
+		if err != nil {
+			k.fail(q.ID, takeCode(err), err)
+			return
+		}
+		k.saved(q.ID, map[string]any{"publicKey": info.PublicKey, "keyType": info.Type}, func() { _ = u.Delete(q.Name) })
 	case "rebind":
 		if err := u.Rebind(q.Key, q.Box, q.User); err != nil {
 			k.fail(q.ID, "refused", err)
@@ -239,6 +275,25 @@ func (k *keyProc) handle(f frame.Frame) {
 	}
 }
 
+// Each refusal of a key file is its own word, so the window can say the one thing the person can act on: a key
+// file with a passphrase is not the same as a file that is not a key at all.
+func takeCode(err error) string {
+	switch {
+	case errors.Is(err, keys.ErrNeedsPassphrase):
+		return "needs-passphrase"
+	case errors.Is(err, keys.ErrWrongPassphrase):
+		return "wrong-passphrase"
+	case errors.Is(err, keys.ErrKeyKind):
+		return "key-kind"
+	case errors.Is(err, keys.ErrKeyTooSmall):
+		return "key-too-small"
+	case errors.Is(err, keys.ErrBadKeyFile):
+		return "not-a-key"
+	default:
+		return "refused"
+	}
+}
+
 func signCode(err error) string {
 	switch {
 	case errors.Is(err, keys.ErrNoSuchKey):
@@ -254,7 +309,7 @@ func signCode(err error) string {
 func infos(u *keys.Unlocked) []map[string]any {
 	out := []map[string]any{}
 	for _, i := range u.Keys() {
-		out = append(out, map[string]any{"name": i.Name, "box": i.Box, "user": i.User, "publicKey": i.PublicKey, "created": i.Created.Format(time.RFC3339)})
+		out = append(out, map[string]any{"name": i.Name, "box": i.Box, "user": i.User, "type": i.Type, "origin": i.Origin, "publicKey": i.PublicKey, "created": i.Created.Format(time.RFC3339)})
 	}
 	return out
 }
