@@ -29,6 +29,7 @@
   --glyph-stroke: 1.35;
   --glyph-cap: round;
   --glyph-join: round;
+  --status-h: 30px; /* the status line at the foot of the window: the grid's own row, and what a dialog leaves clear */
   --r: 4px;
   --r-s: 3px;
 }
@@ -48,7 +49,7 @@ ul { list-style: none; }
   stroke-width: var(--glyph-stroke); stroke-linecap: var(--glyph-cap); stroke-linejoin: var(--glyph-join);
 }
 
-.window { position: relative; height: 100vh; display: grid; grid-template-rows: 46px 1fr 30px; }
+.window { position: relative; height: 100vh; display: grid; grid-template-rows: 46px 1fr var(--status-h); }
 .body { position: relative; display: grid; grid-template-columns: clamp(400px, 29vw, 540px) 1fr; min-height: 0; }
 
 /* ---------- tab bar ---------- */
@@ -218,7 +219,10 @@ ul { list-style: none; }
 .s-size { color: var(--text-3); }
 
 /* ---------- dialog ---------- */
-.scrim { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(5, 8, 12, .55); }
+/* A dialog dims the window behind it, but not the status line: that line is where the app says what it just
+   did, and a dialog is exactly when a person needs to read it (Copy, Save, Delete all say their piece there).
+   Dimmed under the scrim it could not be read, so from inside a dialog the app looked silent. */
+.scrim { position: absolute; inset: 0 0 var(--status-h) 0; z-index: 10; display: grid; place-items: center; background: rgba(5, 8, 12, .55); }
 .dialog { width: 440px; padding: 22px 24px 20px; border-radius: calc(var(--r) * 2); background: var(--panel-2); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--remove); }
 .dialog h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
 .dlg-lead { color: var(--text-2); line-height: 1.5; }
@@ -242,7 +246,9 @@ ul { list-style: none; }
 .box-menu { position: absolute; z-index: 20; top: 42px; left: 128px; width: 220px; padding: 4px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); box-shadow: 0 12px 30px rgba(0, 0, 0, .4); }
 .bm-row { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: var(--r-s); cursor: pointer; }
 .bm-row:first-child { background: color-mix(in srgb, var(--main) 13%, transparent); }
-.bm-name { flex: 1; font-size: 13.5px; }
+/* A long name is cut with a mark, never wrapped: a wrapped name makes its row taller than the rest, and the
+   row is a fixed height, so the words would be cut off halfway down instead. */
+.bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
 .bm-more { width: 12px; height: 12px; color: var(--text-3); }
 .bm-foot { padding-top: 4px; margin-top: 4px; border-top: 1px solid var(--line); }
 .bm-add { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px; color: var(--main); border-radius: var(--r-s); }
@@ -254,7 +260,9 @@ ul { list-style: none; }
 kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--line); font: 500 11px/16px var(--mono); color: var(--text-2); background: var(--bg); }
 
 /* ---------- the password: the one screen before unlock ---------- */
-.gate { height: 100vh; display: grid; place-items: center; background: var(--bg); }
+/* The screen stands clear of the status line at its foot, as the window's own middle does. */
+.gate { height: calc(100vh - var(--status-h)); display: grid; place-items: center; background: var(--bg); }
+.gate-status { position: fixed; bottom: 0; left: 0; right: 0; height: var(--status-h); justify-content: space-between; }
 .gate-card { width: 400px; display: flex; flex-direction: column; gap: 14px; }
 .gate-card.narrow { width: 320px; gap: 16px; }
 .gate-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
@@ -577,8 +585,13 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 #link .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
 
 /* Edit and Delete, on each box's own row in the Boxes menu, and the question Delete asks. */
-.bm-acts { display: none; gap: 2px; margin-left: 8px; }
-.bm-row:hover > .bm-acts, .bm-row:focus-within > .bm-acts { display: flex; }
+/* Edit and Delete appear when the row is hovered or has the keyboard in it, and their room is always there.
+   They used to be taken out of the row entirely and put back on hover, so arriving on a row made it grow and
+   pushed the box's name into wrapping (Kami, 2026-11-17). Nothing a person is pointing at may move under them.
+   They keep their place in the keyboard's order while invisible, so Tab still reaches them, and take no clicks
+   until they can be seen, so the row itself cannot be edited by a press meant for the row. */
+.bm-acts { display: flex; gap: 2px; margin-left: 8px; opacity: 0; pointer-events: none; }
+.bm-row:hover > .bm-acts, .bm-row:focus-within > .bm-acts { opacity: 1; pointer-events: auto; }
 .bm-act { display: flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--text-3); cursor: pointer; }
 .bm-act:hover { background: var(--panel-2); color: var(--text); }
 .bm-act.remove:hover { background: color-mix(in srgb, var(--remove) 22%, transparent); color: var(--remove); }

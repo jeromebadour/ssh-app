@@ -9,7 +9,7 @@ import { AddBoxDialog, ChangedDialog, CheckDialog, RemoveBoxDialog } from '../ui
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
-import { CreateScreen, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
+import { CreateScreen, GateFoot, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
 import { Mark } from '../ui/marks';
 
@@ -217,10 +217,11 @@ function App() {
   // Before the lock is open there is no bar, so the window's own three buttons are carried on a strip of their
   // own above these screens.
   const strip = <WindowStrip maximized={shell.maximized} act={{ ...noBar, window: (what) => port.cmd({ op: 'window', do: what }) }} />;
-  if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <>{strip}<CreateScreen gate={gate} act={act} /></>;
-  if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <>{strip}<UnlockScreen gate={gate} act={act} /></>;
-  if (screen === 'damaged' && (gate.phase === 'damaged' || gate.phase === 'working')) return <>{strip}<RestoreScreen gate={gate} act={act} /></>;
-  return <>{strip}<GateNotice gate={gate} /></>;
+  const foot = <GateFoot gate={gate} />;
+  if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <>{strip}<CreateScreen gate={gate} act={act} />{foot}</>;
+  if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <>{strip}<UnlockScreen gate={gate} act={act} />{foot}</>;
+  if (screen === 'damaged' && (gate.phase === 'damaged' || gate.phase === 'working')) return <>{strip}<RestoreScreen gate={gate} act={act} />{foot}</>;
+  return <>{strip}<GateNotice gate={gate} />{foot}</>;
 }
 
 render(<App />, document.getElementById('app')!);

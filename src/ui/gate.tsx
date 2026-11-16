@@ -47,6 +47,27 @@ function TypingLine(props: { caps: boolean; letters: string }) {
   );
 }
 
+// The same status line the window has, on the screens shown before the lock opens. Those screens had none, so
+// the app's one place for saying where things stand simply vanished on three of its screens (Kami, 2026-11-17:
+// "no real thin footer everywhere"). It says only what is true here: the app's name, and where the lock stands.
+export function GateFoot(props: { gate: GateState }) {
+  const g = props.gate;
+  const where =
+    g.phase === 'starting' ? 'Starting'
+    : g.phase === 'working' ? 'Working'
+    : g.phase === 'create' ? 'First start'
+    : g.phase === 'locked' ? 'Locked'
+    : g.phase === 'damaged' ? 'The list could not be read'
+    : '';
+  return (
+    <footer class="status gate-status" id="gate-status">
+      <span class="s-tab"><Glyph name="lock" />Berth</span>
+      <span />
+      <span class="s-last" id="gate-status-where">{g.detail !== '' ? g.detail : where}</span>
+    </footer>
+  );
+}
+
 export function CreateScreen(props: { gate: GateState; act: GateActions; demo?: string }) {
   const [one, setOne] = useState(props.demo ?? '');
   const [two, setTwo] = useState(props.demo ?? '');
