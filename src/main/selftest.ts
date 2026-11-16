@@ -791,8 +791,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('[data-remove="lab-box-renamed"]');
         await until(() => has('#remove-box'), 2000);
         await clickOn('#remove-do');
-        const held = await until(async () => !ctx.boxes.list.some((b) => b.id === id), 5000) ? await ctx.keys.request('keys') : { keys: [] };
-        check('Delete: the box, its key and its tabs go together, and the window says so', !ctx.boxes.list.some((b) => b.id === id) && Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id) && ![...ctx.tabs.values()].some((t) => t.box?.id === id) && (await text('#status-done')).includes('Deleted lab-box-renamed'), [ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
+        await until(async () => !ctx.boxes.list.some((b) => b.id === id), 5000);
+        const held = await ctx.keys.request('keys');
+        // Each of the four is worked out on its own, so that a failure says which one did not hold rather than
+        // leaving the next person to guess from a list of everything.
+        const wentBox = !ctx.boxes.list.some((b) => b.id === id);
+        const wentKey = Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id);
+        const wentTabs = ![...ctx.tabs.values()].some((t) => t.box?.id === id);
+        const said = (await text('#status-done')).includes('Deleted lab-box-renamed');
+        check('Delete: the box, its key and its tabs go together, and the window says so', wentBox && wentKey && wentTabs && said, [{ wentBox, wentKey, wentTabs, said }, ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
 
         lab.end();
       }
