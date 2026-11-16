@@ -6,6 +6,7 @@ import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
+import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateNotice, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
@@ -22,7 +23,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '' };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -113,6 +114,9 @@ function Unlocked(props: { s: ShellState }) {
           trust: () => port.cmd({ op: 'trust', box: s.check!.boxId }),
           close: () => port.cmd({ op: 'closeCheck', box: s.check!.boxId }),
         }} />
+      )}
+      {s.paste && (
+        <PasteDialog p={s.paste} act={{ send: () => port.cmd({ op: 'sendPaste' }), drop: () => port.cmd({ op: 'dropPaste' }) }} />
       )}
       {changedTab && changedBox && (
         <ChangedDialog name={changedBox.name} addr={`${changedBox.host}:${changedBox.port}`} pinType={changedBox.pinType} pinFingerprint={changedBox.pinFingerprint} pinnedAt={changedBox.pinnedAt} shownFingerprint={changedTab.link.shownFingerprint} onClose={() => { setSeenChanged([...seenChanged, changedTab.id]); setDialog({ kind: 'none' }); }} />

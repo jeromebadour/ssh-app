@@ -16,6 +16,12 @@ const port: TabPort = {
   onShown(cb) {
     ipcRenderer.on(CH.tabShown, (_e, front: unknown) => cb(front === true));
   },
+  onPaste(cb) {
+    ipcRenderer.on(CH.tabPaste, (_e, text: unknown) => cb(String(text)));
+  },
+  pasteMode(protectedPaste) {
+    ipcRenderer.send(CH.tabPasteMode, protectedPaste === true);
+  },
   onAgain(cb) {
     ipcRenderer.on(CH.tabAgain, () => cb());
   },

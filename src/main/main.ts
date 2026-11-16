@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { look } from '../common/paste';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -246,7 +247,72 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null };
+}
+
+// ---- Paste (plan B2.7, B3) ----
+// The clipboard is read here, and only for a paste a person made themselves: a paste key main saw before the
+// page did, or a paste from the menu of a right-click main saw. A view cannot ask for it, and a box cannot
+// make one happen. What is read is taken apart (common/paste.ts), and a paste of more than one line is shown
+// on the shell before anything is sent, because a line ending in it would run as a command on arrival.
+let waitingPaste: { shown: PasteShown; text: string } | null = null;
+let pastesRefused = 0; // a paste asked for where it is not the person's own: counted, never acted on
+const protectedPaste = new Map<number, boolean>(); // per tab: its box asked to be told where a paste begins
+const pasteAgainAfterMs = 150;
+let lastPasteAt = 0;
+
+// Only the tab in front, in a window in use, with nothing of the shell's over it, and not twice in a moment.
+function mayPaste(tab: Tab): boolean {
+  return tab.id === active && !overlay && !!win?.isFocused() && !!tab.box && tabs.get(tab.id) === tab;
+}
+
+async function pasteInto(tab: Tab, how: string): Promise<void> {
+  if (!mayPaste(tab) || Date.now() - lastPasteAt < pasteAgainAfterMs) {
+    pastesRefused++;
+    return;
+  }
+  lastPasteAt = Date.now();
+  const seen = look(await clipboard.readText());
+  // Reading the clipboard is awaited, so everything that made this paste the person's own is asked again.
+  if (!mayPaste(tab)) {
+    pastesRefused++;
+    return;
+  }
+  if (seen.text === '') {
+    done = 'Nothing to paste';
+    tellShell();
+    return;
+  }
+  if (seen.oneLine && seen.odd.length === 0 && !seen.cut) {
+    sendTo(tab.view, CH.tabPaste, seen.text);
+    done = `Pasted ${seen.text.length} characters into ${tab.box!.name}`;
+    tellShell();
+    return;
+  }
+  // More than one line, or something in it a person cannot see: it is shown first, never sent on a key.
+  waitingPaste = {
+    text: seen.text,
+    shown: { tab: tab.id, box: tab.box!.name, place: tab.place, lines: seen.lines.slice(0, 400), endsWithLineEnding: seen.endsWithLineEnding, odd: seen.odd.slice(0, 200), cut: seen.cut, controlsRemoved: seen.controlsRemoved, protectedPaste: protectedPaste.get(tab.id) === true },
+  };
+  overlay = true;
+  stack();
+  tellShell();
+  void how;
+}
+
+function closePaste(send: boolean): void {
+  const waiting = waitingPaste;
+  waitingPaste = null;
+  overlay = false;
+  stack();
+  if (waiting && send) {
+    const tab = tabs.get(waiting.shown.tab);
+    if (tab && tab.box) {
+      sendTo(tab.view, CH.tabPaste, waiting.text);
+      done = `Pasted ${waiting.shown.lines.length} lines into ${tab.box.name}`;
+    }
+  } else if (waiting) done = 'The paste was not sent';
+  tellShell();
 }
 
 // The shell is above the tabs while one of its menus or dialogs is open, so nothing a tab draws can cover them
@@ -407,6 +473,18 @@ function openTab(boxId = '', place = ''): Tab | null {
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
+  // A paste is a person's own doing, and main must have seen it: these two events reach main before the page
+  // sees anything. The view is never asked, and never asks.
+  view.webContents.on('before-input-event', (_e, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase();
+    const paste = (input.control && input.shift && key === 'v') || (input.control && key === 'v') || (input.shift && key === 'insert');
+    if (paste) void pasteInto(tab, 'a paste key');
+  });
+  view.webContents.on('context-menu', (_e, params) => {
+    // Right-click pastes, as MobaXterm does. Only a real click on the terminal, never a menu asked for in code.
+    if (params.x >= 0 && params.y >= 0) void pasteInto(tab, 'a right-click');
+  });
   view.webContents.once('did-finish-load', () => {
     sendTo(view, CH.tabState, info(tab));
     sendTo(view, CH.tabShown, id === active);
@@ -432,6 +510,8 @@ function closeTab(id: number): void {
   tab.view.webContents.close();
   meter.forget(id);
   frontTold.delete(id);
+  protectedPaste.delete(id);
+  if (waitingPaste?.shown.tab === id) closePaste(false);
   tab.stopReopen();
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
   layout();
@@ -467,6 +547,13 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
 // Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window
 // that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
 // A new session, asked for by the tab (the picture's Reconnect, Now and Cancel; R while a bar is showing).
+// A tab's box asked to be told where a paste begins and ends (or stopped asking): its own view says so.
+ipcMain.on(CH.tabPasteMode, (e, on: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof on !== 'boolean') return drop('tab:paste-mode', e);
+  protectedPaste.set(tab.id, on);
+});
+
 ipcMain.on(CH.tabReopen, (e, now: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof now !== 'boolean' || !tab.box) return drop('tab:reopen', e);
@@ -553,7 +640,9 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     frontTold.delete(c.id); // told again even if it was in front already: its frame ends the switch
     layout();
     tellShell();
-  } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
+  } else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
+  else if (c?.op === 'dropPaste' && waitingPaste) closePaste(false);
+  else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
 });
 

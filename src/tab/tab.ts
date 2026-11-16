@@ -3,6 +3,7 @@
 import type { TabInfo, TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
+import { forBox } from '../common/paste';
 import { drawChrome, folded, type Chrome } from './chrome';
 import { clock } from './states';
 import { openTerminal, type Term } from './term';
@@ -150,6 +151,22 @@ port.onAgain(() => {
   told = '';
   draw();
 });
+
+// A paste, from main, which read the clipboard for a key or a click it saw itself. It goes to the box the way
+// a paste should: inside the markers if the box asked to be told where a paste begins and ends, as it is if
+// not. Nothing of it is drawn here first: the box's own shell echoes it, as it does for anything typed.
+port.onPaste((text) => {
+  const bytes = new TextEncoder().encode(forBox(text, term.bracketedPaste()));
+  for (let at = 0; at < bytes.byteLength; at += 32 * 1024) port.send(bytes.subarray(at, at + 32 * 1024));
+});
+// Whether the box has asked to be told where a paste begins: main needs it to say so before sending one.
+let saidMode = false;
+setInterval(() => {
+  const now = term.bracketedPaste();
+  if (now === saidMode) return;
+  saidMode = now;
+  port.pasteMode(now);
+}, 250);
 
 // While a bar is showing, R alone asks for a new session: the key cannot reach the box (the link is gone), or
 // is being kept for a link that may never come back. Both bars say so on their button. Every other key, and R

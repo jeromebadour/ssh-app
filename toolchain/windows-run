@@ -15,3 +15,4 @@
 2026-11-16: the box's colour as an option in its name field.
 2026-11-16: the terminal for real (xterm.js in the tab's view, its guards, the clipboard rule) on Windows.
 2026-11-16: the terminal's link states (the stages, the folded sign-in line, the bars) and a new session, on Windows.
+2026-11-16: the paste path: the clipboard read by main for a key or click it saw, and the preview, on Windows.

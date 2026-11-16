@@ -10,6 +10,8 @@ export const CH = {
   shellCmd: 'shell:cmd', // shell view to main: new, select or close a tab
   shellState: 'shell:state', // main to shell view: the tabs and their states
   tabShown: 'tab:shown', // main to tab view: you were just brought to the front, or put behind another tab
+  tabPaste: 'tab:paste', // main to tab view: put this text in, as a paste (main read the clipboard itself)
+  tabPasteMode: 'tab:paste-mode', // tab view to main: whether its box asked for protected paste
   tabAgain: 'tab:again', // main to tab view: this is a new session on the same box, from here on
   tabReopen: 'tab:reopen', // tab view to main: open a new session now, or stop the one that is coming
   tabPace: 'tab:pace', // main to tab view: the share of its time a tab behind may spend on output (1: all of it)
@@ -143,6 +145,21 @@ export interface ShellState {
   check: CheckShown | null;
   added: { req: number; ok: boolean; id: string; error: string; fields: Record<string, string> } | null;
   done: string; // the last thing done, for the status line; empty for nothing yet
+  paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
+}
+
+// A paste of more than one line, shown before it is sent: its own lines, and what in it cannot be seen by
+// looking (plan B3). The text itself is main's; the shell only draws it and says yes or no.
+export interface PasteShown {
+  tab: number;
+  box: string; // the box it would go to, by name
+  place: string;
+  lines: string[];
+  endsWithLineEnding: boolean;
+  odd: { line: number; at: number; what: string; shown: string }[];
+  cut: boolean;
+  controlsRemoved: number;
+  protectedPaste: boolean; // the box asked for protected paste, so a shell can tell it was pasted
 }
 
 export type ShellCmd =
@@ -154,6 +171,8 @@ export type ShellCmd =
   | { op: 'addBox'; req: number; draft: BoxDraft }
   | { op: 'check'; box: string } // open the first-connection check for a box, and ask it who it is
   | { op: 'paste'; box: string; text: string }
+  | { op: 'sendPaste' } // the paste being shown: send it to its box
+  | { op: 'dropPaste' } // the paste being shown: send nothing
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'closeCheck'; box: string }
   | { op: 'copyBlock'; box: string };
@@ -186,6 +205,8 @@ export interface TabPort {
   onShown(cb: (front: boolean) => void): void; // brought to the front, or put behind another tab
   onPace(cb: (share: number) => void): void; // how much of its time a tab behind may spend on output
   onAgain(cb: () => void): void; // a new session has begun on the same box
+  onPaste(cb: (text: string) => void): void; // put this text in, as a paste
+  pasteMode(protectedPaste: boolean): void; // its box asked for protected paste, or stopped asking
   reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   resize(cols: number, rows: number): void;
