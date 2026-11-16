@@ -4,21 +4,29 @@
 #
 #   uninstall.ps1          removes the program, the Start menu entry and the entry in Apps and features
 #   uninstall.ps1 -Check   prints what it would remove; changes nothing
+#
+# A folder cannot be deleted while a script inside it is running, so this script copies itself to the
+# temporary folder and runs that copy, pointed back at this folder with -Folder. The copy does the work and
+# waits for it, so what you see is what happened: no second window, nothing left to finish later.
 
 [CmdletBinding()]
 param(
-  [switch] $Check
+  [switch] $Check,
+  [string] $Folder = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$me = $MyInvocation.MyCommand.Path
+$here = if ($Folder -ne '') { $Folder } else { Split-Path -Parent $me }
+$fromCopy = $Folder -ne ''
+
 function Say($line) { Write-Host $line }
 
 function Am-Admin {
-  $me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-  $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $person = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  $person.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 try {
@@ -34,58 +42,61 @@ try {
   Say ($name + ' ' + $what.version + ' at ' + $here)
 
   $running = @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($program)) -ErrorAction SilentlyContinue)
-  if ($running.Count -gt 0 -and -not $Check) {
-    throw ('' + $running.Count + ' copies of ' + $program + ' are running. Nothing was removed. Close them and run this again.')
-  }
-
-  $plannedFolder = Test-Path -LiteralPath $here
-  $plannedShortcut = Test-Path -LiteralPath $shortcut
-  $plannedKey = Test-Path -LiteralPath $regKey
 
   if ($Check) {
-    Say ('the folder:                 ' + $(if ($plannedFolder) { $here } else { 'not there' }))
-    Say ('the Start menu entry:       ' + $(if ($plannedShortcut) { $shortcut } else { 'not there' }))
-    Say ('the Apps and features entry:' + $(if ($plannedKey) { ' ' + $regKey } else { ' not there' }))
-    Say ('left alone, your own files: ' + $yours)
+    Say ('the folder:                  ' + $(if (Test-Path -LiteralPath $here) { $here } else { 'not there' }))
+    Say ('the Start menu entry:        ' + $(if (Test-Path -LiteralPath $shortcut) { $shortcut } else { 'not there' }))
+    Say ('the Apps and features entry: ' + $(if (Test-Path -LiteralPath $regKey) { $regKey } else { 'not there' }))
+    Say ('left alone, your own files:  ' + $yours)
     if ($running.Count -gt 0) { Say ('' + $running.Count + ' copies of ' + $program + ' are running; removing would stop and ask you to close them.') }
     Say 'Checked only. Nothing was removed.'
     exit 0
   }
 
-  $left = 0
+  if ($running.Count -gt 0) {
+    throw ('' + $running.Count + ' copies of ' + $program + ' are running. Nothing was removed. Close them and run this again.')
+  }
   if (-not (Am-Admin)) {
-    throw ('This window is not an administrator window, and ' + $here + ' needs one. Nothing was removed. The command, in a PowerShell started with "Run as administrator": powershell -ExecutionPolicy Bypass -File "' + $MyInvocation.MyCommand.Path + '"')
+    throw ('This window is not an administrator window, and ' + $here + ' needs one. Nothing was removed. The command, in a PowerShell started with "Run as administrator": powershell -ExecutionPolicy Bypass -File "' + $me + '"')
   }
 
-  if ($plannedKey) {
+  # Still standing inside the folder that is to go: hand the work to a copy of this file in the temporary
+  # folder, and wait for it. Its words are this script's words.
+  if (-not $fromCopy) {
+    $copy = Join-Path ${env:TEMP} ('uninstall-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    Copy-Item -LiteralPath $me -Destination $copy -Force
+    try {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $copy -Folder $here
+      $code = $LASTEXITCODE
+    } finally {
+      Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+    }
+    exit $code
+  }
+
+  $left = 0
+  if (Test-Path -LiteralPath $regKey) {
     Remove-Item -LiteralPath $regKey -Recurse -Force
-    if (Test-Path -LiteralPath $regKey) { Say ('could not remove the Apps and features entry: ' + $regKey); $left++ }
+    if (Test-Path -LiteralPath $regKey) { Say ('could not remove the entry in Apps and features: ' + $regKey); $left++ }
     else { Say 'removed the entry in Apps and features.' }
   } else { Say 'the entry in Apps and features was already gone.' }
 
-  if ($plannedShortcut) {
+  if (Test-Path -LiteralPath $shortcut) {
     Remove-Item -LiteralPath $shortcut -Force
     if (Test-Path -LiteralPath $shortcut) { Say ('could not remove the Start menu entry: ' + $shortcut); $left++ }
     else { Say 'removed the Start menu entry.' }
   } else { Say 'the Start menu entry was already gone.' }
 
-  # The folder this script is in: it deletes itself, so the delete is handed to a second PowerShell that
-  # waits for this one to end. The second one prints what it did to a file next to the folder.
-  $report = $here + '.removed.txt'
-  $second = @(
-    '$ErrorActionPreference = ' + "'" + 'Continue' + "'",
-    'Start-Sleep -Seconds 2',
-    'Remove-Item -LiteralPath ' + "'" + $here + "'" + ' -Recurse -Force -ErrorAction SilentlyContinue',
-    'if (Test-Path -LiteralPath ' + "'" + $here + "'" + ') {',
-    '  Set-Content -LiteralPath ' + "'" + $report + "'" + ' -Value ' + "'" + 'The folder is still there: ' + $here + "'",
-    '} else {',
-    '  Set-Content -LiteralPath ' + "'" + $report + "'" + ' -Value ' + "'" + 'Removed: ' + $here + "'",
-    '}'
-  ) -join "`n"
-  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($second))
-  Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', $encoded) | Out-Null
-  Say ('removing the folder in a second window: ' + $here)
-  Say ('it writes what it did to: ' + $report)
+  Remove-Item -LiteralPath $here -Recurse -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $here) {
+    # Say which files are still there, so what is left is never a guess.
+    $still = @(Get-ChildItem -LiteralPath $here -Recurse -File -ErrorAction SilentlyContinue)
+    Say ('could not remove the folder: ' + $here + ' (' + $still.Count + ' files still in it)')
+    foreach ($f in $still | Select-Object -First 5) { Say ('  still there: ' + $f.FullName) }
+    $left++
+  } else {
+    Say ('removed the folder: ' + $here)
+  }
 
   Say ''
   if ($left -gt 0) { Say ('' + $left + ' things could not be removed, named above.') }

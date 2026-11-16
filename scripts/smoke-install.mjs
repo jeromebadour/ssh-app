@@ -21,7 +21,6 @@ const fail = (name, detail = '') => {
   failures++;
   console.log(`FAIL  ${name}${detail ? `   -> ${detail}` : ''}`);
 };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function shell(file, args, { ms = 180000 } = {}) {
   return new Promise((resolve) => {
@@ -165,17 +164,14 @@ const regValue = async (name) => (await ps(['-Command', `(Get-ItemProperty -Lite
   else say('the Start menu entry is gone');
   if ((await regThere()) !== 'no') fail('the entry in Apps and features is gone', regKey);
   else say('the entry in Apps and features is gone');
-  // The folder removes itself from a second window; it writes what it did beside itself. Removing a folder
-  // of this size takes as long as the machine takes (an installed app is a few hundred megabytes, and a
-  // watching antivirus reads every file of it), so this waits minutes, not seconds.
-  const report = `${to}.removed.txt`;
-  for (let i = 0; i < 360 && !(await there(report)); i++) await sleep(500);
-  if (!(await there(report))) fail('the folder said what happened to it', report);
-  else {
-    const said = (await readFile(report, 'utf8')).trim();
-    if (!/^Removed:/.test(said)) fail('the folder is gone', said);
-    else if (await there(to)) fail('the folder is really gone', to);
-    else say('the folder is gone, and it said so');
+  // The folder goes with it, said in the same words and in the same window: no second window, nothing left
+  // to finish later. A script cannot delete the folder it is running from, so it hands that to a copy of
+  // itself in the temporary folder and waits for it.
+  if (await there(to)) fail('the folder is gone', `${to} is still there: ${r.out.trim().split('\n').slice(-4).join(' | ')}`);
+  else if (!/removed the folder/.test(r.out)) fail('it said the folder went', r.out.trim().split('\n').slice(-3).join(' | '));
+  else say('the folder is gone, and it said so');
+  for (const leftover of await readdir(path.dirname(to))) {
+    if (leftover.endsWith('.removed.txt')) fail('nothing is left behind to finish later', leftover);
   }
 }
 
