@@ -334,3 +334,119 @@ func (s *slow) Read(p []byte) (int, error) {
 	s.b = s.b[n:]
 	return n, nil
 }
+
+// A box that answers a read with more than was asked for is not quietly trusted: a client that copied whatever
+// arrived into a caller's buffer would be writing past what the caller sized for.
+func TestABoxCannotAnswerAReadWithMoreThanWasAsked(t *testing.T) {
+	c := dial(t, func(kind byte, id uint32, r *reader) (byte, []byte) {
+		switch kind {
+		case fxpOpen:
+			var w writer
+			w.string("h")
+			return fxpHandle, w.b
+		case fxpRead:
+			r.str()
+			r.u64()
+			want := r.u32()
+			var w writer
+			w.str(make([]byte, want+16)) // more than was asked for
+			return fxpData, w.b
+		}
+		return fxpStatus, status(fxOK, "")
+	})
+	f, err := c.Open(context.Background(), "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 64)
+	if _, err := f.ReadAt(context.Background(), p, 0); !errors.Is(err, ErrTooLong) {
+		t.Fatalf("a read answered with too much gave %v, not ErrTooLong", err)
+	}
+}
+
+// Reading and writing name the place in the file, so nothing rests on a position the box keeps.
+func TestReadsAndWritesNameTheirPlace(t *testing.T) {
+	var readAt, wroteAt uint64
+	var wrote []byte
+	c := dial(t, func(kind byte, id uint32, r *reader) (byte, []byte) {
+		switch kind {
+		case fxpOpen:
+			var w writer
+			w.string("h")
+			return fxpHandle, w.b
+		case fxpRead:
+			r.str()
+			readAt = r.u64()
+			want := r.u32()
+			var w writer
+			w.str(make([]byte, want/2)) // less than asked for, which a box may do
+			return fxpData, w.b
+		case fxpWrite:
+			r.str()
+			wroteAt = r.u64()
+			wrote = append([]byte(nil), r.str()...)
+			return fxpStatus, status(fxOK, "")
+		}
+		return fxpStatus, status(fxOK, "")
+	})
+	f, err := c.Open(context.Background(), "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 100)
+	n, err := f.ReadAt(context.Background(), p, 4096)
+	if err != nil || n != 50 {
+		t.Fatalf("read gave %d, %v", n, err)
+	}
+	if readAt != 4096 {
+		t.Fatalf("the read asked at %d, not 4096", readAt)
+	}
+	if _, err := f.WriteAt(context.Background(), []byte("hello"), 8192); err != nil {
+		t.Fatal(err)
+	}
+	if wroteAt != 8192 || string(wrote) != "hello" {
+		t.Fatalf("the write went to %d with %q", wroteAt, wrote)
+	}
+}
+
+// The end of a file is the end, not a failure.
+func TestTheEndOfAFileIsSaidAsTheEnd(t *testing.T) {
+	c := dial(t, func(kind byte, id uint32, r *reader) (byte, []byte) {
+		if kind == fxpOpen {
+			var w writer
+			w.string("h")
+			return fxpHandle, w.b
+		}
+		if kind == fxpRead {
+			return fxpStatus, status(fxEOF, "")
+		}
+		return fxpStatus, status(fxOK, "")
+	})
+	f, err := c.Open(context.Background(), "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ReadAt(context.Background(), make([]byte, 8), 0); !errors.Is(err, io.EOF) {
+		t.Fatalf("the end of the file gave %v, not io.EOF", err)
+	}
+}
+
+// A write larger than one block is refused here rather than cut to fit, because a caller that sent one is
+// wrong about what it is doing and silently writing part of it would be worse.
+func TestAWriteLargerThanOneBlockIsRefused(t *testing.T) {
+	c := dial(t, func(kind byte, id uint32, r *reader) (byte, []byte) {
+		if kind == fxpOpen {
+			var w writer
+			w.string("h")
+			return fxpHandle, w.b
+		}
+		return fxpStatus, status(fxOK, "")
+	})
+	f, err := c.Open(context.Background(), "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt(context.Background(), make([]byte, Block+1), 0); !errors.Is(err, ErrTooLong) {
+		t.Fatalf("an oversized write gave %v, not ErrTooLong", err)
+	}
+}
