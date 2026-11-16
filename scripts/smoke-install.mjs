@@ -165,9 +165,11 @@ const regValue = async (name) => (await ps(['-Command', `(Get-ItemProperty -Lite
   else say('the Start menu entry is gone');
   if ((await regThere()) !== 'no') fail('the entry in Apps and features is gone', regKey);
   else say('the entry in Apps and features is gone');
-  // The folder removes itself from a second window; it writes what it did beside itself.
+  // The folder removes itself from a second window; it writes what it did beside itself. Removing a folder
+  // of this size takes as long as the machine takes (an installed app is a few hundred megabytes, and a
+  // watching antivirus reads every file of it), so this waits minutes, not seconds.
   const report = `${to}.removed.txt`;
-  for (let i = 0; i < 40 && !(await there(report)); i++) await sleep(500);
+  for (let i = 0; i < 360 && !(await there(report)); i++) await sleep(500);
   if (!(await there(report))) fail('the folder said what happened to it', report);
   else {
     const said = (await readFile(report, 'utf8')).trim();

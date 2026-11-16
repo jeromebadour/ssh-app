@@ -27,7 +27,7 @@ const out = path.join(root, 'out');
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 const pkg = require(path.join(root, 'package.json'));
 const electronVersion = require(path.join(root, 'node_modules/electron/package.json')).version;
-const NAME = 'ssh-app';
+const NAME = 'Berth';
 
 // What every package's binary must say, read back after writing. Only the inspect fuse differs.
 const fusesFor = (kind) => ({

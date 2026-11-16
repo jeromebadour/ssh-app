@@ -30,7 +30,7 @@ if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/.test(version)) {
 const NAME = 'Berth';
 const FOLDER = 'Berth';
 const PUBLISHER = 'Jerome Badour';
-const PACKAGE = 'ssh-app-win32-x64-release';
+const PACKAGE = 'Berth-win32-x64-release';
 
 const out = path.join(root, 'out');
 const from = path.join(out, PACKAGE);

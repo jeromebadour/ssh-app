@@ -120,7 +120,7 @@ jobs:
     needs: [plan, lab]
     if: needs.plan.outputs.windows == 'true'
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -148,7 +148,7 @@ jobs:
         env:
           LINUX_BUILT: ${{ needs.lab.outputs.win32 }}
         run: |
-          here="$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')"
+          here="$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["Berth-win32-x64-lab"].manifestSha256,release:r.packages["Berth-win32-x64-release"].manifestSha256}))')"
           echo "built on Linux:   $LINUX_BUILT"
           echo "built on Windows: $here"
           [ -n "$LINUX_BUILT" ] && [ "$here" = "$LINUX_BUILT" ] || { echo "::error::The two builders made different Windows packages."; exit 1; }
@@ -210,7 +210,7 @@ jobs:
       - name: What was built, for the second builder to compare
         id: report
         run: |
-          echo "win32=$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')" >> "$GITHUB_OUTPUT"
+          echo "win32=$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["Berth-win32-x64-lab"].manifestSha256,release:r.packages["Berth-win32-x64-release"].manifestSha256}))')" >> "$GITHUB_OUTPUT"
       - name: The lab package (the self-test packaged, seven tabs, children end with their parent, a swapped engine)
         run: bash scripts/smoke.sh lab
       - name: A picture of the whole window, from the real app
