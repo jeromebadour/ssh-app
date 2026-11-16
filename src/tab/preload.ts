@@ -16,6 +16,12 @@ const port: TabPort = {
   onShown(cb) {
     ipcRenderer.on(CH.tabShown, (_e, front: unknown) => cb(front === true));
   },
+  onAgain(cb) {
+    ipcRenderer.on(CH.tabAgain, () => cb());
+  },
+  reopen(now) {
+    ipcRenderer.send(CH.tabReopen, now === true);
+  },
   onPace(cb) {
     ipcRenderer.on(CH.tabPace, (_e, share: unknown) => cb(typeof share === 'number' && share > 0 && share <= 1 ? share : 1));
   },

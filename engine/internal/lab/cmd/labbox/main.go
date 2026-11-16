@@ -19,6 +19,9 @@
 //	flood <ms> [bytes a second]     every open session prints for this long: so much a second each, or (none
 //	                                given) as fast as its client takes it
 //	flooded                         {"bytes":N}: how much the sessions took from flood, in all
+//	hold <ms>                       every connection goes silent both ways for this long, nothing lost
+//	reset                           every connection ends with a real reset, as a dropped network does
+//	stall on|off                    sign-ins are never answered (or are again), as a box stopped halfway
 //
 // It ends when its input closes.
 package main
@@ -62,7 +65,7 @@ func printed(k ssh.PublicKey) string {
 func main() {
 	host := identity()
 	var let ssh.PublicKey
-	box, err := hostile.Start(hostile.Config{HostSigner: host, Sessions: true, Banner: "Welcome to the lab box\n\x1b[c\x1b]52;c;aGlkZGVu\x07\x1b[31msecond line\n"})
+	box, err := hostile.Start(hostile.Config{HostSigner: host, Sessions: true, Banner: "Welcome to the lab box\n\x1b[c\x1b]52;c;aGlkZGVu\x07\x1b[31msecond line\n*** System restart required ***\n"})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -107,6 +110,18 @@ func main() {
 			say(map[string]any{"flooding": box.Flood(time.Duration(ms)*time.Millisecond, perSecond)})
 		case "flooded":
 			say(map[string]any{"bytes": box.Flooded()})
+		case "hold":
+			var ms int
+			if n, _ := fmt.Sscanf(rest, "%d", &ms); n < 1 || ms < 1 || ms > 600000 {
+				say(map[string]any{"error": "hold <milliseconds>"})
+				continue
+			}
+			say(map[string]any{"holding": box.Hold(time.Duration(ms) * time.Millisecond)})
+		case "reset":
+			say(map[string]any{"reset": box.Reset()})
+		case "stall":
+			box.Stall(rest == "on")
+			say(map[string]any{"stall": rest == "on"})
 		case "received":
 			say(map[string]any{"hex": hex.EncodeToString(box.Received())})
 		case "rekey":

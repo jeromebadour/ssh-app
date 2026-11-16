@@ -160,9 +160,31 @@ interface Tab {
   view: WebContentsView;
   engine: Engine;
   begin(cols: number, rows: number): void; // starts the engine, once, at the view's size
+  reopen(now: boolean): void; // a new session on the same box and place (a new engine: an engine is one link)
+  stopReopen(): void;
+  againAt: number; // when the new session opens; 0 when none is coming
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
+}
+
+// An ending Berth never opens a new session after: the same thing would happen again, or it is the person's
+// own doing. A changed identity and a refused key are stops, not hiccups (plan A3 decision 6, B8).
+const NEVER_AGAIN: readonly string[] = ['identity-changed', 'sign-in-failed', 'no-signature', 'weak-offer', 'cancelled', 'shell-exited'];
+const AGAIN_AFTER_MS = 5000;
+
+// New connections to one box are paced: at most five in any thirty seconds, whatever asks for them (plan B1).
+const OPENED_MAX = 5;
+const OPENED_WITHIN_MS = 30_000;
+const opened = new Map<string, number[]>();
+function waitForBox(boxId: string): number {
+  const now = Date.now();
+  const when = (opened.get(boxId) ?? []).filter((t) => now - t < OPENED_WITHIN_MS);
+  opened.set(boxId, when);
+  return when.length < OPENED_MAX ? 0 : OPENED_WITHIN_MS - (now - when[when.length - OPENED_MAX]!);
+}
+function boxOpened(boxId: string): void {
+  opened.set(boxId, [...(opened.get(boxId) ?? []), Date.now()]);
 }
 
 const tabs = new Map<number, Tab>();
@@ -209,7 +231,8 @@ function tellGate(): void {
 }
 
 function info(t: Tab): TabInfo {
-  return { id: t.id, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place } : null, link: t.engine.link };
+  const place = t.box?.places.find((p) => p.name === t.place);
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place, addr: addrOf(t.box), user: t.box.user, folder: place?.folder ?? t.box.folder, pinType: t.box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
 }
 
 function boxView(b: Box): BoxView {
@@ -295,41 +318,92 @@ function openTab(boxId = '', place = ''): Tab | null {
   }
   const aimedAt = box;
   const id = nextTabId++;
+  // When a link is certainly gone, a new session opens by itself, after a wait the tab counts down.
+  const maybeAgain = (): void => {
+    const t = tabs.get(id);
+    if (!t || t !== tab || !box || t.againAt > 0) return;
+    const l = t.engine.link;
+    if (l.phase !== 'ended' || NEVER_AGAIN.includes(l.cause)) return;
+    t.reopen(false);
+  };
   const origin = `app://tab-${id}`;
   // Its own partition (in memory only) and its own origin: nothing is shared with another tab.
   const ses = session.fromPartition(`tab-${id}`, { cache: false });
   harden(ses);
   // A tab never slows its box because its view is hidden: background throttling is off for tab views.
   const view = new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-tab.js', false) });
-  const engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, {
+  const hooks = {
     // An engine can outlive its tab for a moment (it ends after its view is closed): then only the shell is told.
-    output: (bytes) => {
+    output: (bytes: Uint8Array) => {
       if (tabs.get(id) === tab) sendTo(view, CH.tabOutput, bytes);
     },
     state: () => {
+      maybeAgain();
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     link: () => {
+      maybeAgain();
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     // Text a box sent before sign-in: it goes to the tab's own view, for its terminal, and nowhere else.
-    banner: (bytes) => {
+    banner: (bytes: Uint8Array) => {
       if (tabs.get(id) === tab) sendTo(view, CH.tabBanner, bytes);
     },
-    sign: (req) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
-  }, aim);
+    sign: (req: SignRequest) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
+  };
+  let engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, aim);
   // A box's terminal is opened at the size its view really has, so the engine starts when the view has said
   // its size. A view that says nothing does not hold the tab up: after two seconds the engine starts anyway.
   let begun = false;
+  const lastSize = { cols: 120, rows: 40 };
   const begin = (cols: number, rows: number): void => {
+    if (cols >= 1 && rows >= 1) {
+      lastSize.cols = cols;
+      lastSize.rows = rows;
+    }
     if (begun) return;
     begun = true;
+    if (box) boxOpened(box.id);
     engine.openAt(cols, rows);
     void engine.start();
   };
-  const tab: Tab = { id, view, engine, begin, origin, box, place };
+  // A new session: a new engine, aimed at the same box and place, opened at the size the view has now.
+  // The view keeps everything it has drawn, and is told plainly that this is a new session.
+  let againTimer: NodeJS.Timeout | null = null;
+  const stopReopen = (): void => {
+    if (againTimer) clearTimeout(againTimer);
+    againTimer = null;
+    tab.againAt = 0;
+    if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
+    tellShell();
+  };
+  const reopen = (now: boolean): void => {
+    if (!box || tabs.get(id) !== tab) return;
+    const wait = now ? waitForBox(box.id) : Math.max(AGAIN_AFTER_MS, waitForBox(box.id));
+    if (againTimer) clearTimeout(againTimer);
+    tab.againAt = Date.now() + wait;
+    if (wait > 0) {
+      againTimer = setTimeout(() => reopen(true), wait);
+      againTimer.unref();
+      sendTo(view, CH.tabState, info(tab));
+      tellShell();
+      return;
+    }
+    againTimer = null;
+    tab.againAt = 0;
+    tab.engine.close();
+    boxOpened(box.id);
+    engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, structuredClone(aim));
+    tab.engine = engine;
+    engine.openAt(lastSize.cols, lastSize.rows);
+    sendTo(view, CH.tabAgain, null);
+    void engine.start();
+    sendTo(view, CH.tabState, info(tab));
+    tellShell();
+  };
+  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
@@ -358,6 +432,7 @@ function closeTab(id: number): void {
   tab.view.webContents.close();
   meter.forget(id);
   frontTold.delete(id);
+  tab.stopReopen();
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
   layout();
   tellShell();
@@ -391,6 +466,14 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
 
 // Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window
 // that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
+// A new session, asked for by the tab (the picture's Reconnect, Now and Cancel; R while a bar is showing).
+ipcMain.on(CH.tabReopen, (e, now: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof now !== 'boolean' || !tab.box) return drop('tab:reopen', e);
+  if (now) tab.reopen(true);
+  else tab.stopReopen();
+});
+
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof text !== 'string' || text.length === 0 || text.length > COPY_MAX) return drop('tab:copy', e);

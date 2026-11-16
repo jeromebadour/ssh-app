@@ -158,7 +158,8 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   return {
     ready,
     write: (bytes, done) => term.write(bytes, done),
-    note: (text) => term.write(`\x1b[2m${inert(text).replace(/[\r\n\t]+/g, ' ')}\x1b[0m\r\n`),
+    // A line of Berth's own always starts a line of its own: a box's output rarely ends at a line's end.
+    note: (text) => term.write(`${term.buffer.active.cursorX > 0 ? '\r\n' : ''}\x1b[2m${inert(text).replace(/[\r\n\t]+/g, ' ')}\x1b[0m\r\n`),
     words: (text) => term.write(inert(text)),
     size: () => ({ cols: term.cols, rows: term.rows }),
     fit,

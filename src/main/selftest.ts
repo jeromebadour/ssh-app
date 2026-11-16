@@ -196,12 +196,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     const PASSWORD = 'berth-lab-canary-7f3a91 password';
     const phase = () => ctx.gate.state.phase;
     const sh = ctx.shell.webContents;
-    const at = (sel: string) => js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
-    const clickOn = async (sel: string) => {
-      const p = await at(sel);
+    const at = (sel: string, on: Tab | null = null) => js<{ x: number; y: number } | null>(on ? on.view : ctx.shell, `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    const clickOn = async (sel: string, on: Tab | null = null) => {
+      const p = await at(sel, on);
       if (!p) return false;
-      sh.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
-      sh.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      // A tab's view draws where it sits in the window, but is clicked in its own, so the point is its own.
+      const w = on ? on.view.webContents : sh;
+      w.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      w.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
       await sleep(60);
       return true;
     };
@@ -215,8 +217,8 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       sh.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
       await sleep(60);
     };
-    const text = (sel: string) => js<string>(ctx.shell, `document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
-    const has = (sel: string) => js<boolean>(ctx.shell, `!!document.querySelector(${JSON.stringify(sel)})`);
+    const text = (sel: string, on: Tab | null = null) => js<string>(on ? on.view : ctx.shell, `document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
+    const has = (sel: string, on: Tab | null = null) => js<boolean>(on ? on.view : ctx.shell, `!!document.querySelector(${JSON.stringify(sel)})`);
     // Every file under the lab's folders: none may hold the password.
     const filesHolding = async (needle: string): Promise<string[]> => {
       const found: string[] = [];
@@ -341,8 +343,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const shots = process.env['SSHAPP_PICTURES'] ?? '';
       const commit = process.env['SSHAPP_PICTURE_COMMIT'] ?? '';
       const size = ctx.win.getContentBounds();
-      const shot = async (name: string, what: string) => {
+      const shot = async (name: string, what: string, bring: Tab | null = null) => {
         if (!shots) return;
+        if (bring && ctx.shellState().active !== bring.id) {
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${bring.id} })`);
+          await sleep(200);
+        }
         await sleep(350);
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
         const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
@@ -435,6 +441,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t1 = [...ctx.tabs.values()][0]!;
         await until(() => t1.engine.link.phase === 'ended', 20_000);
         check('the key is not on the box yet: the tab says the sign-in failed', t1.engine.link.cause === 'sign-in-failed' && (await text(`[data-tab="${t1.id}"]`)).includes('lab-box'), t1.engine.link);
+        // A refused key is a stop, not a hiccup: Berth never opens a new session by itself after one, nor
+        // after a box shows another identity. Trying again would only be refused again, or asked of a box
+        // that may not be the box (plan A3 decision 6).
+        const pidAfterRefusal = t1.engine.pid;
+        await sleep(1200);
+        check('and no new session is opened after a refused key, by itself or on a count', t1.againAt === 0 && t1.engine.pid === pidAfterRefusal && t1.engine.link.cause === 'sign-in-failed' && !(await text('#bar', t1)).includes('A new session opens'), [t1.againAt, t1.engine.pid === pidAfterRefusal, await text('#bar', t1)]);
         ctx.closeTab(t1.id);
         await lab.tell(`accept ${ctx.boxes.list[0]!.publicKey}`);
 
@@ -448,13 +460,88 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        const open1 = [...ctx.tabs.values()].find((x) => x.place === 'logs')!;
         {
-          const front = [...ctx.tabs.values()].find((t) => t.place === 'logs')!;
+          const front = open1;
           const worn = await dress(front);
           check('the tab\'s page is whole: stylesheets, typeface, the terminal\'s own text field out of sight', dressed(worn), worn);
           await js<void>(front.view, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))`);
         }
         await shot('tab-open', 'a tab open on a box');
+
+        // ---- Where a link stands, as the four approved pictures show it. ----
+        // A tab opening: the box takes the connection, agrees keys, and then answers nothing, so the stages
+        // stand still at "signing in" and can be seen and pictured.
+        await lab.tell('stall on');
+        const slowTab = ctx.openTab(id, 'logs')!;
+        const sawStages = await until(() => slowTab.engine.link.phase === 'signing-in', 20_000);
+        await sleep(250);
+        const rows = await js<string[]>(slowTab.view, `[...document.querySelectorAll('.opening li')].map((l) => l.dataset.mark + '|' + l.textContent)`);
+        const stages = await text('.opening', slowTab);
+        check('a tab opening lists its stages: connected, identity, keys, signing in, shell', sawStages && stages.includes(`Connected to ${addr}`) && stages.includes('Identity matches the one pinned for lab-box') && stages.includes('Keys agreed, post-quantum') && stages.includes('Signing in as demo with Berth') && stages.includes('Shell in /var/log'), stages.slice(0, 300));
+        // Each stage says where it stands: what is done, what is happening now, what has not begun.
+        check('each stage says where it stands: done, now, or not begun', JSON.stringify(rows.map((r) => r.split('|')[0])) === JSON.stringify(['done', 'done', 'done', 'now', 'waiting']), rows);
+        check('what is done carries what it found: how long the connection took, and this box\'s own pinned kind of identity', /^done\|Connected to .*\d+ ms$/.test(rows[0] ?? '') && (rows[1] ?? '').endsWith('ED25519'), rows.slice(0, 2));
+        // What it says of the link is the link's own. Said plainly: the key exchange and cipher are named once
+        // the link is up, not while signing in: the library tells what was agreed only when it hands the link
+        // over, a fraction of a second later. The approved picture shows them beside "Keys agreed"; on a box
+        // that answers they are there before anyone can read the line, and only a stalled box shows it bare.
+        check('the bar marks the tab whose view is in front, and only that one', (await js<string>(ctx.shell, `[...document.querySelectorAll('[data-tab]')].filter((e) => e.getAttribute('aria-selected') === 'true').map((e) => e.dataset.tab).join(',')`)) === String(ctx.shellState().active), [await js<string>(ctx.shell, `[...document.querySelectorAll('[data-tab]')].map((e) => e.dataset.tab + ':' + e.getAttribute('aria-selected')).join(' ')`), ctx.shellState().active]);
+        await shot('tab-opening', 'a tab opening: the stages', slowTab);
+        await lab.tell('stall off');
+        ctx.closeTab(slowTab.id);
+
+        // A link that goes silent: the bar says so with the seconds counting, the link is kept, and when the
+        // box speaks again the same shell is there, with what it printed meanwhile.
+        const marker = 'still-the-same-shell-' + String(Date.now()).slice(-5);
+        await type(open1, `echo ${marker}\n`);
+        await until(async () => (await shown(open1)).includes(marker), 5000);
+        // A few lines of a job's output, so the pictures show a terminal with something in it, and the bars
+        // can be judged where they really lie: over the first rows of what the box printed.
+        const job = [
+          '\u001b[2m2026-11-16 08:41:02\u001b[0m check    on main, all green',
+          '\u001b[2m2026-11-16 08:41:06\u001b[0m build    image ledger:4f2c1a9',
+          '  => [build 4/9] RUN npm ci --ignore-scripts            21.4s',
+          '  => [build 6/9] RUN npm run build                      38.9s',
+          '  => exporting layers                                    2.2s',
+          '\u001b[32m2026-11-16 08:42:07\u001b[0m migrate  041_invoice_batches.sql applied (1 of 1)\u001b[0m',
+          '\u001b[2m2026-11-16 08:42:09\u001b[0m swap     ledger-app-2 started, waiting for health',
+          '          health 1/10  503 starting',
+          '          health 2/10  503 starting',
+          '\u001b[32m          health 3/10  200 ok\u001b[0m',
+          '\u001b[2m2026-11-16 08:42:38\u001b[0m swap     routing to ledger-app-2',
+          '\u001b[2m2026-11-16 08:42:39\u001b[0m check    public site answers 200 in 212 ms',
+          '\u001b[2m2026-11-16 08:42:40\u001b[0m tools    collector, backup, restore test: timers installed',
+          '                   stopping ledger-app-1 (30 s grace)',
+        ].join('\r\n') + '\r\n';
+        await lab.tell(`print ${Buffer.from(job, 'latin1').toString('hex')}`);
+        await until(async () => (await shown(open1)).includes('stopping ledger-app-1'), 5000);
+        await lab.tell('hold 9000');
+        const sawQuiet = await until(async () => (await text('#bar', open1)).includes('No answer for'), 20_000);
+        const quietSaid = await text('#bar', open1);
+        check('a link that goes silent: the bar counts the seconds and says the link is kept', sawQuiet && /No answer for [1-9]\d? s\./.test(quietSaid) && quietSaid.includes('The link is kept') && quietSaid.includes('Reconnect'), quietSaid);
+        check('and the terminal is still readable, with everything the box printed before the silence', (await shown(open1)).includes(marker) && (await shown(open1)).includes('stopping ledger-app-1'), '');
+        await shot('tab-quiet', 'no answer: the link is kept', open1);
+        const backOk = await until(() => open1.engine.link.phase === 'up' && open1.engine.link.silentSinceMs === 0, 30_000);
+        await type(open1, `echo after-${marker}\n`);
+        check('when the box speaks again the bar is gone, the same session answers, and nothing was reconnected', backOk && (await until(async () => (await shown(open1)).includes(`after-${marker}`), 5000)) && !(await has('#bar', open1)) && open1.engine.link.phase === 'up', [open1.engine.link.phase, await text('#bar', open1)]);
+
+        // A link that is gone: the box's connection is reset. The bar says the cause and the time, a new
+        // session is counted down, and Cancel stops it.
+        const engineBefore = open1.engine.pid;
+        await lab.tell('reset');
+        const sawGone = await until(async () => (await text('#bar', open1)).includes('The link is gone'), 20_000);
+        const goneSaid = await text('#bar', open1);
+        check('a link that is gone: the bar says the cause, the time, and when a new session opens', sawGone && goneSaid.includes('the connection was reset at') && /A new session opens in \d+ s/.test(goneSaid) && goneSaid.includes('Cancel'), goneSaid);
+        await shot('tab-gone', 'the link gone: a new session is coming', open1);
+        await clickOn('#cancel', open1);
+        check('Cancel stops it: no new session opens, and the tab keeps everything it drew', (await until(async () => !(await text('#bar', open1)).includes('A new session opens'), 3000)) && open1.engine.pid === engineBefore && (await shown(open1)).includes(marker), [await text('#bar', open1), open1.engine.pid === engineBefore]);
+        // Reconnect: a new session, a new engine, said in the terminal; the old output is still there.
+        await clickOn('#reconnect', open1);
+        const again = await until(() => open1.engine.pid !== engineBefore && open1.engine.link.phase === 'up', 30_000);
+        await type(open1, 'echo new-session-ok\n');
+        check('Reconnect opens a new session on the same box and place: a new engine, said in the terminal, the old output kept', again && (await until(async () => (await shown(open1)).includes('new-session-ok'), 5000)) && (await shown(open1)).includes('Berth: a new session on lab-box') && (await shown(open1)).includes(marker), [again, (await shown(open1)).slice(-200)]);
+        await shot('tab-again', 'a new session on the same box', open1);
 
         // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
         for (let i = 0; i < 6; i++) ctx.openTab(id, i % 2 ? 'logs' : '');
@@ -509,6 +596,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         ctx.openTab(id, '');
         check('a box showing another identity: the tab stops and the dialog says so, with both fingerprints', (await until(() => has('#changed'), 20_000)) && (await text('#changed')).includes(ctx.boxes.list[0]!.pinFingerprint) && (await until(shellOnTop, 1000)), [await has('#changed'), await text('#changed'), shellOnTop(), ctx.shellState().tabs.map((t) => [t.link.phase, t.link.cause]), ctx.shellState().check?.boxId ?? '', ctx.boxes.list.map((b) => [b.name, b.pinFingerprint])]);
         await shot('changed', 'a box whose identity changed');
+        {
+          const stopped = [...ctx.tabs.values()].find((x) => x.engine.link.cause === 'identity-changed');
+          const pidThen = stopped?.engine.pid;
+          await sleep(1200);
+          check('and no new session is opened after a changed identity either', !!stopped && stopped.againAt === 0 && stopped.engine.pid === pidThen, [stopped?.againAt, stopped?.engine.pid === pidThen]);
+        }
         await clickOn('#changed-close');
         check('Close: the dialog goes, the tab stays, marked stopped', (await until(async () => !(await has('#changed')), 2000)) && (await js<string>(ctx.shell, `document.querySelector('[data-tab]')?.dataset.state ?? ''`)) === 'stopped', '');
         lab.end();
@@ -789,7 +882,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onBanner,onOutput,onPace,onShown,onState,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onAgain,onBanner,onOutput,onPace,onShown,onState,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -929,16 +1022,21 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       clearInterval(watching);
       check('a tab on the box: the link comes up, signed in by the key process', up && t.engine.signAsked >= 1 && t.engine.signRefused === 0 && ctx.signsRefused() === 0, [t.engine.link, phases, t.engine.signAsked, t.engine.signRefused, ctx.signsRefused()]);
       check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
-      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs' }), ctx.shellState().tabs);
+      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs', addr, user: 'demo', folder: "/var/log/it's here", pinType: 'ED25519' }), ctx.shellState().tabs);
       await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
-      // The box's sign-in text holds a question, a clipboard write and a colour: it is drawn as words on its
-      // own lines, each control character as its picture, and the box's shell is given nothing because of it.
+      // What the box said at sign-in is folded into one line, with the real notice in it lifted onto that
+      // line; nothing of it is drawn in the terminal until the line is opened.
+      const foldSaid = await until(async () => (await js<string>(t.view, `document.getElementById('signin')?.textContent ?? ''`)) !== '', 5000) ? await js<string>(t.view, `document.getElementById('signin').textContent`) : '';
+      check('what the box said at sign-in is one folded line, with its notice lifted onto it, and none of it drawn yet', foldSaid.includes('lab-box said 3 lines at sign-in') && foldSaid.includes('System restart required') && !(await shown(t)).includes('Welcome to the lab box'), [foldSaid, (await shown(t)).slice(0, 80)]);
+      // Opened: it is drawn as words on its own lines, each control character as its picture, and the box's
+      // shell is given nothing because of it.
       const PIC = (c: number) => String.fromCodePoint(0x2400 + c); // a control character's picture
+      await js(t.view, `document.getElementById('signin').click()`);
       await until(async () => (await shown(t)).includes('second line'), 5000);
       await sleep(200);
       const signInText = (await shown(t)).split('\n').slice(0, 2);
       const becauseOfIt = Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
-      check('the box\'s sign-in text is drawn as words, line by line, its control characters as pictures; nothing in it is obeyed or answered', signInText[0] === 'Welcome to the lab box' && signInText[1] === `${PIC(0x1b)}[c${PIC(0x1b)}]52;c;aGlkZGVu${PIC(7)}${PIC(0x1b)}[31msecond line` && becauseOfIt === '', [signInText, JSON.stringify(becauseOfIt)]);
+      check('opened, it is drawn as words, line by line, its control characters as pictures; nothing in it is obeyed or answered', signInText[0] === 'Welcome to the lab box' && signInText[1] === `${PIC(0x1b)}[c${PIC(0x1b)}]52;c;aGlkZGVu${PIC(7)}${PIC(0x1b)}[31msecond line` && becauseOfIt === '', [signInText, JSON.stringify(becauseOfIt)]);
       await type(t, 'typed-into-the-box-5b2');
       check('typed bytes reach the box\'s shell and its output comes back to this tab', await until(async () => (await shown(t)).includes('typed-into-the-box-5b2'), 5000), await shown(t));
       check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
