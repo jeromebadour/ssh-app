@@ -10,6 +10,8 @@ export const CH = {
   shellCmd: 'shell:cmd', // shell view to main: new, select or close a tab
   shellState: 'shell:state', // main to shell view: the tabs and their states
   tabShown: 'tab:shown', // main to tab view: you were just brought to the front, or put behind another tab
+  tabAgain: 'tab:again', // main to tab view: this is a new session on the same box, from here on
+  tabReopen: 'tab:reopen', // tab view to main: open a new session now, or stop the one that is coming
   tabPace: 'tab:pace', // main to tab view: the share of its time a tab behind may spend on output (1: all of it)
   tabBanner: 'tab:banner', // main to tab view: the box's sign-in text, for the terminal only
   tabTaken: 'tab:taken', // tab view to main: output bytes taken in all (a number)
@@ -83,10 +85,15 @@ export interface TabBox {
   name: string;
   colour: number;
   place: string;
+  addr: string; // host:port, for the tab to say what it connected to
+  user: string;
+  folder: string; // the place's folder, or the box's starting folder
+  pinType: string; // 'ED25519' or 'RSA': the kind of identity pinned for this box
 }
 
 export interface TabInfo {
   id: number;
+  againAt: number; // when a new session opens by itself (ms since the epoch); 0 when none is coming
   state: EngineState;
   cause: string; // why it is gone, in plain words; empty otherwise
   box: TabBox | null;
@@ -178,6 +185,8 @@ export interface TabPort {
   onState(cb: (info: TabInfo) => void): void;
   onShown(cb: (front: boolean) => void): void; // brought to the front, or put behind another tab
   onPace(cb: (share: number) => void): void; // how much of its time a tab behind may spend on output
+  onAgain(cb: () => void): void; // a new session has begun on the same box
+  reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   resize(cols: number, rows: number): void;
   copy(text: string): void; // selected text, offered for the clipboard: taken only from the tab in front of an active window

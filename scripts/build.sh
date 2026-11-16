@@ -29,7 +29,7 @@ esb() { node_modules/.bin/esbuild "$@" --bundle --log-level=warning --legal-comm
 esb src/main/main.ts      --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/main.js
 esb src/tab/preload.ts    --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-tab.js
 esb src/shell/preload.ts  --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-shell.js
-esb src/tab/tab.ts        --platform=browser --format=iife --target=chrome156 --outfile=dist/tab/tab.js
+esb src/tab/tab.ts        --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/tab/tab.js
 esb src/shell/shell.tsx   --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/shell/shell.js
 cp src/tab/index.html src/tab/tab.css node_modules/@xterm/xterm/css/xterm.css dist/tab/
 cp src/shell/index.html dist/shell/

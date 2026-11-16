@@ -3,6 +3,7 @@
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
+import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
 import { watchView } from '../common/meter-view';
@@ -132,7 +133,7 @@ function statusWords(t: TabInfo): string {
     if (l.silentSinceMs > 0) return `no answer for ${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s, the link is kept`;
     return `${l.rttMs >= 0 ? `round trip ${l.rttMs} ms` : 'connected'}${l.postQuantum ? ', post-quantum' : ''}`;
   }
-  if (l.phase === 'ended') return `ended: ${l.cause.replace(/-/g, ' ')}`;
+  if (l.phase === 'ended') return ending(l.cause).short;
   return tabLook(t).words;
 }
 

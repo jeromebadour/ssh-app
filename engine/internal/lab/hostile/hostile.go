@@ -47,6 +47,7 @@ type Box struct {
 	accept ssh.PublicKey // set by Accept: the key let in from then on
 	live   []*out        // the sessions that are open now: each one's way out
 	quiet  bool          // Quiet: the shells send nothing back by themselves
+	stall  bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
 	got    []byte        // every byte the shells were given since the last Received
 	flood  atomic.Int64  // Flood: bytes the sessions took, in all
 }
@@ -63,6 +64,49 @@ func (o *out) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.ch.Write(p)
+}
+
+// Hold makes every connection go silent for a while, both ways, with both ends still connected: what is sent
+// to it is not read and nothing comes back, and when the hold is over everything that was waiting goes
+// through, in order, nothing lost. That is a network that stopped carrying, the case this app exists for.
+func (b *Box) Hold(d time.Duration) int {
+	b.mu.Lock()
+	conns := append([]net.Conn(nil), b.conns...)
+	b.mu.Unlock()
+	held := 0
+	for _, c := range conns {
+		if h, ok := c.(*heldConn); ok {
+			h.hold(d)
+			held++
+		}
+	}
+	return held
+}
+
+// Reset ends every connection the way a network does when it drops the other end: a real reset, not a polite
+// goodbye. Both are endings, and a client must tell them apart.
+func (b *Box) Reset() int {
+	b.mu.Lock()
+	conns := append([]net.Conn(nil), b.conns...)
+	b.conns = nil
+	b.mu.Unlock()
+	for _, c := range conns {
+		if h, ok := c.(*heldConn); ok {
+			if tcp, ok := h.Conn.(*net.TCPConn); ok {
+				_ = tcp.SetLinger(0)
+			}
+		}
+		_ = c.Close()
+	}
+	return len(conns)
+}
+
+// Stall makes sign-ins go unanswered from now on (true), or answered again (false), as a box whose disk has
+// stopped: the connection is up, the key exchange is done, and nothing comes back.
+func (b *Box) Stall(on bool) {
+	b.mu.Lock()
+	b.stall = on
+	b.mu.Unlock()
 }
 
 // Quiet makes the shells stop sending back what they are given (true), or do so again (false).
@@ -278,6 +322,43 @@ func (b *Box) session(nc ssh.NewChannel) {
 	}
 }
 
+// heldConn is a connection that can be made to go silent for a while: reads and writes wait, and nothing is
+// lost or reordered. The operating system's own buffers hold what the other end sends meanwhile, as they do
+// when a network stops carrying.
+type heldConn struct {
+	net.Conn
+	mu    sync.Mutex
+	until time.Time
+}
+
+func (h *heldConn) hold(d time.Duration) {
+	h.mu.Lock()
+	h.until = time.Now().Add(d)
+	h.mu.Unlock()
+}
+
+func (h *heldConn) wait() {
+	for {
+		h.mu.Lock()
+		left := time.Until(h.until)
+		h.mu.Unlock()
+		if left <= 0 {
+			return
+		}
+		time.Sleep(min(left, 25*time.Millisecond))
+	}
+}
+
+func (h *heldConn) Read(p []byte) (int, error) {
+	h.wait()
+	return h.Conn.Read(p)
+}
+
+func (h *heldConn) Write(p []byte) (int, error) {
+	h.wait()
+	return h.Conn.Write(p)
+}
+
 // Start runs a server on a free local port.
 func Start(cfg Config) (*Box, error) {
 	if cfg.HostSigner == nil {
@@ -301,10 +382,11 @@ func Start(cfg Config) (*Box, error) {
 				return
 			}
 			b.mu.Lock()
-			b.conns = append(b.conns, c)
+			held := &heldConn{Conn: c}
+			b.conns = append(b.conns, net.Conn(held))
 			b.mu.Unlock()
 			b.wg.Add(1)
-			go func() { defer b.wg.Done(); b.serve(c, cfg) }()
+			go func() { defer b.wg.Done(); b.serve(held, cfg) }()
 		}
 	}()
 	return b, nil
@@ -341,7 +423,10 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 			b.mu.Unlock()
 		},
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if cfg.StallSignIn {
+			b.mu.Lock()
+			stall := cfg.StallSignIn || b.stall
+			b.mu.Unlock()
+			if stall {
 				<-b.closed
 			}
 			b.mu.Lock()
