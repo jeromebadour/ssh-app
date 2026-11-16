@@ -27,6 +27,10 @@ export const CH = {
   gateCreate: 'gate:create', // shell view to main: the first password (Uint8Array), to make the list
   gateUnlock: 'gate:unlock', // shell view to main: the password (Uint8Array)
   gatePickBackup: 'gate:pick-backup', // shell view to main: open the system's folder chooser for the backup folder
+  gatePickRestore: 'gate:pick-restore', // shell view to main: open the system's file chooser for a backup to restore
+  gateUsePrevious: 'gate:use-previous', // shell view to main: restore from the copy saved before this one
+  gateForgetRestore: 'gate:forget-restore', // shell view to main: put the chosen backup aside and choose again
+  gateRestore: 'gate:restore', // shell view to main: the chosen backup's password (Uint8Array)
 } as const;
 
 // A password is at least this many characters (counted as the key process counts them) and at most this many bytes.
@@ -50,6 +54,7 @@ export interface GateState {
   backupOk: boolean; // create: that folder can be written to
   detail: string;
   hasPrevious: boolean; // damaged: the copy saved before this one is there
+  restoreFrom: string; // damaged: the backup chosen to be opened, as main knows it; '' until one is chosen
 }
 
 export const INPUT_MAX = 64 * 1024;
@@ -243,6 +248,10 @@ export interface ShellPort {
   gateCreate(password: Uint8Array): void;
   gateUnlock(password: Uint8Array): void;
   gatePickBackup(): void;
+  gatePickRestore(): void;
+  gateUsePrevious(): void;
+  gateRestore(password: Uint8Array): void;
+  gateForgetRestore(): void;
   meter(n: ViewNumbers): void;
   frame(): void;
 }

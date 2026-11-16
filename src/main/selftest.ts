@@ -303,6 +303,58 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);
+    } else if (ctx.mode === 'gate-restore') {
+      // A list that cannot be read, and the way back: the copy saved beside it. The list was damaged by the
+      // smoke run before this start, so this is the real screen the real fault brings up.
+      // The damage is in the sealed contents, so it is found when the password is tried, not before: the lock
+      // asks as it always does, and only then can it tell a damaged list from a wrong password.
+      check('a start on a damaged list asks for the password as usual', phase() === 'locked' && (await until(() => has('#gate-unlock'), 10_000)), phase());
+      await clickOn('#pw');
+      await typeKeys(PASSWORD);
+      await pressEnter();
+      check('the right password on a damaged list: it is called damaged, not wrong, and no wait is started', (await until(() => phase() === 'damaged', 30_000)) && !ctx.gate.state.wrong && ctx.gate.view().waitMs === 0, [phase(), ctx.gate.state.wrong, ctx.gate.view().waitMs]);
+      check('a damaged list: the lock says so, asks for no password, and offers the ways back', (await until(() => has('#gate-damaged'), 5000)) && !(await has('#pw')) && (await has('#gate-previous')) && (await has('#gate-pick-restore')) && ctx.gate.state.hasPrevious, [phase(), ctx.gate.state.detail]);
+      check('and it says which fault it is, in words, and that nothing was changed', (await text('#gate-damaged-said')).includes('damaged or was altered') && (await text('#gate-damaged-said')).includes('It was not changed'), await text('#gate-damaged-said'));
+      const shots = process.env['SSHAPP_PICTURES'] ?? '';
+      if (shots) {
+        await js<string>(ctx.shell, `document.fonts.ready.then(() => 'ok')`);
+        await sleep(400);
+        const size = ctx.win.getContentBounds();
+        const made = await takePicture({ win: ctx.win, views: [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-list-damaged.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   a list that cannot be read, and the ways back   |   commit ${process.env['SSHAPP_PICTURE_COMMIT'] ?? ''}`, dist: ctx.dist, harden: ctx.harden });
+        check('a picture: a list that cannot be read', made.width > 0, made);
+      }
+      // A view may type a password; it may not say which file to open. The file is main's own, from the
+      // system's chooser or the copy beside the list (plan B2.7).
+      const beforeTry = { detail: ctx.gate.state.detail, dropped: ctx.dropped() };
+      await js(ctx.shell, `window.shellPort.gateRestore(new TextEncoder().encode('anything at all'))`);
+      await sleep(300);
+      check('a view cannot open a backup main did not choose: the message is dropped, nothing is tried, nothing is said', phase() === 'damaged' && !ctx.gate.unlocked && ctx.gate.state.restoreFrom === '' && ctx.gate.state.detail === beforeTry.detail && !ctx.gate.state.wrong && ctx.dropped() === beforeTry.dropped + 1, [phase(), ctx.gate.state.detail, ctx.gate.state.wrong, ctx.dropped() - beforeTry.dropped]);
+      await clickOn('#gate-previous');
+      check('the copy saved before this one can be chosen, and it is named without a path', (await until(() => ctx.gate.state.restoreFrom !== '', 3000)) && (await text('#gate-restore-from')).includes('The copy saved before this one') && (await has('#pw-restore')), [ctx.gate.state.restoreFrom, await text('#gate-restore-from')]);
+      await clickOn('#pw-restore');
+      await typeKeys('not the password');
+      await clickOn('#gate-restore');
+      check('a wrong password for the backup is said, and the list is still not open', (await until(() => ctx.gate.state.wrong && phase() === 'damaged', 30_000)) && !ctx.gate.unlocked, [phase(), ctx.gate.state.wrong]);
+      // And the wait that comes with it is said on the button, as on the unlock screen: a press inside the
+      // wait must never be a press that quietly did nothing.
+      check('the wait is counted down on the button', ctx.gate.view().waitMs > 0 && (await until(async () => (await text('#gate-restore')).includes('Wait'), 3000)), [ctx.gate.view().waitMs, await text('#gate-restore')]);
+      // The screen holds the button back during the wait; main holds the wait itself, so a view that asks
+      // anyway is not looked at either. A try that was looked at would come back wrong and double the wait.
+      const waiting = ctx.gate.view().waitMs;
+      await js(ctx.shell, `window.shellPort.gateRestore(new TextEncoder().encode('guessing inside the wait'))`);
+      await sleep(250);
+      check('a password sent inside the wait is not looked at, and does not lengthen the wait', phase() === 'damaged' && ctx.gate.view().waitMs > 0 && ctx.gate.view().waitMs <= waiting, [waiting, ctx.gate.view().waitMs, phase()]);
+      await until(() => ctx.gate.view().waitMs === 0, 40_000);
+      await js(ctx.shell, `(() => { const f = document.querySelector('#pw-restore'); f.focus(); f.select(); })()`);
+      await typeKeys(PASSWORD);
+      const typed = await js<number>(ctx.shell, `document.querySelector('#pw-restore').value.length`);
+      check('the password is typed into the field, not somewhere else', typed === PASSWORD.length, [typed, PASSWORD.length]);
+      await pressEnter();
+      check('the right password opens the backup, and it becomes the list', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
+      check('and the boxes are back, each with its own key', await until(() => ctx.boxes.loaded && ctx.boxes.fault === '' && ctx.boxes.list.length > 0, 5000), [ctx.boxes.fault, ctx.boxes.list.map((b) => b.name)]);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
     } else if (ctx.mode === 'gate-shot') {
       // A picture of the lock as it is, for comparing with the approved one. SSHAPP_GATE_TYPED fills its fields.
       const typed = process.env['SSHAPP_GATE_TYPED'] ?? '';
@@ -1011,7 +1063,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

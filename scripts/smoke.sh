@@ -154,6 +154,14 @@ case "$mode" in
     [ -s "$prof/profile/list.berth" ] && [ -s "$prof/backups/Berth list backup.berth" ] || fail "the list or its backup is missing after two starts"
     say "nothing in the profile holds the password; the list and its backup are there"
 
+    # A list that cannot be read, and the way back from it. One byte of the sealed contents is changed here,
+    # from outside the app, as a half-written file or a failing disk would: the seal then refuses it, and the
+    # copy saved beside it is what opens.
+    [ -s "$prof/profile/list.berth.previous" ] || fail "no copy was saved beside the list, so there is nothing to restore from"
+    mkdir -p "$work/pictures" && chmod 777 "$work/pictures"
+    printf '\xff' | dd of="$prof/profile/list.berth" bs=1 seek=200 conv=notrunc status=none
+    selftest_mode=gate-restore selftest_profile="$prof" selftest_pictures="$work/pictures" selftest "$log" "$pkg/Berth" --lab
+
     # Children end with their parent: main is ended by force, and its engines must be gone within five seconds.
     ( start 60 "$log" SSHAPP_SELFTEST=hold -- "$pkg/Berth" --lab >/dev/null ) &
     holder=$!

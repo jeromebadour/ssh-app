@@ -9,7 +9,7 @@ import { AddBoxDialog, ChangedDialog, CheckDialog, RemoveBoxDialog } from '../ui
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
-import { CreateScreen, GateNotice, UnlockScreen } from '../ui/gate';
+import { CreateScreen, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
 import { Mark } from '../ui/marks';
 
@@ -23,7 +23,7 @@ const port = window.shellPort;
 
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
-let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false };
+let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
 let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
@@ -34,7 +34,15 @@ port.onState((s) => {
   shellNow = s;
   redraw();
 });
-const act = { create: (p: Uint8Array) => port.gateCreate(p), unlock: (p: Uint8Array) => port.gateUnlock(p), pickBackup: () => port.gatePickBackup() };
+const act = {
+  create: (p: Uint8Array) => port.gateCreate(p),
+  unlock: (p: Uint8Array) => port.gateUnlock(p),
+  pickBackup: () => port.gatePickBackup(),
+  pickRestore: () => port.gatePickRestore(),
+  usePrevious: () => port.gateUsePrevious(),
+  forgetRestore: () => port.gateForgetRestore(),
+  restore: (p: Uint8Array) => port.gateRestore(p),
+};
 
 // What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
 // the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
@@ -182,16 +190,18 @@ function App() {
   const gate = gateNow;
   const shell = shellNow;
   // "working" keeps the screen the password was typed on, with its button saying so.
-  const [screen, setScreen] = useState<'create' | 'unlock' | 'notice'>('notice');
+  const [screen, setScreen] = useState<'create' | 'unlock' | 'damaged' | 'notice'>('notice');
   useEffect(() => {
     if (gate.phase === 'create') setScreen('create');
     else if (gate.phase === 'locked') setScreen('unlock');
+    else if (gate.phase === 'damaged') setScreen('damaged');
     else if (gate.phase !== 'working') setScreen('notice');
   }, [gate.phase]);
   document.documentElement.dataset['gate'] = gate.phase;
   if (gate.phase === 'unlocked') return <Unlocked s={shell} />;
   if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <CreateScreen gate={gate} act={act} />;
   if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <UnlockScreen gate={gate} act={act} />;
+  if (screen === 'damaged' && (gate.phase === 'damaged' || gate.phase === 'working')) return <RestoreScreen gate={gate} act={act} />;
   return <GateNotice gate={gate} />;
 }
 

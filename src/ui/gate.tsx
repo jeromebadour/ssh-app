@@ -14,6 +14,10 @@ export interface GateActions {
   create(password: Uint8Array): void;
   unlock(password: Uint8Array): void;
   pickBackup(): void;
+  pickRestore(): void;
+  usePrevious(): void;
+  forgetRestore(): void;
+  restore(password: Uint8Array): void;
 }
 
 const chars = (s: string) => [...s].length;
@@ -138,6 +142,82 @@ export function UnlockScreen(props: { gate: GateState; act: GateActions; demo?: 
           {working ? <><span class="wait-ring" />Unlocking</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : <><Glyph name="lock" />Unlock</>}
         </button>
         <p class="gate-saved">{g.wrong ? 'Each wrong try doubles the wait, up to 30 s.' : ''}</p>
+      </div>
+    </div>
+  );
+}
+
+// A list that cannot be read, and the ways back from it: the copy saved beside it, or any backup. Berth never
+// opens one by itself and never overwrites the damaged file: a backup is opened with its own password, and
+// only once it opens does it become the list. The file is chosen through the system's own chooser, in main;
+// this screen never names a file.
+export function RestoreScreen(props: { gate: GateState; act: GateActions; demo?: string }) {
+  const [pw, setPw] = useState(props.demo ?? '');
+  const [left, setLeft] = useState(0); // seconds until the next try is looked at
+  const field = useRef<HTMLInputElement>(null);
+  const typing = useTyping();
+  const g = props.gate;
+  const chosen = g.restoreFrom !== '';
+  useEffect(() => {
+    if (chosen) field.current?.focus();
+  }, [chosen]);
+  // A wrong password makes the next try wait, here as on the unlock screen: the button says how long, so a
+  // press inside the wait is never a press that quietly did nothing.
+  useEffect(() => {
+    const until = Date.now() + g.waitMs;
+    const tick = () => setLeft(Math.max(0, Math.ceil((until - Date.now()) / 1000)));
+    tick();
+    if (g.waitMs <= 0) return;
+    const t = setInterval(tick, 250);
+    return () => clearInterval(t);
+  }, [g]);
+  const words: Record<string, string> = {
+    damaged: 'The list on this PC is damaged or was altered.',
+    'not-a-list': 'The file where the list should be is not a Berth list.',
+    'newer-version': 'The list was made by a newer version of Berth.',
+    'cost-out-of-range': 'The list asks for a cost outside what Berth accepts.',
+  };
+  const submit = () => {
+    if (!chosen || pw.length === 0 || left > 0 || g.phase === 'working') return;
+    props.act.restore(bytes(pw));
+    setPw('');
+  };
+  const name = g.restoreFrom.split(/[\\/]/).pop() ?? g.restoreFrom;
+  const beside = /\.previous$/.test(g.restoreFrom);
+  return (
+    <div class="gate" id="gate-damaged">
+      <div class="gate-card narrow">
+        <div class="gate-brand big"><Mark /><span class="wordmark">Berth</span></div>
+        <span class="check check-fix gate-wrap" id="gate-damaged-said"><Glyph name="fix" />{words[g.detail] ?? words['damaged']} It was not changed.</span>
+        {!chosen ? (
+          <>
+            <span class="check check-hint gate-wrap">A backup opens with its own password and becomes the list. Berth keeps a copy beside the list at every save, and a backup in the folder chosen when the list was made.</span>
+            {g.hasPrevious && (
+              <button class="btn primary wide" id="gate-previous" type="button" onClick={props.act.usePrevious}>
+                <Glyph name="reconnect" />The copy saved before this one
+              </button>
+            )}
+            <button class={`btn ${g.hasPrevious ? 'quiet' : 'primary'} wide`} id="gate-pick-restore" type="button" onClick={props.act.pickRestore}>
+              <Glyph name="folder" />A backup file
+            </button>
+          </>
+        ) : (
+          <>
+            <span class="check check-hint gate-wrap" id="gate-restore-from"><Glyph name="keyfile" />{beside ? 'The copy saved before this one' : name}</span>
+            <label class="field">
+              <span class="field-label"><Glyph name="lock" />Its password</span>
+              <span class={`input filled ${g.wrong ? 'wrong' : ''}`}><input id="pw-restore" ref={field} type="password" autocomplete="off" spellcheck={false} placeholder="The password that list was saved under" value={pw} onInput={(e) => { typing.onInput(e as InputEvent); setPw((e.target as HTMLInputElement).value); }} onKeyDown={(e) => { typing.onKey(e); if (e.key === 'Enter') submit(); }} onKeyUp={typing.onKey} /></span>
+              {g.wrong && pw.length === 0 ? <span class="check check-fix" id="gate-restore-wrong"><Glyph name="fix" />Wrong password.</span> : <TypingLine caps={typing.caps} letters={typing.letters} />}
+            </label>
+            <button class={`btn primary wide ${g.phase === 'working' || left > 0 ? 'waiting' : ''}`} id="gate-restore" type="button" onClick={submit}>
+              {g.phase === 'working' ? <><span class="wait-ring" />Opening</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : <><Glyph name="lock" />Open it and make it the list</>}
+            </button>
+            {g.wrong && <p class="gate-saved">Each wrong try doubles the wait, up to 30 s.</p>}
+            <button class="btn quiet wide" id="gate-restore-other" type="button" onClick={props.act.forgetRestore}>
+              <Glyph name="folder" />Another backup
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
