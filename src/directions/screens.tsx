@@ -113,12 +113,8 @@ const RUN = `umask 077; mkdir -p ~/.ssh && echo '${ADD_KEY}' >> ~/.ssh/authorize
 
 // The first connection: one block to run on the box in a trusted place; its output pasted back; only then is the
 // box's identity compared and pinned. The fingerprint Berth received is not shown until the paste was compared.
-export function TrustDialog() {
+function RunStep() {
   return (
-    <div class="scrim">
-      <div class="dialog wide dlg-checked" role="dialog" aria-modal="true" aria-labelledby="trust-title">
-        <h1 id="trust-title"><Glyph name="identity" />Check ledger-db before the first sign-in</h1>
-
         <div class="step">
           <span class="step-n">1</span>
           <div class="step-main">
@@ -130,6 +126,15 @@ export function TrustDialog() {
             </div>
           </div>
         </div>
+  );
+}
+
+export function TrustDialog() {
+  return (
+    <div class="scrim">
+      <div class="dialog wide dlg-checked" role="dialog" aria-modal="true" aria-labelledby="trust-title">
+        <h1 id="trust-title"><Glyph name="identity" />Check ledger-db before the first sign-in</h1>
+        <RunStep />
 
         <div class="step">
           <span class="step-n">2</span>
@@ -154,6 +159,81 @@ export function TrustDialog() {
         <div class="dlg-actions">
           <button class="btn keep-plain"><Glyph name="close" />Cancel</button>
           <button class="btn primary"><Glyph name="identity" />Trust and connect</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The paste does not match: another box answered at that address, or the lines came from another box. Both are
+// shown side by side; nothing is stored, and there is no way to trust from here.
+export function MismatchDialog() {
+  return (
+    <div class="scrim">
+      <div class="dialog wide dlg-problem" role="dialog" aria-modal="true" aria-labelledby="mis-title">
+        <h1 id="mis-title"><Glyph name="identityBroken" />The box Berth reached is not the box you ran it on</h1>
+        <RunStep />
+
+        <div class="step">
+          <span class="step-n">2</span>
+          <div class="step-main">
+            <div class="step-title"><Glyph name="paste" />Paste what it printed</div>
+            <div class="pastebox">
+              <div>256 SHA256:Xk3v9Qm0bT2rP8sLw1YhN7cJ4dF6gA5eZ0uI9oK2pQs root@ledger-db (ED25519)</div>
+              <div>3072 SHA256:p1Rt7Cz5Hm2Ve8Yq4Lb0Wn6Ks3Df9Gj1Ax7Ue5Io2Tc root@ledger-db (RSA)</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="fp-pair indent">
+          <div class="fp">
+            <div class="fp-label"><Glyph name="paste" />Printed on ledger-db</div>
+            <div class="fp-val mono">ED25519<br />SHA256:Xk3v9Qm0bT2rP8sLw1YhN7cJ4dF6gA5eZ0uI9oK2pQs</div>
+          </div>
+          <div class="fp now">
+            <div class="fp-label"><Glyph name="identityBroken" />Answered at 203.0.113.58:22</div>
+            <div class="fp-val mono">ED25519<br />SHA256:9fWb2Kx7Qe4Tn1Vc8Rm5Ly3Hs6Ju0Gd2Pa9Zo4Ei7Fk</div>
+          </div>
+        </div>
+        <p class="dlg-fact indent">Nothing was trusted or saved, and no key was used. Check the address in Edit box, or paste again from ledger-db itself.</p>
+
+        <div class="dlg-actions">
+          <button class="btn quiet"><Glyph name="edit" />Edit ledger-db</button>
+          <button class="btn quiet"><Glyph name="reconnect" />Check again</button>
+          <button class="btn keep" autofocus><Glyph name="close" />Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The box cannot be reached: said with the exact cause and when, in place of the paste step (there is nothing to
+// compare a paste with yet). Step 1 stays: the block can be run meanwhile.
+export function UnreachableDialog() {
+  return (
+    <div class="scrim">
+      <div class="dialog wide dlg-checked" role="dialog" aria-modal="true" aria-labelledby="unr-title">
+        <h1 id="unr-title"><Glyph name="identity" />Check ledger-db before the first sign-in</h1>
+        <RunStep />
+
+        <div class="step">
+          <span class="step-n">2</span>
+          <div class="step-main">
+            <div class="step-title"><Glyph name="network" />Reach ledger-db</div>
+            <div class="reach-bar">
+              <Glyph name="silent" />
+              <div>
+                <div class="reach-title">No answer from 203.0.113.58:22 within 10 s</div>
+                <div class="reach-sub">Asked at 06:41:12 and 06:41:31. The box may be off, the port closed, or a firewall in between.</div>
+              </div>
+              <button class="btn quiet"><Glyph name="reconnect" />Try again</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dlg-actions gap-top">
+          <button class="btn quiet"><Glyph name="edit" />Edit ledger-db</button>
+          <button class="btn keep-plain"><Glyph name="close" />Close</button>
         </div>
       </div>
     </div>

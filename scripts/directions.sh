@@ -33,6 +33,10 @@ shoot() {
     fresh) strip="${strip/fresh/a new tab just opened, the sign-in text folded}" ;;
     noanswer) strip="${strip/noanswer/no answer: the link kept}" ;;
     dropped) strip="${strip/dropped/the link gone: reconnecting}" ;;
+    mismatch) strip="${strip/mismatch/the first-connection check: another box answered}" ;;
+    unreachable) strip="${strip/unreachable/the first-connection check: the box cannot be reached}" ;;
+    sevenopen) strip="${strip/sevenopen/seven tabs in a small window, the four on relay-fra opened}" ;;
+    seven) strip="${strip/seven/seven tabs in a small window, a box with several folded into one}" ;;
   esac
   local log; log="$(mktemp)"; rm -f "$file"
   timeout 90 "${as_user[@]}" xvfb-run -a --server-args='-screen 0 3000x1800x24' env -u NODE_OPTIONS \
@@ -47,6 +51,11 @@ if [ "${1:-}" = step2 ]; then
   for scene in addbox trust changed connecting fresh noanswer dropped; do
     shoot a 1280x720 1.25 "$scene"
   done
+  exit 0
+fi
+if [ "${1:-}" = boxes ]; then
+  # The screens step 2 had not pictured: for Kami's yes or no (2026-11-16).
+  for scene in mismatch unreachable seven sevenopen; do shoot a 1280x720 1.25 "$scene"; done
   exit 0
 fi
 shoot a 1920x1080 1 boxes
