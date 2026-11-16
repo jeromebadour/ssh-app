@@ -268,7 +268,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -278,6 +278,7 @@ function shellState(): ShellState {
 let waitingLink: LinkAsked | null = null;
 let linksRefused = 0;
 let lastOpened = ''; // the last address handed to Windows, for the lab
+const windowAsked: string[] = []; // what the window's own three buttons have asked of the window, for the lab
 let opensAsked = 0;
 
 function linkAsked(tab: Tab, url: string): void {
@@ -752,7 +753,17 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   else if (c?.op === 'dropLink' && waitingLink) closeLink(false);
   else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
   else if (c?.op === 'dropPaste' && waitingPaste) closePaste(false);
-  else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
+  else if (c?.op === 'window' && (c.do === 'minimize' || c.do === 'maximize' || c.do === 'close')) {
+    // The window's own three buttons. Berth draws them, so it must do what they say; `close` goes the same way
+    // as the window's own close, and not straight to an exit, so whatever stands in the way of closing stands
+    // in the way of this button too.
+    if (!win) return;
+    windowAsked.push(c.do); // for the lab: a window manager decides what happens, but the asking is Berth's
+    if (c.do === 'minimize') win.minimize();
+    else if (c.do === 'close') win.close();
+    else if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
 });
 
@@ -868,7 +879,11 @@ if (!app.requestSingleInstanceLock()) {
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
 
-    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#161e25', title: 'Berth', useContentSize: true });
+    // No frame of Windows' own: the bar at the top of the shell is Berth's title bar, with Berth's own mark,
+    // name and three buttons. `titleBarStyle: 'hidden'` rather than `frame: false`, because it takes away the
+    // title bar and leaves the window itself alone: the edges still resize, and Windows still snaps the window
+    // to a side or a corner, which a frameless window has to imitate badly or go without.
+    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#161e25', title: 'Berth', useContentSize: true, titleBarStyle: 'hidden' });
     if (asksSize) win.setContentSize(Number(asksSize[1]), Number(asksSize[2]));
     win.setMenu(null);
     shell = new WebContentsView({ webPreferences: viewPrefs(shellSession, 'preload-shell.js', true) });
@@ -891,6 +906,10 @@ if (!app.requestSingleInstanceLock()) {
     boxes = b;
     void k.start();
     win.on('resize', layout);
+    // The window can be maximized and restored without either button being pressed: a double-click on the bar,
+    // Windows' own snapping, the keyboard. The button must show where the window stands whatever moved it.
+    win.on('maximize', tellShell);
+    win.on('unmaximize', tellShell);
     win.on('closed', () => {
       keys?.close();
       for (const t of tabs.values()) t.engine.close();
@@ -912,7 +931,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
         pace.force(share);
         lookPace();
       }, win, dist: DIST, harden, newView: (partition: string) => {

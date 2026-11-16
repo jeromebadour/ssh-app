@@ -153,6 +153,7 @@ export interface ShellState {
   done: string; // the last thing done, for the status line; empty for nothing yet
   paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
   link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
+  maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
 }
 
 // An address a box printed, Ctrl+clicked, and shown whole before anything opens (plan B2.7). A box can print
@@ -198,7 +199,8 @@ export type ShellCmd =
   | { op: 'dropPaste' } // the paste being shown: send nothing
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'closeCheck'; box: string }
-  | { op: 'copyBlock'; box: string };
+  | { op: 'copyBlock'; box: string }
+  | { op: 'window'; do: 'minimize' | 'maximize' | 'close' }; // the window's own three buttons, which Berth draws
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:

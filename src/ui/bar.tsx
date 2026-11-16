@@ -18,6 +18,7 @@ export interface BarActions {
   editBox(box: string): void;
   removeBox(box: string): void;
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
+  window(what: 'minimize' | 'maximize' | 'close'): void; // the window's own three buttons
 }
 
 const TAB_MIN = 168 + 10; // a tab's width and the room beside it, while there is room
@@ -80,6 +81,36 @@ function foldsFor(groups: Group[], room: number): Set<string> {
 function TabMark(props: { t: TabInfo }) {
   const look = tabLook(props.t);
   return <span class={`conn conn-${look.mark}`} title={look.words} />;
+}
+
+// The window's own three buttons, at the right-hand end of the bar. Windows draws no title bar for Berth, so
+// these are the only way to minimize, maximize or close with the mouse, and they are Berth's own: its spacing,
+// its colours, and its answer to a press (BUILD-RULES 2.18), not a strip of Windows' chrome above the app.
+//
+// Close is last and apart from the other two, as it is on every window: it is the one of the three a person
+// must not press by mistake while reaching for the others.
+// The same three buttons on the screens shown before the lock is open, where there is no bar to put them in.
+// Without this the password screen would have no way to close, minimize or move the window with the mouse at
+// all, Windows having been told to draw no title bar: a window a person cannot put away is not acceptable, and
+// the lock screen is the first thing they see.
+export function WindowStrip(props: { maximized: boolean; act: BarActions }) {
+  return (
+    <div class="win-strip" id="win-strip">
+      <WindowButtons maximized={props.maximized} act={props.act} />
+    </div>
+  );
+}
+
+function WindowButtons(props: { maximized: boolean; act: BarActions }) {
+  return (
+    <div class="win-buttons" id="win-buttons">
+      <button type="button" class="win-btn" id="win-min" aria-label="Minimize" title="Minimize" onClick={() => props.act.window('minimize')}><Glyph name="winMinimize" /></button>
+      <button type="button" class="win-btn" id="win-max" aria-label={props.maximized ? 'Restore' : 'Maximize'} title={props.maximized ? 'Restore' : 'Maximize'} onClick={() => props.act.window('maximize')}>
+        <Glyph name={props.maximized ? 'winRestore' : 'winMaximize'} />
+      </button>
+      <button type="button" class="win-btn win-close" id="win-close" aria-label="Close Berth" title="Close Berth" onClick={() => props.act.window('close')}><Glyph name="winClose" /></button>
+    </div>
+  );
 }
 
 export function Bar(props: { s: ShellState; act: BarActions }) {
@@ -169,6 +200,7 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
         })}
         <button type="button" class="new-tab" id="new" aria-label="Open a box" onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}><Glyph name="plus" /></button>
       </div>
+      <WindowButtons maximized={props.s.maximized} act={props.act} />
       {menu === 'boxes' && <BoxMenu s={props.s} act={props.act} done={() => showMenu('')} />}
       {menu !== '' && <div class="menu-away" onPointerDown={() => showMenu('')} />}
     </header>

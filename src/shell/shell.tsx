@@ -4,7 +4,7 @@ import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
-import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
+import { Bar, placeLabel, tabLook, WindowStrip, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog, RemoveBoxDialog } from '../ui/boxdialogs';
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
@@ -24,7 +24,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -34,6 +34,20 @@ port.onState((s) => {
   shellNow = s;
   redraw();
 });
+// The strip before the lock draws the three window buttons and nothing else, so the rest of a bar's actions
+// are never reached from it. They are refused rather than left out, so that a later change that does reach one
+// of them is a plain refusal here and not a crash on the lock screen.
+const noBar = {
+  select: () => undefined,
+  close: () => undefined,
+  open: () => undefined,
+  addBox: () => undefined,
+  editBox: () => undefined,
+  removeBox: () => undefined,
+  menu: () => undefined,
+  window: () => undefined,
+};
+
 const act = {
   create: (p: Uint8Array) => port.gateCreate(p),
   unlock: (p: Uint8Array) => port.gateUnlock(p),
@@ -79,6 +93,7 @@ function Unlocked(props: { s: ShellState }) {
     editBox: (box) => setDialog({ kind: 'edit', box, req: nextReq++ }),
     removeBox: (box) => setDialog({ kind: 'remove', box }),
     menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
+    window: (what) => port.cmd({ op: 'window', do: what }),
   };
   const front = s.tabs.find((t) => t.id === s.active);
   const adding = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req !== dialog.req;
@@ -199,10 +214,13 @@ function App() {
   }, [gate.phase]);
   document.documentElement.dataset['gate'] = gate.phase;
   if (gate.phase === 'unlocked') return <Unlocked s={shell} />;
-  if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <CreateScreen gate={gate} act={act} />;
-  if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <UnlockScreen gate={gate} act={act} />;
-  if (screen === 'damaged' && (gate.phase === 'damaged' || gate.phase === 'working')) return <RestoreScreen gate={gate} act={act} />;
-  return <GateNotice gate={gate} />;
+  // Before the lock is open there is no bar, so the window's own three buttons are carried on a strip of their
+  // own above these screens.
+  const strip = <WindowStrip maximized={shell.maximized} act={{ ...noBar, window: (what) => port.cmd({ op: 'window', do: what }) }} />;
+  if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <>{strip}<CreateScreen gate={gate} act={act} /></>;
+  if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <>{strip}<UnlockScreen gate={gate} act={act} /></>;
+  if (screen === 'damaged' && (gate.phase === 'damaged' || gate.phase === 'working')) return <>{strip}<RestoreScreen gate={gate} act={act} /></>;
+  return <>{strip}<GateNotice gate={gate} /></>;
 }
 
 render(<App />, document.getElementById('app')!);
