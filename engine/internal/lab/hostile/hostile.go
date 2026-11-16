@@ -42,6 +42,35 @@ type Box struct {
 	tries  int // sign-in attempts of any kind, "none" included
 	users  []string
 	accept ssh.PublicKey // set by Accept: the key let in from then on
+	live   []ssh.Channel // the sessions' channels that are open now
+	quiet  bool          // Quiet: the shells send nothing back by themselves
+	got    []byte        // every byte the shells were given since the last Received
+}
+
+// Quiet makes the shells stop sending back what they are given (true), or do so again (false).
+func (b *Box) Quiet(on bool) {
+	b.mu.Lock()
+	b.quiet = on
+	b.mu.Unlock()
+}
+
+// Print writes bytes to every open session, as a program on the box printing them.
+func (b *Box) Print(p []byte) {
+	b.mu.Lock()
+	chans := append([]ssh.Channel(nil), b.live...)
+	b.mu.Unlock()
+	for _, ch := range chans {
+		_, _ = ch.Write(p)
+	}
+}
+
+// Received gives every byte the shells were given since it was last asked, and forgets them.
+func (b *Box) Received() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.got
+	b.got = nil
+	return out
 }
 
 // Accept changes the one key the box lets in, from now on (as when a key is added to a real box).
@@ -137,13 +166,34 @@ func (b *Box) session(nc ssh.NewChannel) {
 	case <-b.closed:
 		return
 	}
+	b.mu.Lock()
+	b.live = append(b.live, ch)
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		for i, c := range b.live {
+			if c == ch {
+				b.live = append(b.live[:i], b.live[i+1:]...)
+				break
+			}
+		}
+		b.mu.Unlock()
+	}()
 	buf := make([]byte, 32*1024)
 	var tail []byte
 	for {
 		n, err := ch.Read(buf)
 		if n > 0 {
-			if _, werr := ch.Write(buf[:n]); werr != nil {
-				return
+			b.mu.Lock()
+			quiet := b.quiet
+			if len(b.got) < 4<<20 {
+				b.got = append(b.got, buf[:n]...)
+			}
+			b.mu.Unlock()
+			if !quiet {
+				if _, werr := ch.Write(buf[:n]); werr != nil {
+					return
+				}
 			}
 			tail = append(tail, buf[:n]...)
 			if len(tail) > 5 {

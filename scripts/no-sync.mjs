@@ -1,7 +1,10 @@
 // Fails if the app's own code calls anything that blocks: a synchronous file, process or message call,
 // or a blocking browser dialog. One blocked call in main freezes every tab at once.
-// One file is allowed two named calls, and nothing else anywhere: src/main/lab-proof.ts, which answers "is this
-// a lab package?" before the app has started anything (its own header says why).
+// Two files are allowed named calls, each once, and nothing else anywhere:
+//   - src/main/lab-proof.ts, which answers "is this a lab package?" before the app has started anything (its own
+//     header says why);
+//   - src/tab/term.ts, one replaceSync: a stylesheet's rules set from text already in memory, the work a <style>
+//     element does when its text is set. It waits on no file, process or network.
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -20,7 +23,7 @@ async function* files(dir) {
   }
 }
 
-const allowed = { 'main/lab-proof.ts': ['statSync', 'readFileSync'] };
+const allowed = { 'main/lab-proof.ts': ['statSync', 'readFileSync'], 'tab/term.ts': ['replaceSync'] };
 const usedAllowance = new Set();
 
 let bad = 0;

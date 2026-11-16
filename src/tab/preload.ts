@@ -19,6 +19,12 @@ const port: TabPort = {
   onBanner(cb) {
     ipcRenderer.on(CH.tabBanner, (_e, bytes: Uint8Array) => cb(bytes));
   },
+  resize(cols, rows) {
+    ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
+  },
+  copy(text) {
+    ipcRenderer.send(CH.tabCopy, String(text));
+  },
   taken(total) {
     ipcRenderer.send(CH.tabTaken, Number(total));
   },

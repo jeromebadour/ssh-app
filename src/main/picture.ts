@@ -29,7 +29,7 @@ async function pixels(view: WebContentsView): Promise<EaselLayer & { scale: numb
   const image = await view.webContents.capturePage();
   const size = image.getSize();
   const scale = size.width / Math.max(1, bounds.width);
-  return { x: Math.round(bounds.x * scale), y: Math.round(bounds.y * scale), width: size.width, height: size.height, bgra: image.toBitmap(), scale };
+  return { x: Math.round(bounds.x * scale), y: Math.round(bounds.y * scale), width: size.width, height: size.height, png: image.toPNG(), scale };
 }
 
 // Takes one picture of the whole window and writes it as a PNG. `views` are given back to front.
@@ -42,6 +42,7 @@ export async function takePicture(opts: { win: BaseWindow; views: WebContentsVie
     width: Math.round(content.width * scale),
     height: Math.round(content.height * scale),
     strip: opts.strip,
+    background: opts.win.getBackgroundColor(),
     stripHeight: Math.round(36 * scale),
     layers: layers.map(({ scale: _s, ...layer }) => layer),
   };

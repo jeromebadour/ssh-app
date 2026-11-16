@@ -12,18 +12,16 @@ declare global {
 window.easelPort.onJob(async (job) => {
   const canvas = new OffscreenCanvas(job.width, job.height + job.stripHeight);
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#000000';
+  ctx.fillStyle = /^#[0-9a-fA-F]{6}$/.test(job.background) ? job.background : '#000000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  // Back to front, each drawn over what is behind it: where a view is clear (the shell's middle, over a tab),
+  // what is behind shows, as it does in the window. (Until 2026-11-16 each layer replaced what was under it,
+  // and the tab under the shell came out black in every picture.)
   for (const layer of job.layers) {
-    const rgba = new Uint8ClampedArray(layer.bgra.length);
-    for (let i = 0; i < rgba.length; i += 4) {
-      rgba[i] = layer.bgra[i + 2]!;
-      rgba[i + 1] = layer.bgra[i + 1]!;
-      rgba[i + 2] = layer.bgra[i]!;
-      rgba[i + 3] = 255;
-    }
-    ctx.putImageData(new ImageData(rgba, layer.width, layer.height), layer.x, layer.y + job.stripHeight);
+    const bitmap = await createImageBitmap(new Blob([layer.png as BlobPart], { type: 'image/png' }));
+    ctx.drawImage(bitmap, layer.x, layer.y + job.stripHeight);
+    bitmap.close();
   }
 
   // The strip: what this picture is, so it can be told apart wherever it is opened.

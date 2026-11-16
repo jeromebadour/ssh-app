@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -77,16 +77,13 @@ const FILES: Record<'shell' | 'tab' | 'easel' | 'directions', Record<string, [fi
   },
   // The shell's page, script, stylesheet and typefaces: filled from dist/shell at start.
   shell: {},
-  tab: {
-    '/index.html': ['tab/index.html', 'text/html; charset=utf-8'],
-    '/tab.js': ['tab/tab.js', 'text/javascript; charset=utf-8'],
-    '/tab.css': ['tab/tab.css', 'text/css; charset=utf-8'],
-  },
+  // A tab's page, script, stylesheets and typefaces: filled from dist/tab at start.
+  tab: {},
 };
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
 // A kind's files are listed once, from its own folder inside the app: still no path is ever built from a request.
-async function listFiles(kind: 'shell' | 'directions'): Promise<void> {
+async function listFiles(kind: 'shell' | 'tab' | 'directions'): Promise<void> {
   const base = path.join(DIST, kind);
   for (const rel of await readdir(base, { recursive: true })) {
     const type = TYPES[path.extname(rel)];
@@ -95,6 +92,8 @@ async function listFiles(kind: 'shell' | 'directions'): Promise<void> {
 }
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
+
+const missing = new Map<string, number>();
 
 async function serve(request: Request): Promise<Response> {
   let url: URL;
@@ -105,7 +104,14 @@ async function serve(request: Request): Promise<Response> {
   }
   const kind = url.hostname === 'shell' ? 'shell' : /^tab-[0-9]{1,6}$/.test(url.hostname) ? 'tab' : url.hostname === 'easel' && SELFTEST ? 'easel' : url.hostname === 'directions' && SELFTEST === 'direction' ? 'directions' : null;
   const entry = kind && request.method === 'GET' ? FILES[kind][url.pathname] : undefined;
-  if (!entry) return new Response(null, { status: 404 });
+  if (!entry) {
+    // A file one of the app's own pages asked for and the app does not hold is a fault of the app, never a
+    // quiet gap: it is counted by name. (Found 2026-11-16: a tab's stylesheets were not on its list, and the
+    // terminal ran without them with every probe passing.)
+    const name = `${kind ?? 'unknown'}${url.pathname}`.slice(0, 120);
+    if (missing.size < 200 || missing.has(name)) missing.set(name, (missing.get(name) ?? 0) + 1);
+    return new Response(null, { status: 404 });
+  }
   const data = await readFile(path.join(DIST, entry[0]));
   return new Response(new Uint8Array(data), {
     headers: {
@@ -152,6 +158,7 @@ interface Tab {
   id: number;
   view: WebContentsView;
   engine: Engine;
+  begin(cols: number, rows: number): void; // starts the engine, once, at the view's size
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
@@ -182,6 +189,7 @@ let keys: KeyProc | null = null;
 let gate: Gate | null = null;
 let boxes: Boxes | null = null;
 let signsRefused = 0;
+let copiesRefused = 0; // a tab not in front, or a window not in use, offered text for the clipboard
 let overlay = false; // a menu or dialog of the shell is open: the shell is above the tabs
 let openCheck = ''; // the box whose first-connection check is open in a dialog
 const askedAt = new Map<string, string[]>(); // per box: when it was asked who it is
@@ -298,13 +306,23 @@ function openTab(boxId = '', place = ''): Tab | null {
     },
     sign: (req) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
   }, aim);
-  const tab: Tab = { id, view, engine, origin, box, place };
+  // A box's terminal is opened at the size its view really has, so the engine starts when the view has said
+  // its size. A view that says nothing does not hold the tab up: after two seconds the engine starts anyway.
+  let begun = false;
+  const begin = (cols: number, rows: number): void => {
+    if (begun) return;
+    begun = true;
+    engine.openAt(cols, rows);
+    void engine.start();
+  };
+  const tab: Tab = { id, view, engine, begin, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
   view.webContents.once('did-finish-load', () => sendTo(view, CH.tabState, info(tab)));
   void view.webContents.loadURL(`${origin}/index.html`);
-  void engine.start();
+  if (box) setTimeout(() => begin(120, 40), 2000).unref();
+  else begin(0, 0);
   active = id;
   layout();
   tellShell();
@@ -344,6 +362,24 @@ ipcMain.on(CH.tabInput, (e, bytes: unknown) => {
 ipcMain.on(CH.tabTaken, (e, total: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof total !== 'number' || !tab.engine.taken(total)) drop('tab:taken', e);
+});
+
+ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || !tab.engine.resize(cols as number, rows as number)) return drop('tab:resize', e);
+  tab.begin(cols as number, rows as number);
+});
+
+// Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window
+// that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
+ipcMain.on(CH.tabCopy, (e, text: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof text !== 'string' || text.length === 0 || text.length > COPY_MAX) return drop('tab:copy', e);
+  if (tab.id !== active || overlay || !win?.isFocused()) return void copiesRefused++;
+  clipboard.writeText(text);
+  const lines = text.split('\n').length;
+  done = `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}`;
+  tellShell();
 });
 
 ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
@@ -487,6 +523,7 @@ if (!app.requestSingleInstanceLock()) {
     SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-shot', 'boxes-ui'].includes(asked) ? asked : '';
     if (SELFTEST === 'direction') await listFiles('directions');
     await listFiles('shell');
+    await listFiles('tab');
     // A lab or development run may ask for a window size (for pictures). A release build never reads this.
     const asksSize = kind !== 'release' ? /^(\d{3,4})x(\d{3,4})$/.exec(process.env['SSHAPP_WINDOW'] ?? '') : null;
     meter.start();
@@ -537,7 +574,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
         const ses = session.fromPartition(partition, { cache: false });
         harden(ses);
         return new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-shell.js', false) });
