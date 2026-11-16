@@ -7,8 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
 
-pkg=out/ssh-app-linux-x64-lab
-[ -x "$pkg/ssh-app" ] || { echo "directions: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
+pkg=out/Berth-linux-x64-lab
+[ -x "$pkg/Berth" ] || { echo "directions: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
 if [ "$(stat -c '%U:%a' "$pkg/chrome-sandbox")" != "root:4755" ]; then chown root:root "$pkg/chrome-sandbox" && chmod 4755 "$pkg/chrome-sandbox"; fi
 as_user=()
 if [ "$(id -u)" = 0 ]; then id sshapp-lab >/dev/null 2>&1 || useradd -m -s /bin/bash sshapp-lab; as_user=(runuser -u sshapp-lab --); fi
@@ -41,7 +41,7 @@ shoot() {
   local log; log="$(mktemp)"; rm -f "$file"
   timeout 90 "${as_user[@]}" xvfb-run -a --server-args='-screen 0 3000x1800x24' env -u NODE_OPTIONS \
     SSHAPP_SELFTEST=direction SSHAPP_DIRECTION="$d" SSHAPP_SCENE="$scene" SSHAPP_WINDOW="$size" SSHAPP_PICTURE="$file" SSHAPP_PICTURE_STRIP="$strip" \
-    "$pkg/ssh-app" --lab "--force-device-scale-factor=$scale" >"$log" 2>&1 || true
+    "$pkg/Berth" --lab "--force-device-scale-factor=$scale" >"$log" 2>&1 || true
   if [ -s "$file" ] && grep -aq '^SELFTEST .*"ok":true' "$log"; then echo "ok    $(basename "$file")"; else
     echo "FAIL  $(basename "$file")" >&2; grep -a '^SELFTEST \|^MAINFAULT' "$log" >&2 || tail -15 "$log" >&2; exit 1; fi
 }

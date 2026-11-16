@@ -9,8 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
 
-pkg=out/ssh-app-linux-x64-lab
-[ -x "$pkg/ssh-app" ] || { echo "pictures: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
+pkg=out/Berth-linux-x64-lab
+[ -x "$pkg/Berth" ] || { echo "pictures: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
 if [ "$(stat -c '%U:%a' "$pkg/chrome-sandbox")" != "root:4755" ]; then
   if [ "$(id -u)" = 0 ]; then chown root:root "$pkg/chrome-sandbox" && chmod 4755 "$pkg/chrome-sandbox"; else sudo chown root:root "$pkg/chrome-sandbox" && sudo chmod 4755 "$pkg/chrome-sandbox"; fi
 fi
@@ -33,7 +33,7 @@ shoot() {
   rm -f "$file"
   timeout 90 "${as_user[@]}" xvfb-run -a --server-args='-screen 0 3000x1800x24' env -u NODE_OPTIONS \
     SSHAPP_SELFTEST=picture SSHAPP_WINDOW="$size" SSHAPP_PICTURE="$file" SSHAPP_PICTURE_STRIP="$strip" \
-    "$pkg/ssh-app" --lab "--force-device-scale-factor=$scale" >"$log" 2>&1 || true
+    "$pkg/Berth" --lab "--force-device-scale-factor=$scale" >"$log" 2>&1 || true
   if [ -s "$file" ] && grep -aq '^SELFTEST .*"ok":true' "$log"; then
     echo "ok    $(basename "$file")  $(grep -a '^SELFTEST ' "$log" | sed -E 's/.*a picture of the whole window: ([^"]+)".*/\1/')"
   else

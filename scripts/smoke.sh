@@ -106,40 +106,40 @@ case "$mode" in
     ;;
 
   lab)
-    pkg=out/ssh-app-linux-x64-lab
-    [ -x "$pkg/ssh-app" ] || { echo "smoke: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
+    pkg=out/Berth-linux-x64-lab
+    [ -x "$pkg/Berth" ] || { echo "smoke: no lab package (run: node scripts/package.mjs)" >&2; exit 1; }
     helper "$pkg/chrome-sandbox"
-    selftest "$log" "$pkg/ssh-app" --lab
+    selftest "$log" "$pkg/Berth" --lab
     grep -aq '^READY kind=lab ' "$log" || fail "the lab package did not say it is a lab build"
 
     # A swapped engine: the same package with one byte of its engine changed must refuse to start it.
     cp -a "$pkg" "$work/swapped"
     helper "$work/swapped/chrome-sandbox"
     printf '\x00' | dd of="$work/swapped/resources/engine/sshapp-engine" bs=1 seek=4096 conv=notrunc status=none
-    code="$(start 60 "$log" SSHAPP_SELFTEST=engine-must-be-refused -- "$work/swapped/ssh-app" --lab)"
+    code="$(start 60 "$log" SSHAPP_SELFTEST=engine-must-be-refused -- "$work/swapped/Berth" --lab)"
     [ "$code" = 0 ] && grep -a '^SELFTEST ' "$log" | grep -q '"ok":true' \
       && say "a swapped engine is not started, and the tab says why" \
       || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
     # Seven tabs at once.
-    selftest_mode=seven selftest "$log" "$pkg/ssh-app" --lab
+    selftest_mode=seven selftest "$log" "$pkg/Berth" --lab
     # The box screens, by real clicks and keys.
-    selftest_mode=boxes-ui selftest "$log" "$pkg/ssh-app" --lab
+    selftest_mode=boxes-ui selftest "$log" "$pkg/Berth" --lab
     # The same seven in the narrowest window the app allows, on a small screen (GitHub's Windows machine has
     # 1024 x 768; a 1280-wide window at 125 % scaling is 1024 wide too): every tab must still be there to press.
-    selftest_mode=seven selftest_window=800x500 selftest_screen=1024x768 selftest "$log" "$pkg/ssh-app" --lab
+    selftest_mode=seven selftest_window=800x500 selftest_screen=1024x768 selftest "$log" "$pkg/Berth" --lab
 
     # The lock across two starts on one profile: the first start makes the password, the second must ask for it.
     prof="$work/two-starts"; mkdir -p "$prof"; chmod 777 "$prof"
-    code="$(start 150 "$log" SSHAPP_SELFTEST=all SSHAPP_BUDGET_FACTOR="$factor" SSHAPP_PROFILE="$prof" -- "$pkg/ssh-app" --lab)"
+    code="$(start 150 "$log" SSHAPP_SELFTEST=all SSHAPP_BUDGET_FACTOR="$factor" SSHAPP_PROFILE="$prof" -- "$pkg/Berth" --lab)"
     [ "$code" = 0 ] || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "the first start on a kept profile failed (exit $code)"; }
-    selftest_mode=gate-unlock selftest_profile="$prof" selftest "$log" "$pkg/ssh-app" --lab
+    selftest_mode=gate-unlock selftest_profile="$prof" selftest "$log" "$pkg/Berth" --lab
     # And from outside the app: nothing in that profile holds the lab's password.
     ! grep -rqa 'berth-lab-canary' "$prof" || fail "a file in the profile holds the password: $(grep -rla 'berth-lab-canary' "$prof" | head -3)"
     [ -s "$prof/profile/list.berth" ] && [ -s "$prof/backups/Berth list backup.berth" ] || fail "the list or its backup is missing after two starts"
     say "nothing in the profile holds the password; the list and its backup are there"
 
     # Children end with their parent: main is ended by force, and its engines must be gone within five seconds.
-    ( start 60 "$log" SSHAPP_SELFTEST=hold -- "$pkg/ssh-app" --lab >/dev/null ) &
+    ( start 60 "$log" SSHAPP_SELFTEST=hold -- "$pkg/Berth" --lab >/dev/null ) &
     holder=$!
     held=""
     for _ in $(seq 1 150); do held="$(grep -a '^HOLD ' "$log" 2>/dev/null | tail -1 || true)"; [ -n "$held" ] && break; sleep 0.2; done
@@ -164,12 +164,12 @@ case "$mode" in
     ;;
 
   release)
-    pkg=out/ssh-app-linux-x64-release
-    [ -x "$pkg/ssh-app" ] || { echo "smoke: no release package (run: node scripts/package.mjs)" >&2; exit 1; }
+    pkg=out/Berth-linux-x64-release
+    [ -x "$pkg/Berth" ] || { echo "smoke: no release package (run: node scripts/package.mjs)" >&2; exit 1; }
     helper "$pkg/chrome-sandbox"
 
     # 1. Plain start: it comes up, says what it is, stays up, and the self-test switch does nothing.
-    code="$(start 12 "$log" SSHAPP_SELFTEST=all -- "$pkg/ssh-app")"
+    code="$(start 12 "$log" SSHAPP_SELFTEST=all -- "$pkg/Berth")"
     [ "$code" = 124 ] || fail "the release package did not stay up for 12 s (exit $code)"
     grep -aq '^READY kind=release ' "$log" || fail "the release package did not come up as a release build"
     say "it starts and stays up as a release build"
@@ -184,7 +184,7 @@ case "$mode" in
     for arg in --anything --inspect=0 --remote-debugging-port=9333 --lab "--lab --remote-debugging-port=9333" /tmp/some-file; do
       t0=$(date +%s%N)
       # shellcheck disable=SC2086
-      code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$pkg/ssh-app" $arg)"
+      code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$pkg/Berth" $arg)"
       ms=$(( ($(date +%s%N) - t0) / 1000000 ))
       [ "$code" = 64 ] || fail "started with '$arg' it did not exit with 64 (exit $code)"
       ! grep -aq '^READY\|^SELFTEST\|Debugger listening\|DevTools listening' "$log" || fail "started with '$arg' it came up, or opened a debugger"
@@ -196,8 +196,8 @@ case "$mode" in
     # 3. A release binary with the lab's marker file put beside it is still not a lab package: its fuse says so.
     cp -a "$pkg" "$work/marked"
     helper "$work/marked/chrome-sandbox"
-    cp out/ssh-app-linux-x64-lab/resources/lab "$work/marked/resources/lab"
-    code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$work/marked/ssh-app" --lab)"
+    cp out/Berth-linux-x64-lab/resources/lab "$work/marked/resources/lab"
+    code="$(start 20 "$log" SSHAPP_SELFTEST=all -- "$work/marked/Berth" --lab)"
     [ "$code" = 64 ] || fail "a release binary with the lab marker beside it did not exit (exit $code)"
     ! grep -aq '^READY\|^SELFTEST' "$log" || fail "a release binary with the lab marker beside it came up"
     ! grep -aq 'gpu-process' "$log" || fail "a release binary with the lab marker beside it had begun starting Chromium's processes before the refusal"
@@ -209,7 +209,7 @@ case "$mode" in
       cp -a "$pkg" "$work/changed-$what"
       helper "$work/changed-$what/chrome-sandbox"
       node scripts/lib/change-archive.mjs "$work/changed-$what/resources/app.asar" "$what" >/dev/null
-      code="$(start 8 "$log" -- "$work/changed-$what/ssh-app")"
+      code="$(start 8 "$log" -- "$work/changed-$what/Berth")"
       [ "$code" = 124 ] && grep -aq '^READY kind=release ' "$log" || fail "the control did not start with a changed archive ($what, exit $code)"
       say "control: an archive with one harmless byte changed ($what) still starts on Linux"
       rm -rf "$work/changed-$what"

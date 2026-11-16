@@ -11,9 +11,9 @@ import path from 'node:path';
 import { changeArchive } from './lib/change-archive.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const LAB = path.join(root, 'out', 'ssh-app-win32-x64-lab');
-const REL = path.join(root, 'out', 'ssh-app-win32-x64-release');
-const EXE = 'ssh-app.exe';
+const LAB = path.join(root, 'out', 'Berth-win32-x64-lab');
+const REL = path.join(root, 'out', 'Berth-win32-x64-release');
+const EXE = 'Berth.exe';
 const work = await mkdtemp(path.join(os.tmpdir(), 'ssh-app-win-'));
 // The stated multiplier for budgets on test machines: the last line of toolchain/test-machine-factor.
 const factor = (await readFile(path.join(root, 'toolchain', 'test-machine-factor'), 'utf8')).split('\n').filter((l) => l.trim() && !l.startsWith('#')).pop().trim();
