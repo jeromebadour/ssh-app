@@ -255,6 +255,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // themselves. Without them this screen could not be put away or moved with the mouse at all.
       check('the screens before the lock carry the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
       await lockHolds('before any password');
+      // Pressing with nothing typed: it must say what is in the way and put the cursor where it is. Before, the
+      // press did nothing whatever, on the first screen anyone sees.
+      await clickOn('#gate-submit');
+      check('the first press with nothing typed says what is in the way', await until(async () => (await text('#gate-to-fix')).includes('A password is needed'), 2000), await text('#gate-to-fix'));
+      check('and puts the cursor in the password field', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'pw-one', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
       await clickOn('#pw-one');
       await typeKeys('too short');
       const shortSaid = await text('#pw-one-check');
@@ -515,7 +520,25 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('add-empty', 'Add box, empty');
         // Add with nothing typed: every required field says so, and nothing is asked of main.
         await clickOn('#add-submit');
-        check('Add with nothing typed: the fields to fix are counted and named', (await text('#add-to-fix')).includes('3 fields to fix') && (await text('#box-name-check')) === 'needed' && ctx.boxes.list.length === 0, await text('#add-to-fix'));
+        check('Add with nothing typed: the first field to fix is named, with how many there are', (await text('#add-to-fix')).includes('Name: needed') && (await text('#add-to-fix')).includes('3 fields to fix') && (await text('#box-name-check')) === 'needed' && ctx.boxes.list.length === 0, await text('#add-to-fix'));
+        // A press that is refused must move something, or there is no telling it landed at all. The cursor goes
+        // into the first field that needs attention: this is what cost Kami his host field on the first install.
+        check('and the cursor is put in the first field to fix, not left where it was', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'box-name', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
+        // The same with only one field left: the one named is the one still wrong, and the cursor goes to it.
+        await clickOn('#box-name');
+        await typeKeys('for-a-moment');
+        await clickOn('#box-host');
+        await typeKeys('127.0.0.1');
+        await clickOn('#add-submit');
+        check('one field left to fix: it is named on its own, and the cursor is in it', (await text('#add-to-fix')).includes('User: needed') && !(await text('#add-to-fix')).includes('fields to fix') && (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'box-user', [await text('#add-to-fix'), await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)]);
+        // Put the name and host back to nothing, so what follows types them as it did before.
+        for (const id of ['#box-name', '#box-host']) {
+          await clickOn(id);
+          await selectAll();
+          sh.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
+          sh.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
+          await sleep(80);
+        }
         await clickOn('#box-name');
         await typeKeys('lab-box');
         await clickOn('#hue-pick');
@@ -547,6 +570,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('#check-copy');
         const copied = await until(async () => (await clipboard.readText()) === ctx.boxes.block(id), 2000);
         check('Copy puts the exact block on the clipboard', copied && (await clipboard.readText()).includes(ctx.boxes.list[0]!.publicKey), (await clipboard.readText()).slice(0, 60));
+        // And the button says it copied. The footer says so too, but the footer is behind this dialog and its
+        // dim, so from in here the press looked like nothing at all.
+        check('Copy says it copied, on the button itself', await until(async () => (await text('#check-copy')).includes('Copied'), 2000), await text('#check-copy'));
         await shot('check-asked', 'the first-connection check, waiting for the paste');
 
         await clickOn('#check-paste');

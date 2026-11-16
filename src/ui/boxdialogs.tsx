@@ -61,6 +61,21 @@ function SectionHead(props: { glyph: string; title: string; aside?: string }) {
 }
 
 const EMPTY: BoxDraft = { name: '', colour: 1, host: '', port: '', user: '', folder: '', places: [] };
+
+// The fields in the order they stand in the dialog, so "the first one to fix" is the first a person's eye
+// reaches, and the field each fault belongs to.
+const FIELD_ORDER = ['name', 'colour', 'host', 'port', 'user', 'folder', 'places'];
+const FIELD_IDS: Record<string, string> = { name: 'box-name', colour: 'hue-pick', host: 'box-host', port: 'box-port', user: 'box-user', folder: 'box-folder' };
+const FIELD_WORDS: Record<string, string> = { name: 'Name', colour: 'Colour', host: 'Host', port: 'Port', user: 'User', folder: 'Starting folder', places: 'Places' };
+
+// What the line beside the button says: the first field to fix, by name, and what is wrong with it. Naming it
+// is the point; a bare count ("2 fields to fix") leaves the person to find which two.
+function firstWord(bad: Record<string, string>): string {
+  for (const key of FIELD_ORDER) {
+    if (bad[key]) return `${FIELD_WORDS[key] ?? key}: ${bad[key]}`;
+  }
+  return '';
+}
 const required = (c: Check, tried: boolean): Check => (tried && c.state === 'hint' ? { state: 'fix', text: 'needed' } : c);
 
 export interface AddBoxProps {
@@ -89,7 +104,29 @@ export function AddBoxDialog(props: AddBoxProps) {
   const toFix = Object.keys(faults).filter((k) => tried || !['name', 'host', 'user'].includes(k) || faults[k] !== 'needed').length;
   const add = () => {
     setTried(true);
-    if (Object.keys(draftFaults(d, props.taken)).length === 0 && !props.working) props.onAdd(d);
+    const bad = draftFaults(d, props.taken);
+    if (Object.keys(bad).length === 0 && !props.working) {
+      props.onAdd(d);
+      return;
+    }
+    // Refused. Pressing Add and having nothing happen is what cost Kami his host field on the first install
+    // (2026-11-17): the fields did mark themselves, but nothing moved, so there was no telling the press had
+    // landed, and a dialog in two columns is a lot of places to go looking. The cursor goes into the first
+    // field that needs attention, which both answers the press and says where to look (BUILD-RULES 2.18).
+    firstBad(bad);
+  };
+  // The first field in the dialog's own order that has something wrong with it, put in front of the person.
+  const firstBad = (bad: Record<string, string>): string => {
+    for (const key of FIELD_ORDER) {
+      if (!bad[key]) continue;
+      const el = document.getElementById(FIELD_IDS[key] ?? '');
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' });
+        (el as HTMLInputElement).focus();
+      }
+      return key;
+    }
+    return '';
   };
   useEffect(() => {
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && props.onCancel();
@@ -186,7 +223,7 @@ export function AddBoxDialog(props: AddBoxProps) {
         </div>
         <div class="dlg-actions">
           {props.error !== '' && <span class="to-fix" id="add-error"><Glyph name="fix" />{props.error}</span>}
-          {props.error === '' && toFix > 0 && <span class="to-fix" id="add-to-fix"><Glyph name="fix" />{toFix} {toFix === 1 ? 'field' : 'fields'} to fix</span>}
+          {props.error === '' && toFix > 0 && <span class="to-fix" id="add-to-fix"><Glyph name="fix" />{firstWord(faults)}{toFix > 1 ? `, ${toFix} fields to fix` : ''}</span>}
           <button type="button" class="btn keep-plain" id="add-cancel" onClick={props.onCancel}><Glyph name="close" />Cancel</button>
           <button type="button" class={`btn primary ${props.working ? 'waiting' : ''}`} id="add-submit" onClick={add}>
             {props.working ? <><span class="wait-ring" />{editing ? 'Saving' : 'Making its key'}</> : <>{editing ? <><Glyph name="check" />Save</> : <><Glyph name="plus" />Add box</>}</>}
@@ -243,10 +280,37 @@ function RunStep(props: { c: CheckShown; act: CheckActions }) {
         <div class="step-sub">The provider's web console, or the MobaXterm session you use for it today. It adds Berth's key and prints the box's identity.</div>
         <div class="codeblock">
           <code id="check-block">{props.c.block}</code>
-          <button type="button" class="btn quiet copy" id="check-copy" onClick={props.act.copy}><Glyph name="copy" />Copy</button>
+          <CopyButton onCopy={props.act.copy} />
         </div>
       </div>
     </div>
+  );
+}
+
+// Copy, which says it copied. The footer line main writes says so too, but the footer is behind this dialog
+// and its dim, so from here the press looked like nothing at all (Kami, 2026-11-17: "Copy you click it and
+// nothing happens which copies silently"). The button answers on its own, where the eye already is, and goes
+// back to Copy after a moment so it can be pressed again (BUILD-RULES 2.6 and 2.18).
+const COPIED_FOR_MS = 1600;
+
+function CopyButton(props: { onCopy(): void }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <button
+      type="button"
+      class={`btn quiet copy ${copied ? 'copied' : ''}`}
+      id="check-copy"
+      onClick={() => {
+        props.onCopy();
+        setCopied(true);
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setCopied(false), COPIED_FOR_MS);
+      }}
+    >
+      {copied ? <><Glyph name="ok" />Copied</> : <><Glyph name="copy" />Copy</>}
+    </button>
   );
 }
 
@@ -259,6 +323,12 @@ function typeIn(pasted: string, fingerprint: string): string {
 export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste?: string }) {
   const c = props.c;
   const [pasted, setPasted] = useState(props.demoPaste ?? '');
+  // Trusting pins the identity, writes the list and opens a tab, which takes real time on the vault. The dialog
+  // stays open through all of it, so without this the one press that matters most on this screen looked like
+  // nothing happening at all (BUILD-RULES 2.6 and 2.18).
+  const [trusting, setTrusting] = useState(false);
+  // If the check goes back to being asked, or the box answers differently, the button is pressable again.
+  useEffect(() => setTrusting(false), [c.step]);
   const sent = useRef('');
   // A paste made while the box was still being asked is compared as soon as the box has answered.
   useEffect(() => {
@@ -352,7 +422,11 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
             <div class={`dlg-actions ${mismatch || c.step === 'match' ? '' : 'gap-top'}`}>
               {mismatch && <button type="button" class="btn quiet" id="check-again" onClick={props.act.again}><Glyph name="reconnect" />Check again</button>}
               <button type="button" class={`btn ${mismatch ? 'keep' : 'keep-plain'}`} id="check-close" onClick={props.act.close}><Glyph name="close" />{mismatch ? 'Close' : 'Cancel'}</button>
-              {c.step === 'match' && <button type="button" class="btn primary" id="check-trust" onClick={props.act.trust}><Glyph name="identity" />Trust and connect</button>}
+              {c.step === 'match' && (
+                <button type="button" class={`btn primary ${trusting ? 'waiting' : ''}`} id="check-trust" onClick={() => { setTrusting(true); props.act.trust(); }}>
+                  {trusting ? <><span class="wait-ring" />Trusting and connecting</> : <><Glyph name="identity" />Trust and connect</>}
+                </button>
+              )}
             </div>
           </>
         )}

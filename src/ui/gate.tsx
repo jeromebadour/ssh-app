@@ -58,8 +58,25 @@ export function CreateScreen(props: { gate: GateState; act: GateActions; demo?: 
   const same = two.length > 0 && one === two;
   const working = props.gate.phase === 'working';
   const toFix = [!long, !same, !props.gate.backupOk].filter(Boolean).length;
+  const [tried, setTried] = useState(false);
+  // What is in the way, named: a count alone leaves the person to work out which of the three it is.
+  const inTheWay = !long ? (n === 0 ? 'A password is needed' : `${n} of ${PASSWORD_MIN} characters`) : !same ? 'The two passwords are not the same' : 'The backup folder cannot be written to';
   const submit = () => {
-    if (toFix || working) return;
+    if (working) return;
+    if (toFix) {
+      // A press that is refused must move something, or there is no telling it landed. This is the first screen
+      // anyone sees, and pressing with nothing typed did nothing at all: no line, no movement (BUILD-RULES 2.18).
+      setTried(true);
+      const go = (id: string) => {
+        const el = document.getElementById(id);
+        el?.scrollIntoView({ block: 'nearest' });
+        (el as HTMLInputElement | null)?.focus();
+      };
+      if (!long) go('pw-one');
+      else if (!same) go('pw-two');
+      else go('backup-pick');
+      return;
+    }
     props.act.create(bytes(one));
     setOne('');
     setTwo('');
@@ -86,13 +103,13 @@ export function CreateScreen(props: { gate: GateState; act: GateActions; demo?: 
         </label>
         <div class="field">
           <span class="field-label"><Glyph name="folderPick" />Backup folder</span>
-          <span class="input picker"><span class="path" id="backup-dir">{props.gate.backupDir}</span><button class="pick" type="button" onClick={props.act.pickBackup}><Glyph name="folder" />Choose</button></span>
+          <span class="input picker"><span class="path" id="backup-dir">{props.gate.backupDir}</span><button class="pick" type="button" id="backup-pick" onClick={props.act.pickBackup}><Glyph name="folder" />Choose</button></span>
           {props.gate.backupOk ? <span class="check check-ok" id="backup-check"><Glyph name="ok" />writable; a copy is written there at every change</span> : <span class="check check-fix" id="backup-check"><Glyph name="fix" />this folder cannot be written to</span>}
         </div>
         <p class="gate-fact">A forgotten password cannot be recovered. A backup opens only with the password it was saved under.</p>
         {props.gate.detail && <span class="check check-fix" id="gate-detail"><Glyph name="fix" />{props.gate.detail}</span>}
         <div class="gate-go">
-          {toFix > 0 && n > 0 && <span class="to-fix" id="gate-to-fix"><Glyph name="fix" />{toFix} {toFix === 1 ? 'field' : 'fields'} to fix</span>}
+          {toFix > 0 && (n > 0 || tried) && <span class="to-fix" id="gate-to-fix"><Glyph name="fix" />{inTheWay}</span>}
           <button class={`btn primary wide ${working ? 'waiting' : ''}`} id="gate-submit" type="button" onClick={submit}>
             {working ? <><span class="wait-ring" />Locking</> : <><Glyph name="lock" />Lock with this password</>}
           </button>
