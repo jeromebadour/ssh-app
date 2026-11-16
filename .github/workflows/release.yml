@@ -81,7 +81,9 @@ jobs:
         run: bash scripts/get-go.sh
       - name: Build
         run: bash scripts/build.sh
-      - name: The four packages, fuses and integrity read back
+      - name: The four packages, fuses, icon, version and integrity read back
+        env:
+          BERTH_VERSION: ${{ inputs.version }}
         run: node scripts/package.mjs
       - name: What was built, for the second builder to compare
         id: report
@@ -116,6 +118,8 @@ jobs:
       - name: Build
         run: bash scripts/build.sh
       - name: The Windows packages, built here
+        env:
+          BERTH_VERSION: ${{ inputs.version }}
         run: node scripts/package.mjs win32
       - name: A second builder agrees with the first
         env:

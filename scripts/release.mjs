@@ -16,6 +16,7 @@
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import * as ResEdit from 'resedit';
 import { writeZip } from './lib/zip.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -69,6 +70,19 @@ for (const rel of have.keys()) if (!want.has(rel)) wrong.push(`not in the manife
 if (wrong.length) {
   for (const line of wrong) console.error(`release: ${line}`);
   throw new Error(`release: ${wrong.length} files do not match the manifest`);
+}
+
+// The program file must say it is this version, and must say it is Berth. The packager writes that in and
+// reads it back, but it is given the version separately from this script: if the two ever disagree, a release
+// called 0.2.0 would hand people a program whose properties say something else, and nobody would see it until
+// a person opened the file's properties on their own machine. So it is read here from the file being shipped.
+{
+  const exe = ResEdit.NtExecutableResource.from(ResEdit.NtExecutable.from(await readFile(path.join(from, p.program)), { ignoreCert: true }));
+  const info = ResEdit.Resource.VersionInfo.fromEntries(exe.entries)[0];
+  const said = info?.getStringValues(info.getAllLanguagesForStringValues()[0]) ?? {};
+  if (said['ProductName'] !== NAME) throw new Error(`release: ${p.program} calls itself ${said['ProductName'] ?? 'nothing'}, not ${NAME}`);
+  if (said['ProductVersion'] !== version) throw new Error(`release: ${p.program} says it is version ${said['ProductVersion'] ?? 'nothing'}, but this release is ${version}. Build it with BERTH_VERSION=${version}.`);
+  if (ResEdit.Resource.IconGroupEntry.fromEntries(exe.entries).length !== 1) throw new Error(`release: ${p.program} does not carry exactly one icon`);
 }
 
 const stem = `${FOLDER}-${version}`;
