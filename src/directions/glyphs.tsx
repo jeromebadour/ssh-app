@@ -53,6 +53,17 @@ const shapes: Record<string, JSX.Element> = {
   place: <><path d="M8 13.5s4-3.6 4-7a4 4 0 0 0-8 0c0 3.4 4 7 4 7z" /><circle cx="8" cy="6.5" r="1.5" /></>,
   fileKey: <><path d="M4 2.5h6l2.5 2.5v8.5H4z" /><circle cx="7" cy="9.75" r="1.25" /><path d="M8.1 9.1l2.2-2.1M9.5 7.75l.75.75" /></>,
   says: <><path d="M3 4h10v6.5H7l-3 2.5v-2.5H3z" /></>,
+  // Field labels.
+  name: <><path d="M3 4.5h10M3 8h6.5M3 11.5h8" /></>,
+  palette: <><path d="M8 2.5a5.5 5.5 0 1 0 0 11c.9 0 1.25-.6 1.25-1.2 0-.9-.75-1.05-.75-1.8 0-.6.45-1 1.1-1H11a2.5 2.5 0 0 0 2.5-2.5C13.5 4.6 11.1 2.5 8 2.5z" /><circle cx="5.5" cy="7" r=".6" /><circle cx="8" cy="5" r=".6" /><circle cx="10.6" cy="6.2" r=".6" /></>,
+  network: <><circle cx="8" cy="8" r="5.5" /><path d="M2.5 8h11M8 2.5c1.6 1.6 2.4 3.4 2.4 5.5S9.6 11.9 8 13.5M8 2.5C6.4 4.1 5.6 5.9 5.6 8s.8 3.9 2.4 5.5" /></>,
+  host: <><rect x="2.5" y="3" width="11" height="4" rx="1" /><rect x="2.5" y="9" width="11" height="4" rx="1" /><path d="M5 5h.5M5 11h.5" /></>,
+  port: <><path d="M5.5 2.5v4M10.5 2.5v4M4 6.5h8v2a4 4 0 0 1-8 0zM8 12.5v1.5" /></>,
+  user: <><circle cx="8" cy="5.5" r="2.5" /><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" /></>,
+  start: <><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /><path d="M7 8.5l2 1.25-2 1.25z" /></>,
+  ok: <><circle cx="8" cy="8" r="5.5" /><path d="M5.5 8.25l1.75 1.75 3.25-3.5" /></>,
+  fix: <><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.5M8 10.75v.25" /></>,
+  term: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.75 6.5l2 1.5-2 1.5M8.5 10H11" /></>,
 };
 
 export function Glyph(props: { name: keyof typeof shapes | string; class?: string; label?: string }) {

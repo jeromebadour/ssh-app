@@ -366,3 +366,57 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .says-open { margin-left: auto; width: 12px; height: 12px; color: var(--text-3); transform: rotate(90deg); }
 .g-mark.now { background: var(--box-1); }
 .s-rtt.problem, .s-conn.st-silent, .s-conn.st-gone { color: var(--problem); }
+
+/* ---------- fields, as every field in Berth is drawn (Kami, 2026-11-16, from his console's Add region) ---------- */
+.field-label { display: flex; align-items: center; gap: 6px; }
+.field-label .glyph { width: 14px; height: 14px; color: var(--text-3); }
+.input.sized { width: calc(var(--w) + 24px); max-width: 100%; }
+.field:has(.input.sized) { flex: none; }
+.input.mono .val, .input.mono .example { font-family: var(--mono); font-size: 12.5px; }
+.example { color: var(--text-3); white-space: nowrap; }
+.check { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.check .glyph { width: 13px; height: 13px; }
+.check-ok { color: color-mix(in srgb, var(--checked) 85%, var(--text-2)); }
+.check-fix { color: var(--problem); }
+.check-hint { color: var(--text-3); }
+.row { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+.sect.first { margin-top: 14px; padding-top: 0; border-top: 0; }
+.sect-head { text-transform: none; letter-spacing: .02em; color: var(--text); font-weight: 600; font-size: 12.5px; padding-bottom: 6px; margin-bottom: 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.sect-head .glyph { color: var(--main); }
+.sect { border-top: 0; padding-top: 0; margin-top: 18px; }
+.places { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.places-head { display: flex; gap: 10px; font-size: 12px; color: var(--text-2); }
+.places-head span { display: flex; align-items: center; gap: 6px; }
+.places-head span:first-child { width: calc(14ch + 24px); }
+.places-head .glyph { width: 14px; height: 14px; color: var(--text-3); }
+.place-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.place-edit .input { height: 32px; }
+.row-check { flex-basis: 100%; padding-left: calc(14ch + 34px); margin-top: -2px; }
+.dlg-actions { align-items: center; }
+.to-fix { margin-right: auto; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--problem); }
+.to-fix .glyph { width: 14px; height: 14px; }
+.input.picker { padding-right: 4px; }
+.pick { display: flex; align-items: center; gap: 6px; }
+.pick .glyph { width: 13px; height: 13px; }
+.gate-check { margin-top: -6px; }
+.caret-bar.first { margin-left: 0; margin-right: -4px; }
+.input.focus-wrong { box-shadow: 0 0 0 3px color-mix(in srgb, var(--problem) 16%, transparent); }
+.step-title { display: flex; align-items: center; gap: 7px; }
+.step-title .glyph { width: 14px; height: 14px; color: var(--text-3); }
+.fp-label { display: flex; align-items: center; gap: 6px; }
+.fp-label .glyph { width: 13px; height: 13px; }
+.dialog.wide { max-height: calc(100vh - 24px); overflow: hidden; }
+.dialog.two { width: 900px; padding: 20px 24px 18px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
+.col { min-width: 0; }
+.col + .col { padding-left: 28px; border-left: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.dialog.two .input { height: 32px; }
+.dialog.two .sect { margin-top: 14px; }
+.dialog.two .sect.first { margin-top: 12px; }
+.places.tight { margin-top: 0; }
+.key-sect.first-gap { margin-top: 18px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); flex-wrap: wrap; }
+.dialog.two .dlg-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dialog.two .place-edit .input.sized:first-child { --w: 11ch !important; }
+.places-head span:first-child { width: calc(11ch + 24px); }
+.row-check { padding-left: calc(11ch + 34px); }
+.kb-sep { width: 1px; height: 10px; margin: 0 6px; background: var(--line); }
