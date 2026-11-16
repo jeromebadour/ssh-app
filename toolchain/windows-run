@@ -12,3 +12,4 @@
 2026-11-16: the first-connection check's engine side (asking a box who it is, on Windows sockets).
 2026-11-16: a box for real: the engine and the lab's SSH server over Windows sockets, signed in by the key process.
 2026-11-16: the box screens by real clicks and keys (Add box, the check, the Boxes menu, folded tabs) on Windows.
+2026-11-16: the box's colour as an option in its name field.
