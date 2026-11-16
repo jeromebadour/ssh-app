@@ -249,6 +249,27 @@ test('a check that was replaced or cancelled cannot answer late; removing a box 
   assert.equal((await w.boxes.remove(id)).ok, false);
 });
 
+test('deleting a box: the key goes first, so a key is never left with no box naming it', async () => {
+  const w = world();
+  const { id } = (await w.boxes.add(draft())) as { ok: true; id: string };
+
+  // The key cannot be deleted: nothing else happens either. The box is still there, with its key, and the list
+  // was never written out without it.
+  w.keys.failOn = 'deleteKey';
+  const refused = await w.boxes.remove(id);
+  assert.equal(refused.ok, false);
+  assert.match(String((refused as { error: string }).error), /key could not be deleted/);
+  assert.deepEqual([w.boxes.list.length, w.keys.held.size], [1, 1]);
+  assert.deepEqual((w.keys.saved as { boxes?: unknown[] }).boxes?.length ?? 1, 1);
+
+  // And the right way round when it works: the key is asked for before the list is written out.
+  w.keys.failOn = '';
+  w.keys.asked.length = 0;
+  assert.deepEqual(await w.boxes.remove(id), { ok: true, id });
+  assert.deepEqual(w.keys.asked.map((a) => a.op), ['deleteKey', 'setPublic']);
+  assert.deepEqual([w.boxes.list.length, w.keys.held.size], [0, 0]);
+});
+
 test('what was saved is read back whole or not at all, and a box must be with its own key', async () => {
   const w = world();
   await w.boxes.add(draft());

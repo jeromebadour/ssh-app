@@ -240,7 +240,14 @@ let done = '';
 let signsPassedOn = 0; // requests main let through to the key process
 
 function tellGate(): void {
-  if (gate) sendTo(shell, CH.gateState, gate.view());
+  if (!gate) return;
+  sendTo(shell, CH.gateState, gate.view());
+  // What the window may show depends on the lock as much as on the boxes: before the lock is open the window
+  // is told no box at all. So the lock changing is a reason to tell the window the rest of what it holds, and
+  // it is done here, where every change to the lock passes, rather than at each place one happens. Without
+  // this, the one send that follows the boxes being loaded happens while the lock still says "working", so
+  // the window is told nothing, and nothing tells it again: every box saved, none on screen.
+  tellShell();
 }
 
 function info(t: Tab): TabInfo {

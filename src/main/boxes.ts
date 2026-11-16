@@ -186,10 +186,15 @@ export class Boxes {
     return this.oneAtATime(async () => {
       if (!this.get(id)) return { ok: false, error: 'no such box' };
       this.dropCheck(id);
-      const saved = await this.save(this.list.filter((b) => b.id !== id));
-      if (!saved.ok) return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}` };
+      // The key goes first, and the box is written out without it only once the key is gone. The two cannot be
+      // done at the same moment, so one of them is left half done if the app stops in between, and this is the
+      // order where that is safe: a box whose key has gone is on screen and says so, and can be deleted again,
+      // while a key whose box has gone is a private key nobody owns, held in the vault with nothing naming it.
       const gone = await this.keys.request('deleteKey', { key: id });
-      return gone.ok ? { ok: true, id } : { ok: false, error: `the box is removed, but its key could not be: ${String(gone.detail ?? gone.error ?? '')}` };
+      if (!gone.ok) return { ok: false, error: `its key could not be deleted, so the box is still here: ${String(gone.detail ?? gone.error ?? '')}` };
+      const saved = await this.save(this.list.filter((b) => b.id !== id));
+      if (!saved.ok) return { ok: false, error: `its key is deleted, but the box could not be removed: ${String(saved.detail ?? saved.error ?? '')}` };
+      return { ok: true, id };
     });
   }
 

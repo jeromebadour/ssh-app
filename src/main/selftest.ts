@@ -298,6 +298,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const heldNow = await ctx.keys.request('keys');
         check('the boxes are back as they were saved: one box, pinned, with its own key', ctx.boxes.loaded && ctx.boxes.fault === '' && kept.length === 1 && kept[0]!.name === 'lab-box' && kept[0]!.pin !== '' && kept[0]!.places[0]?.name === 'logs' && Array.isArray(heldNow['keys']) && (heldNow['keys'] as Record<string, unknown>[]).length === 1 && (heldNow['keys'] as Record<string, unknown>[])[0]!['publicKey'] === kept[0]!.publicKey, [ctx.boxes.fault, kept.map((b) => [b.name, b.pin !== ''])]);
       }
+      // And it is on the screen, not only in main: a list loaded after the window was already drawn, with
+      // nothing to redraw it, would leave the app looking like a first start with every box still saved.
+      if (process.env['SSHAPP_LABBOX']) {
+        const onScreenNow = await text('#bar');
+        await clickOn('#boxes');
+        await sleep(300);
+        const menu = await text('#box-menu');
+        check('the window shows the saved box, not an empty first start', menu.includes('lab-box') && !onScreenNow.includes('Add box is the only'), [menu.slice(0, 120), onScreenNow.slice(0, 80)]);
+        await clickOn('#boxes');
+      }
       const holding = await filesHolding(PASSWORD);
       check('no file the app wrote holds the password, or the wrong one', holding.length === 0 && (await filesHolding('not the password, sorry')).length === 0, holding);
 
@@ -781,8 +791,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('[data-remove="lab-box-renamed"]');
         await until(() => has('#remove-box'), 2000);
         await clickOn('#remove-do');
-        const held = await until(async () => !ctx.boxes.list.some((b) => b.id === id), 5000) ? await ctx.keys.request('keys') : { keys: [] };
-        check('Delete: the box, its key and its tabs go together, and the window says so', !ctx.boxes.list.some((b) => b.id === id) && Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id) && ![...ctx.tabs.values()].some((t) => t.box?.id === id) && (await text('#status-done')).includes('Deleted lab-box-renamed'), [ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
+        await until(async () => !ctx.boxes.list.some((b) => b.id === id), 5000);
+        const held = await ctx.keys.request('keys');
+        // Each of the four is worked out on its own, so that a failure says which one did not hold rather than
+        // leaving the next person to guess from a list of everything.
+        const wentBox = !ctx.boxes.list.some((b) => b.id === id);
+        const wentKey = Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id);
+        const wentTabs = ![...ctx.tabs.values()].some((t) => t.box?.id === id);
+        const said = (await text('#status-done')).includes('Deleted lab-box-renamed');
+        check('Delete: the box, its key and its tabs go together, and the window says so', wentBox && wentKey && wentTabs && said, [{ wentBox, wentKey, wentTabs, said }, ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
 
         lab.end();
       }
