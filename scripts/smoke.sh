@@ -50,6 +50,7 @@ selftest() {
   local prof=()
   [ -n "${selftest_profile:-}" ] && prof=(SSHAPP_PROFILE="$selftest_profile")
   [ -n "${selftest_window:-}" ] && prof+=(SSHAPP_WINDOW="$selftest_window")
+  [ -n "${selftest_pictures:-}" ] && prof+=(SSHAPP_PICTURES="$selftest_pictures" SSHAPP_PICTURE_COMMIT=smoke)
   code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" "${prof[@]}" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
@@ -97,8 +98,10 @@ case "$mode" in
     [ -f dist/main.js ] || { echo "smoke: nothing built (run scripts/build.sh)" >&2; exit 1; }
     helper node_modules/electron/dist/chrome-sandbox
     selftest "$log" "$electron" .
-    # The box screens, by real clicks and keys, against the lab's SSH server.
-    selftest_mode=boxes-ui selftest "$log" "$electron" .
+    # The box screens, by real clicks and keys, against the lab's SSH server. Each screen is pictured on the
+    # way, so the picture tool itself is run and checked (a picture must show the tab through the shell).
+    mkdir -p "$work/pictures" && chmod 777 "$work/pictures"
+    selftest_mode=boxes-ui selftest_pictures="$work/pictures" selftest "$log" "$electron" .
     quiet_network
     ;;
 

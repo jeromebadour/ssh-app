@@ -9,9 +9,12 @@ export const CH = {
   tabState: 'tab:state', // main to tab view: its engine's state
   shellCmd: 'shell:cmd', // shell view to main: new, select or close a tab
   shellState: 'shell:state', // main to shell view: the tabs and their states
-  tabShown: 'tab:shown', // main to tab view: you were just brought to the front
+  tabShown: 'tab:shown', // main to tab view: you were just brought to the front, or put behind another tab
+  tabPace: 'tab:pace', // main to tab view: the share of its time a tab behind may spend on output (1: all of it)
   tabBanner: 'tab:banner', // main to tab view: the box's sign-in text, for the terminal only
   tabTaken: 'tab:taken', // tab view to main: output bytes taken in all (a number)
+  tabResize: 'tab:resize', // tab view to main: the terminal's size in cells (two numbers)
+  tabCopy: 'tab:copy', // tab view to main: text selected in the terminal, for the clipboard (plain text, size-limited)
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -45,6 +48,7 @@ export interface GateState {
 }
 
 export const INPUT_MAX = 64 * 1024;
+export const COPY_MAX = 4 * 1024 * 1024; // characters a tab may put on the clipboard at once
 export const TABS_MAX = 12;
 
 export type EngineState = 'starting' | 'ready' | 'not-answering' | 'gone';
@@ -172,8 +176,11 @@ export interface TabPort {
   send(bytes: Uint8Array): void;
   onOutput(cb: (bytes: Uint8Array) => void): void;
   onState(cb: (info: TabInfo) => void): void;
-  onShown(cb: () => void): void;
+  onShown(cb: (front: boolean) => void): void; // brought to the front, or put behind another tab
+  onPace(cb: (share: number) => void): void; // how much of its time a tab behind may spend on output
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
+  resize(cols: number, rows: number): void;
+  copy(text: string): void; // selected text, offered for the clipboard: taken only from the tab in front of an active window
   taken(total: number): void; // how many output bytes this view has taken in all: the box sends ahead of this by a fixed amount at most
   meter(n: ViewNumbers): void;
   frame(): void;

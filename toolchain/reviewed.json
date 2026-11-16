@@ -22,6 +22,7 @@
     "resedit": "Writes a resource into a Windows program file (the app archive's hash, for Electron's integrity check). Build only.",
     "pe-library": "Reads and writes Windows program files, for resedit. Build only.",
     "preact": "The view library the screens are built with (plan B7). Ships.",
+    "@xterm/xterm": "The terminal each tab draws a box's output in (plan B3, B7): the library alone, no add-on, no dependency of its own. Ships.",
     "@fontsource/*": "Open-licensed typefaces (OFL 1.1), font files only, no code: IBM Plex Sans Condensed and IBM Plex Mono, Berth's chosen type. Ships."
   },
   "goModules": {
