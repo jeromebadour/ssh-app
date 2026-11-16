@@ -298,6 +298,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const heldNow = await ctx.keys.request('keys');
         check('the boxes are back as they were saved: one box, pinned, with its own key', ctx.boxes.loaded && ctx.boxes.fault === '' && kept.length === 1 && kept[0]!.name === 'lab-box' && kept[0]!.pin !== '' && kept[0]!.places[0]?.name === 'logs' && Array.isArray(heldNow['keys']) && (heldNow['keys'] as Record<string, unknown>[]).length === 1 && (heldNow['keys'] as Record<string, unknown>[])[0]!['publicKey'] === kept[0]!.publicKey, [ctx.boxes.fault, kept.map((b) => [b.name, b.pin !== ''])]);
       }
+      // And it is on the screen, not only in main: a list loaded after the window was already drawn, with
+      // nothing to redraw it, would leave the app looking like a first start with every box still saved.
+      if (process.env['SSHAPP_LABBOX']) {
+        const onScreenNow = await text('#bar');
+        await clickOn('#boxes');
+        await sleep(300);
+        const menu = await text('#box-menu');
+        check('the window shows the saved box, not an empty first start', menu.includes('lab-box') && !onScreenNow.includes('Add box is the only'), [menu.slice(0, 120), onScreenNow.slice(0, 80)]);
+        await clickOn('#boxes');
+      }
       const holding = await filesHolding(PASSWORD);
       check('no file the app wrote holds the password, or the wrong one', holding.length === 0 && (await filesHolding('not the password, sorry')).length === 0, holding);
 
