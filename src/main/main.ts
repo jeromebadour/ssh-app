@@ -8,6 +8,7 @@ import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
 import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
+import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -162,17 +163,14 @@ interface Tab {
   engine: Engine;
   begin(cols: number, rows: number): void; // starts the engine, once, at the view's size
   reopen(now: boolean): void; // a new session on the same box and place (a new engine: an engine is one link)
-  stopReopen(): void;
+  stopReopen(forGood?: boolean): void;
   againAt: number; // when the new session opens; 0 when none is coming
+  cancelled: boolean; // the person stopped the new session: nothing may start one by itself again
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
 }
 
-// An ending Berth never opens a new session after: the same thing would happen again, or it is the person's
-// own doing. A changed identity and a refused key are stops, not hiccups (plan A3 decision 6, B8).
-const NEVER_AGAIN: readonly string[] = ['identity-changed', 'sign-in-failed', 'no-signature', 'weak-offer', 'cancelled', 'shell-exited'];
-const AGAIN_AFTER_MS = 5000;
 
 // New connections to one box are paced: at most five in any thirty seconds, whatever asks for them (plan B1).
 const OPENED_MAX = 5;
@@ -437,9 +435,8 @@ function openTab(boxId = '', place = ''): Tab | null {
   // When a link is certainly gone, a new session opens by itself, after a wait the tab counts down.
   const maybeAgain = (): void => {
     const t = tabs.get(id);
-    if (!t || t !== tab || !box || t.againAt > 0) return;
-    const l = t.engine.link;
-    if (l.phase !== 'ended' || NEVER_AGAIN.includes(l.cause)) return;
+    if (!t || t !== tab || !box) return;
+    if (!mayOpenAgain(t.engine.link, t.againAt, t.cancelled)) return;
     t.reopen(false);
   };
   const origin = `app://tab-${id}`;
@@ -488,15 +485,19 @@ function openTab(boxId = '', place = ''): Tab | null {
   // A new session: a new engine, aimed at the same box and place, opened at the size the view has now.
   // The view keeps everything it has drawn, and is told plainly that this is a new session.
   let againTimer: NodeJS.Timeout | null = null;
-  const stopReopen = (): void => {
+  // forGood: the person pressed Cancel. A late word from the box (its process ending is one) must not
+  // start the countdown again behind their back, so the tab remembers that they stopped it.
+  const stopReopen = (forGood = false): void => {
     if (againTimer) clearTimeout(againTimer);
     againTimer = null;
     tab.againAt = 0;
+    if (forGood) tab.cancelled = true;
     if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
     tellShell();
   };
   const reopen = (now: boolean): void => {
     if (!box || tabs.get(id) !== tab) return;
+    tab.cancelled = false;
     const wait = now ? waitForBox(box.id) : Math.max(AGAIN_AFTER_MS, waitForBox(box.id));
     if (againTimer) clearTimeout(againTimer);
     tab.againAt = Date.now() + wait;
@@ -519,7 +520,7 @@ function openTab(boxId = '', place = ''): Tab | null {
     sendTo(view, CH.tabState, info(tab));
     tellShell();
   };
-  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, origin, box, place };
+  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, cancelled: false, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
@@ -615,7 +616,7 @@ ipcMain.on(CH.tabReopen, (e, now: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof now !== 'boolean' || !tab.box) return drop('tab:reopen', e);
   if (now) tab.reopen(true);
-  else tab.stopReopen();
+  else tab.stopReopen(true);
 });
 
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {

@@ -537,6 +537,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('tab-gone', 'the link gone: a new session is coming', open1);
         await clickOn('#cancel', open1);
         check('Cancel stops it: no new session opens, and the tab keeps everything it drew', (await until(async () => !(await text('#bar', open1)).includes('A new session opens'), 3000)) && open1.engine.pid === engineBefore && (await shown(open1)).includes(marker), [await text('#bar', open1), open1.engine.pid === engineBefore]);
+        // The engine of a gone link ends a moment later, and its ending is another word from below. A word
+        // that arrives after Cancel must not start the countdown again: the person stopped it.
+        const engineGone = await until(() => open1.engine.state === 'gone', 15_000);
+        check('and a word from the box after Cancel does not start it again', engineGone && !(await text('#bar', open1)).includes('A new session opens') && open1.engine.pid === engineBefore, [engineGone, open1.engine.state, await text('#bar', open1)]);
         // Reconnect: a new session, a new engine, said in the terminal; the old output is still there.
         await clickOn('#reconnect', open1);
         const again = await until(() => open1.engine.pid !== engineBefore && open1.engine.link.phase === 'up', 30_000);
