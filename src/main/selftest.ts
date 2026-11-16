@@ -361,6 +361,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('Add with nothing typed: the fields to fix are counted and named', (await text('#add-to-fix')).includes('3 fields to fix') && (await text('#box-name-check')) === 'needed' && ctx.boxes.list.length === 0, await text('#add-to-fix'));
         await clickOn('#box-name');
         await typeKeys('lab-box');
+        await clickOn('#hue-pick');
+        check('the colour is an option in the name field: its colours open under it', await until(() => has('.hue-menu'), 2000), '');
+        await shot('add-colour', 'Add box, the colour opened');
+        await clickOn('[data-hue="3"]');
+        check('a colour picked closes the list', !(await has('.hue-menu')), '');
         await clickOn('#box-host');
         await typeKeys('127.0.0.1');
         await clickOn('#box-port');
@@ -378,7 +383,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('add-filled', 'Add box, filled in');
         await clickOn('#add-submit');
         const reached = await until(async () => (await step()) === 'reached', 20_000);
-        check('Add box: the box is added and its check opens at once, asking the box who it is', reached && ctx.boxes.list.length === 1 && !(await has('#add-box')) && shellOnTop(), [await step(), ctx.boxes.list.length]);
+        check('Add box: the box is added in the colour picked, and its check opens at once, asking the box who it is', reached && ctx.boxes.list.length === 1 && ctx.boxes.list[0]?.colour === 3 && !(await has('#add-box')) && shellOnTop(), [await step(), ctx.boxes.list.length]);
         const id = ctx.boxes.list[0]?.id ?? '';
         const shownBefore = await js<string>(ctx.shell, `document.getElementById('check').textContent`);
         check('what the box showed is nowhere on the screen before a paste', !shownBefore.includes('SHA256:') || !printed.split(' ').some((w) => w.startsWith('SHA256:') && shownBefore.includes(w)), '');

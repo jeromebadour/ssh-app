@@ -11,7 +11,7 @@ import { Glyph } from './glyphs';
 
 // A field, the way every field in Berth is drawn: a label with its glyph, the input as wide as the value it will
 // hold, an example in it while empty, and under it a hint or the live check of what was typed.
-function Field(props: { id: string; glyph: string; label: string; value: string; example: string; ch: number; mono?: boolean; check: Check; shown: boolean; focus?: boolean; onInput(v: string): void; onEnter(): void }) {
+function Field(props: { id: string; glyph: string; label: string; value: string; example: string; ch: number; mono?: boolean; check: Check; shown: boolean; focus?: boolean; hue?: number; adorn?: preact.ComponentChildren; onInput(v: string): void; onEnter(): void }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (props.focus) ref.current?.focus();
@@ -19,10 +19,11 @@ function Field(props: { id: string; glyph: string; label: string; value: string;
   const c = props.check;
   const wrong = c.state === 'fix' && props.shown;
   return (
-    <label class="field" style={{ '--w': `${props.ch}ch` }}>
+    <label class="field" style={{ '--w': `${props.ch}ch`, ...(props.hue ? { '--hue': `var(--box-${props.hue})` } : {}) }}>
       <span class="field-label"><Glyph name={props.glyph} />{props.label}</span>
-      <span class={`input sized ${props.mono ? 'mono' : ''} ${wrong ? 'wrong' : ''}`}>
+      <span class={`input sized ${props.mono ? 'mono' : ''} ${wrong ? 'wrong' : ''} ${props.hue ? 'hued' : ''}`}>
         <input id={props.id} ref={ref} type="text" autocomplete="off" spellcheck={false} placeholder={props.example} value={props.value} onInput={(e) => props.onInput((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && props.onEnter()} />
+        {props.adorn}
       </span>
       <CheckLine id={`${props.id}-check`} c={c} shown={props.shown} />
     </label>
@@ -33,6 +34,26 @@ function Field(props: { id: string; glyph: string; label: string; value: string;
 function CheckLine(props: { id: string; c: Check; shown: boolean; cls?: string }) {
   const c = props.c.state === 'fix' && !props.shown ? { state: 'hint' as const, text: props.c.text } : props.c;
   return <span class={`check check-${c.state} ${props.cls ?? ''}`} id={props.id}>{c.state !== 'hint' && <Glyph name={c.state === 'ok' ? 'ok' : 'fix'} />}{c.text}</span>;
+}
+
+// The box's colour, as an option inside the name field: one small swatch (the name is shown in that colour, as
+// on its tabs); pressed, the colours open under it.
+function HuePick(props: { colour: number; open: boolean; toggle(): void; pick(n: number): void }) {
+  return (
+    <span class="hue-pick-wrap">
+      <button type="button" class={`hue-pick ${props.open ? 'open' : ''}`} id="hue-pick" aria-haspopup="menu" aria-expanded={props.open} aria-label="Colour" title="Colour: on its tabs, its terminal frame and its prompt" onClick={(e) => { e.preventDefault(); props.toggle(); }}>
+        <span class="swatch small" style={{ '--hue': `var(--box-${props.colour})` }} />
+        <Glyph name="chevron" class="caret" />
+      </button>
+      {props.open && (
+        <span class="hue-menu" role="menu" aria-label="Colour">
+          {Array.from({ length: BOX_COLOURS }, (_, i) => i + 1).map((n) => (
+            <button type="button" key={n} class={`swatch ${n === props.colour ? 'on' : ''}`} data-hue={n} style={{ '--hue': `var(--box-${n})` }} role="menuitemradio" aria-checked={n === props.colour} aria-label={`Colour ${n}`} onClick={(e) => { e.preventDefault(); props.pick(n); }} />
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function SectionHead(props: { glyph: string; title: string; aside?: string }) {
@@ -55,6 +76,7 @@ export interface AddBoxProps {
 export function AddBoxDialog(props: AddBoxProps) {
   const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
   const [tried, setTried] = useState(props.demo?.tried ?? false);
+  const [hueOpen, setHueOpen] = useState(false);
   const set = (change: Partial<BoxDraft>) => setD({ ...d, ...change });
   // There is always one empty place row at the end, showing an example.
   const rows: Place[] = [...d.places.filter((p) => p.name !== '' || p.folder !== ''), { name: '', folder: '' }];
@@ -80,16 +102,7 @@ export function AddBoxDialog(props: AddBoxProps) {
             <div class="sect first">
               <SectionHead glyph="box" title="Box" />
               <div class="row">
-                <Field id="box-name" glyph="name" label="Name" value={d.name} example="ledger-db" ch={18} focus check={required(checkName(d.name, props.taken), tried)} shown={shown(d.name)} onInput={(v) => set({ name: v })} onEnter={add} />
-                <div class="field">
-                  <span class="field-label"><Glyph name="palette" />Colour</span>
-                  <span class="swatches" role="radiogroup" aria-label="Colour">
-                    {Array.from({ length: BOX_COLOURS }, (_, i) => i + 1).map((n) => (
-                      <button type="button" key={n} class={`swatch ${n === d.colour ? 'on' : ''}`} style={{ '--hue': `var(--box-${n})` }} role="radio" aria-checked={n === d.colour} aria-label={`Colour ${n}`} onClick={() => set({ colour: n })} />
-                    ))}
-                  </span>
-                  <span class="check check-hint">on its tabs, its terminal frame and its prompt</span>
-                </div>
+                <Field id="box-name" glyph="name" label="Name" value={d.name} example="ledger-db" ch={22} focus check={required(checkName(d.name, props.taken), tried)} shown={shown(d.name)} onInput={(v) => set({ name: v })} onEnter={add} hue={d.colour} adorn={<HuePick colour={d.colour} open={hueOpen} toggle={() => setHueOpen(!hueOpen)} pick={(n) => { set({ colour: n }); setHueOpen(false); }} />} />
               </div>
             </div>
 
