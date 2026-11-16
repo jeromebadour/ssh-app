@@ -548,3 +548,21 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 #link .link-url { margin: 0 0 14px; padding: 10px 12px; border-radius: 4px; background: var(--term-bg); }
 #link .link-url code { font: 400 13px/1.5 var(--mono); color: var(--text); word-break: break-all; }
 #link .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
+
+/* Edit and Delete, on each box's own row in the Boxes menu, and the question Delete asks. */
+.bm-acts { display: none; gap: 2px; margin-left: 8px; }
+.bm-row:hover > .bm-acts, .bm-row:focus-within > .bm-acts { display: flex; }
+.bm-act { display: flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--text-3); cursor: pointer; }
+.bm-act:hover { background: var(--panel-2); color: var(--text); }
+.bm-act.remove:hover { background: color-mix(in srgb, var(--remove) 22%, transparent); color: var(--remove); }
+.dialog.dlg-remove { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--remove); }
+.dialog.dlg-remove h1 .glyph { color: var(--remove); }
+.dialog.dlg-remove .btn.primary { background: color-mix(in srgb, var(--remove) 62%, #000); }
+#remove-box .goes { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; border-radius: 4px; background: var(--term-bg); }
+#remove-box .goes li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+#remove-box .goes li .glyph { flex: none; color: var(--text-3); }
+#remove-box .said.quiet { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
+#remove-box .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
+/* The identity a box is pinned to, in Edit box. */
+#add-box .key-sub.mono { font-family: var(--mono); font-size: 11.5px; }
+#add-box #edit-pinned .btn { margin-left: auto; }

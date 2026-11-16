@@ -6,7 +6,7 @@
 // again before anything is saved; what the box showed is in the check only once main has compared a paste.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { BOX_COLOURS, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, type BoxDraft, type Check, type Place } from '../common/boxes';
-import type { CheckShown } from '../common/ipc';
+import type { BoxView, CheckShown } from '../common/ipc';
 import { Glyph } from './glyphs';
 
 // A field, the way every field in Berth is drawn: a label with its glyph, the input as wide as the value it will
@@ -64,17 +64,21 @@ const EMPTY: BoxDraft = { name: '', colour: 1, host: '', port: '', user: '', fol
 const required = (c: Check, tried: boolean): Check => (tried && c.state === 'hint' ? { state: 'fix', text: 'needed' } : c);
 
 export interface AddBoxProps {
-  taken: string[]; // the names of the boxes there are
-  working: boolean; // the box is being added (its key made, the list saved)
-  refused: Record<string, string>; // what main refused, by field, after Add
+  taken: string[]; // the names of the other boxes there are
+  working: boolean; // the box is being added or saved (its key made, the list written)
+  refused: Record<string, string>; // what main refused, by field, after Add or Save
   error: string; // a refusal that is no field's
   demo?: { draft: BoxDraft; tried?: boolean };
+  // Editing: the box as it stands, so the same dialog shows it and saves what changed. Its identity, when it
+  // has one, is shown with the way to forget it; its key is this box's, not a new one.
+  editing?: { draft: BoxDraft; pinType: string; pinFingerprint: string; pinnedAt: string; onForget(): void };
   onAdd(draft: BoxDraft): void;
   onCancel(): void;
 }
 
 export function AddBoxDialog(props: AddBoxProps) {
-  const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
+  const editing = props.editing;
+  const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? editing?.draft ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
   const [tried, setTried] = useState(props.demo?.tried ?? false);
   const [hueOpen, setHueOpen] = useState(false);
   const set = (change: Partial<BoxDraft>) => setD({ ...d, ...change });
@@ -96,7 +100,7 @@ export function AddBoxDialog(props: AddBoxProps) {
   return (
     <div class="scrim">
       <div class="dialog wide two dlg-main" id="add-box" role="dialog" aria-modal="true" aria-labelledby="add-title">
-        <h1 id="add-title"><Glyph name="box" />Add box</h1>
+        <h1 id="add-title"><Glyph name={editing ? 'edit' : 'box'} />{editing ? `Edit ${editing.draft.name}` : 'Add box'}</h1>
         <div class="cols">
           <div class="col">
             <div class="sect first">
@@ -149,10 +153,35 @@ export function AddBoxDialog(props: AddBoxProps) {
             <div class="sect key-sect first-gap">
               <Glyph name="key" class="key-glyph" />
               <div class="key-main">
-                <div class="key-line">Berth makes a new key for this box</div>
+                <div class="key-line">{editing ? 'This box keeps the key Berth made for it' : 'Berth makes a new key for this box'}</div>
                 <div class="key-sub">ed25519, kept only inside your locked list</div>
               </div>
             </div>
+            {editing && (
+              <div class="sect">
+                <SectionHead glyph="identity" title="Its identity" />
+                {editing.pinFingerprint === '' ? (
+                  <div class="key-row" id="edit-unpinned">
+                    <Glyph name="identityBroken" class="key-glyph" />
+                    <div class="key-main">
+                      <div class="key-line">Not checked yet</div>
+                      <div class="key-sub">it is checked when you open it</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div class="key-row" id="edit-pinned">
+                    <Glyph name="identity" class="key-glyph" />
+                    <div class="key-main">
+                      <div class="key-line">{editing.pinType}, pinned {editing.pinnedAt.slice(0, 10)}</div>
+                      <div class="key-sub mono">{editing.pinFingerprint}</div>
+                    </div>
+                    <button type="button" class="btn keep-plain" id="edit-forget" onClick={editing.onForget}>
+                      <Glyph name="identityBroken" />Forget it
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div class="dlg-actions">
@@ -160,7 +189,7 @@ export function AddBoxDialog(props: AddBoxProps) {
           {props.error === '' && toFix > 0 && <span class="to-fix" id="add-to-fix"><Glyph name="fix" />{toFix} {toFix === 1 ? 'field' : 'fields'} to fix</span>}
           <button type="button" class="btn keep-plain" id="add-cancel" onClick={props.onCancel}><Glyph name="close" />Cancel</button>
           <button type="button" class={`btn primary ${props.working ? 'waiting' : ''}`} id="add-submit" onClick={add}>
-            {props.working ? <><span class="wait-ring" />Making its key</> : <><Glyph name="plus" />Add box</>}
+            {props.working ? <><span class="wait-ring" />{editing ? 'Saving' : 'Making its key'}</> : <>{editing ? <><Glyph name="check" />Save</> : <><Glyph name="plus" />Add box</>}</>}
           </button>
         </div>
       </div>
@@ -357,6 +386,45 @@ export function ChangedDialog(props: { name: string; addr: string; pinType: stri
         <p class="dlg-fact">If {props.name} was rebuilt, its new identity is checked again the same way as the first time.</p>
         <div class="dlg-actions">
           <button type="button" class="btn keep" id="changed-close" autofocus onClick={props.onClose}><Glyph name="close" />Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ delete a box
+
+// Deleting a box takes its key with it, and a key that is gone cannot be made again: what it opened, it
+// opened. So the question says what goes, and what stays on the box itself (plan A5: the line in its
+// authorized_keys is the box's, not Berth's, and only the box can take it out).
+export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove(): void; onCancel(): void }) {
+  const b = props.box;
+  // The way out is where the hands are: Keep it has the focus, so Enter keeps the box (BUILD-RULES 2.20).
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => keep.current?.focus(), []);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onCancel();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  return (
+    <div class="scrim">
+      <div class="dialog dlg-remove" id="remove-box" role="dialog" aria-modal="true" aria-labelledby="remove-title">
+        <h1 id="remove-title"><Glyph name="stop" />Delete {b.name}?</h1>
+        <ul class="goes" id="remove-goes">
+          <li><Glyph name="box" /><span>{b.name}, {b.user}@{b.host}:{b.port}{b.places.length > 0 ? `, and its ${b.places.length} ${b.places.length === 1 ? 'place' : 'places'}` : ''}</span></li>
+          <li><Glyph name="key" /><span>its key, which Berth made and holds nowhere else</span></li>
+          {b.pinned ? <li><Glyph name="identity" /><span>the identity pinned for it on {b.pinnedAt.slice(0, 10)}</span></li> : null}
+          {props.tabs > 0 ? <li><Glyph name="close" /><span>{props.tabs} open {props.tabs === 1 ? 'tab' : 'tabs'} on it, closed with it</span></li> : null}
+        </ul>
+        <p class="said quiet" id="remove-stays">
+          The key line Berth asked you to add stays on the box itself: only the box can take it out.
+        </p>
+        <div class="dlg-actions">
+          <button type="button" class="btn keep-plain" id="remove-cancel" ref={keep} onClick={props.onCancel}><Glyph name="close" />Keep it<kbd>Esc</kbd></button>
+          <button type="button" class="btn primary" id="remove-do" onClick={props.onRemove}><Glyph name="stop" />Delete {b.name}</button>
         </div>
       </div>
     </div>
