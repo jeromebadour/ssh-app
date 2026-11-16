@@ -691,6 +691,29 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await type(open1, `echo after-${marker}\n`);
         check('when the box speaks again the bar is gone, the same session answers, and nothing was reconnected', backOk && (await until(async () => (await shown(open1)).includes(`after-${marker}`), 5000)) && !(await has('#bar', open1)) && open1.engine.link.phase === 'up', [open1.engine.link.phase, await text('#bar', open1)]);
 
+        // Closing ends a session, so it asks first and names what would end (BUILD-RULES 2.20). The tab open
+        // here is signed in: closing it, and closing the window, both have something to lose.
+        {
+          const live = open1;
+          await clickOn(`[data-close="${live.id}"]`);
+          const asked = await until(() => has('#closing'), 3000);
+          const goes = await text('#closing-goes');
+          check('closing a tab with a session on it asks first, naming the box and where it stands', asked && goes.includes('lab-box') && (goes.includes('connected') || goes.includes('not answering')) && ctx.tabs.has(live.id), [goes, ctx.tabs.has(live.id)]);
+          check('the way out has the focus, so Enter keeps the tab', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'closing-keep', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
+          await shot('closing-tab', 'closing a tab with a session on it');
+          await clickOn('#closing-keep');
+          check('Keep the tab: it is still open and its session is untouched', (await until(async () => !(await has('#closing')), 2000)) && ctx.tabs.has(live.id) && ctx.tabs.get(live.id)!.engine.link.phase === 'up', ctx.tabs.get(live.id)?.engine.link.phase);
+
+          // The window's own close goes the same way, and must not close while the question stands.
+          ctx.win.close();
+          const askedApp = await until(async () => (await has('#closing')) && ctx.shellState().closing !== null, 3000);
+          check('closing the window asks too, and the window does not close while it is asking', askedApp && !ctx.win.isDestroyed() && (await text('#closing-title')).includes('Close Berth'), [askedApp, await text('#closing-title')]);
+          check('and it names the session that would end', (await text('#closing-goes')).includes('lab-box'), await text('#closing-goes'));
+          await shot('closing-app', 'closing Berth with a session open');
+          await clickOn('#closing-keep');
+          check('Keep Berth open: the window and its session are still here, and the footer says so', (await until(async () => !(await has('#closing')), 2000)) && !ctx.win.isDestroyed() && ctx.tabs.has(live.id) && (await text('#status-done')).includes('kept open'), await text('#status-done'));
+        }
+
         // A link that is gone: the box's connection is reset. The bar says the cause and the time, a new
         // session is counted down, and Cancel stops it.
         const engineBefore = open1.engine.pid;

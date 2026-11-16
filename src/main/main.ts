@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes } from './boxes';
@@ -268,7 +268,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -277,6 +277,25 @@ function shellState(): ShellState {
 // Ctrl+click asks here, and the whole address is shown on the window's own surface before anything opens.
 let waitingLink: LinkAsked | null = null;
 let linksRefused = 0;
+// Closing the window with sessions open asks first, and nothing is ended until the answer comes back
+// (BUILD-RULES 2.20). While this holds the question, the window's own close has been refused once.
+let closingAsked: ClosingAsked | null = null;
+let closingForReal = false;
+
+// The sessions that would end if the window closed now, and the tabs that have nothing to lose.
+function whatWouldEnd(): ClosingAsked {
+  const live: ClosingAsked['live'] = [];
+  let idle = 0;
+  for (const t of tabs.values()) {
+    const i = info(t);
+    // A session that is signed in, or on its way there, is a real loss. One that has ended is not.
+    if (i.box && ['connecting', 'key-exchange', 'signing-in', 'up'].includes(i.link.phase)) {
+      live.push({ id: t.id, box: i.box.name, place: t.place, words: i.link.phase === 'up' ? (i.state === 'not-answering' ? 'not answering' : 'connected') : i.link.phase === 'signing-in' ? 'signing in' : 'connecting' });
+    } else idle++;
+  }
+  return { live, idle };
+}
+
 let lastOpened = ''; // the last address handed to Windows, for the lab
 const windowAsked: string[] = []; // what the window's own three buttons have asked of the window, for the lab
 let opensAsked = 0;
@@ -763,6 +782,15 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     else if (c.do === 'close') win.close();
     else if (win.isMaximized()) win.unmaximize();
     else win.maximize();
+  } else if (c?.op === 'closeApp') {
+    // Asked and answered: close for real. The question is dropped first, so a second close is a plain close.
+    closingAsked = null;
+    closingForReal = true;
+    win?.close();
+  } else if (c?.op === 'keepApp') {
+    closingAsked = null;
+    done = 'The window was kept open';
+    tellShell();
   } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
 });
@@ -910,6 +938,16 @@ if (!app.requestSingleInstanceLock()) {
     // Windows' own snapping, the keyboard. The button must show where the window stands whatever moved it.
     win.on('maximize', tellShell);
     win.on('unmaximize', tellShell);
+    // Closing the window ends every session in it, so it asks first and names what would go. Every way of
+    // closing comes through here: Berth's own close button (which calls win.close()), Alt+F4, and the taskbar.
+    win.on('close', (e: Electron.Event) => {
+      if (closingForReal) return;
+      const would = whatWouldEnd();
+      if (would.live.length === 0) return; // nothing to lose: it closes as it always did
+      e.preventDefault();
+      closingAsked = would;
+      tellShell();
+    });
     win.on('closed', () => {
       keys?.close();
       for (const t of tabs.values()) t.engine.close();

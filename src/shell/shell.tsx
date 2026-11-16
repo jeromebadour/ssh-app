@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, WindowStrip, type BarActions } from '../ui/bar';
-import { AddBoxDialog, ChangedDialog, CheckDialog, RemoveBoxDialog } from '../ui/boxdialogs';
+import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialog } from '../ui/boxdialogs';
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
@@ -24,7 +24,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -60,7 +60,7 @@ const act = {
 
 // What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
 // the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
-type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number };
+type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number };
 
 let nextReq = 1;
 
@@ -69,7 +69,9 @@ function Unlocked(props: { s: ShellState }) {
   const [dialog, setDialog] = useState<Dialog>({ kind: 'none' });
   const [seenChanged, setSeenChanged] = useState<number[]>([]);
   // A dialog or the check is open: the shell is above the tabs, so no tab can draw over it or take its clicks.
-  const over = dialog.kind !== 'none' || s.check !== null;
+  // The shell is raised above the tabs whenever something of its own is open, the closing question included:
+  // drawn behind a tab's view it would not be seen at all, and the window would look frozen instead of asking.
+  const over = dialog.kind !== 'none' || s.check !== null || s.closing !== null;
   // Said before the dialog is painted, so the shell is raised as it appears.
   useLayoutEffect(() => port.cmd({ op: 'overlay', on: over }), [over]);
   // The box was added: its check opens (main has started it), and Add box closes.
@@ -83,7 +85,13 @@ function Unlocked(props: { s: ShellState }) {
   }, [stopped?.id, dialog.kind, s.check === null]);
   const act: BarActions = {
     select: (id) => port.cmd({ op: 'select', id }),
-    close: (id) => port.cmd({ op: 'close', id }),
+    close: (id) => {
+      // Closing a tab ends its session, so it asks first, the same as closing the window does. A tab whose
+      // session has already ended has nothing to lose and closes on the press.
+      const t = s.tabs.find((x) => x.id === id);
+      if (t && t.box && ['connecting', 'key-exchange', 'signing-in', 'up'].includes(t.link.phase)) setDialog({ kind: 'closing', tab: id });
+      else port.cmd({ op: 'close', id });
+    },
     open: (box, place) => {
       const b = s.boxes.find((x) => x.id === box);
       if (b && !b.pinned) port.cmd({ op: 'check', box });
@@ -101,6 +109,7 @@ function Unlocked(props: { s: ShellState }) {
   const editing = dialog.kind === 'edit' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
   const removing = dialog.kind === 'remove' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
   const changedTab = dialog.kind === 'changed' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
+  const closingTab = dialog.kind === 'closing' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
   const changedBox = changedTab?.box ? s.boxes.find((b) => b.id === changedTab.box!.id) : undefined;
   return (
     <div class="window live">
@@ -151,6 +160,26 @@ function Unlocked(props: { s: ShellState }) {
           }}
           onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'editBox', req: dialog.req, box: editing.id, draft }); }}
           onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {/* Closing the window: main asked, naming every session that would end. */}
+      {s.closing && (
+        <ClosingDialog
+          what="app"
+          live={s.closing.live}
+          idle={s.closing.idle}
+          onClose={() => port.cmd({ op: 'closeApp' })}
+          onKeep={() => port.cmd({ op: 'keepApp' })}
+        />
+      )}
+      {/* Closing one tab whose session is live. */}
+      {!s.closing && dialog.kind === 'closing' && closingTab && (
+        <ClosingDialog
+          what="tab"
+          live={[{ id: closingTab.id, box: closingTab.box?.name ?? `tab ${closingTab.id}`, place: placeLabel(closingTab, s.boxes), words: tabLook(closingTab).words }]}
+          idle={0}
+          onClose={() => { port.cmd({ op: 'close', id: closingTab.id }); setDialog({ kind: 'none' }); }}
+          onKeep={() => setDialog({ kind: 'none' })}
         />
       )}
       {dialog.kind === 'remove' && removing && (

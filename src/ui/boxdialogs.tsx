@@ -504,3 +504,46 @@ export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove():
     </div>
   );
 }
+
+// ------------------------------------------------------------------ closing
+
+// Closing ends sessions, and an ended session cannot be put back as it was: whatever was running on the box
+// keeps running there, but the way in is gone and anything held in the terminal goes with it. So Berth asks
+// first and names what would end, rather than taking one press for it (BUILD-RULES 2.20). The way out has the
+// focus, so Enter keeps everything open, and Escape does the same.
+export function ClosingDialog(props: { what: 'app' | 'tab'; live: { id: number; box: string; place: string; words: string }[]; idle: number; onClose(): void; onKeep(): void }) {
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => keep.current?.focus(), []);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onKeep();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  const n = props.live.length;
+  const app = props.what === 'app';
+  return (
+    <div class="scrim">
+      <div class="dialog dlg-remove" id="closing" role="dialog" aria-modal="true" aria-labelledby="closing-title">
+        <h1 id="closing-title"><Glyph name="close" />{app ? (n === 1 ? 'Close Berth and end 1 session?' : `Close Berth and end ${n} sessions?`) : 'Close this tab and end its session?'}</h1>
+        <ul class="goes" id="closing-goes">
+          {props.live.map((t) => (
+            <li key={t.id}>
+              <Glyph name="term" />
+              <span>{t.box}{t.place ? `, ${t.place}` : ''} <span class="quiet">({t.words})</span></span>
+            </li>
+          ))}
+          {app && props.idle > 0 ? <li><Glyph name="close" /><span>{props.idle} other {props.idle === 1 ? 'tab' : 'tabs'}, with nothing running</span></li> : null}
+        </ul>
+        <p class="said quiet" id="closing-stays">
+          Whatever you started on {n === 1 ? 'the box' : 'those boxes'} keeps running there. What ends is Berth's way in, and what the terminal is holding.
+        </p>
+        <div class="dlg-actions">
+          <button type="button" class="btn keep-plain" id="closing-keep" ref={keep} onClick={props.onKeep}><Glyph name="close" />{app ? 'Keep Berth open' : 'Keep the tab'}<kbd>Esc</kbd></button>
+          <button type="button" class="btn danger" id="closing-do" onClick={props.onClose}><Glyph name="stop" />{app ? 'Close Berth' : 'Close the tab'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}

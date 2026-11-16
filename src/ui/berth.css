@@ -598,10 +598,14 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 .dialog.dlg-remove { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--remove); }
 .dialog.dlg-remove h1 .glyph { color: var(--remove); }
 .dialog.dlg-remove .btn.primary { background: color-mix(in srgb, var(--remove) 62%, #000); }
-#remove-box .goes { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; border-radius: 4px; background: var(--term-bg); }
-#remove-box .goes li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-#remove-box .goes li .glyph { flex: none; color: var(--text-3); }
-#remove-box .said.quiet { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
+/* What a question says goes with it: one look for every dialog that ends something, not one per dialog. These
+   were written against #remove-box alone, so the closing question, which is the same kind of question and uses
+   the same shell, came out with none of it: a bare line of text run into the paragraph under it. */
+.dlg-remove .goes { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; border-radius: 4px; background: var(--term-bg); }
+.dlg-remove .goes li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.dlg-remove .goes li .glyph { flex: none; color: var(--text-3); }
+.dlg-remove .goes li .quiet { color: var(--text-3); }
+.dlg-remove .said.quiet { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
 #remove-box .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
 /* The identity a box is pinned to, in Edit box. */
 #add-box .key-sub.mono { font-family: var(--mono); font-size: 11.5px; }

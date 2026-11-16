@@ -154,6 +154,14 @@ export interface ShellState {
   paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
   link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
   maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
+  closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
+}
+
+// Closing the window while sessions are open. Berth asks first and names what would go, rather than ending them
+// on one press (BUILD-RULES 2.20); nothing is closed until the answer comes back.
+export interface ClosingAsked {
+  live: { id: number; box: string; place: string; words: string }[]; // the sessions that would end, as the bar says them
+  idle: number; // the other tabs open, which have nothing to lose
 }
 
 // An address a box printed, Ctrl+clicked, and shown whole before anything opens (plan B2.7). A box can print
@@ -200,7 +208,9 @@ export type ShellCmd =
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'closeCheck'; box: string }
   | { op: 'copyBlock'; box: string }
-  | { op: 'window'; do: 'minimize' | 'maximize' | 'close' }; // the window's own three buttons, which Berth draws
+  | { op: 'window'; do: 'minimize' | 'maximize' | 'close' } // the window's own three buttons, which Berth draws
+  | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
+  | { op: 'keepApp' }; // the asking answered: keep everything open
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:
