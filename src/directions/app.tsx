@@ -7,11 +7,13 @@
 //   ?scene=addbox | trust | changed      Add box, the first-connection check, a changed identity
 //   ?scene=connecting | fresh            a new tab opening, then just signed in (the sign-in text folded)
 //   ?scene=noanswer | dropped            a silent link kept; a link that is gone, reconnecting
+//   ?scene=mismatch | unreachable        the first-connection check: another box answered; the box cannot be reached
+//   ?scene=seven | sevenopen             seven tabs in a small window: a box's tabs folded into one; that fold open
 import { render } from 'preact';
 import { blocks, files, groups, logCmd, logLines, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
 import { Glyph } from '../ui/glyphs';
 import { Mark } from '../ui/marks';
-import { AddBoxDialog, ChangedDialog, TrustDialog } from './screens';
+import { AddBoxDialog, ChangedDialog, MismatchDialog, TrustDialog, UnreachableDialog } from './screens';
 
 const q = new URLSearchParams(location.search);
 const scene = q.get('scene') ?? '';
@@ -22,6 +24,14 @@ const tabOf = (box: string, place: string) => tabGroups.find((g) => g.box === bo
 if (scene === 'connecting' || scene === 'fresh') {
   for (const g of tabGroups) for (const t of g.tabs) t.active = false;
   tabGroups.find((g) => g.box === 'relay-fra')?.tabs.push(scene === 'connecting' ? { place: 'staging', active: true, state: 'connecting' } : { place: 'staging', active: true });
+}
+// Seven tabs, the most Kami opens: four boxes, four tabs on one of them.
+const sevenScene = scene === 'seven' || scene === 'sevenopen';
+if (sevenScene) {
+  for (const g of tabGroups) for (const t of g.tabs) t.active = false;
+  tabGroups.find((g) => g.box === 'relay-fra')?.tabs.push({ place: 'staging', active: true }, { place: 'releases', signal: 'done' });
+  tabGroups.find((g) => g.box === 'build-sg')?.tabs.push({ place: 'artifacts' });
+  tabGroups.push({ box: 'ledger-db', hue: 'var(--box-4)', state: 'connected', tabs: [{ place: 'db' }] });
 }
 const linkStates: Record<string, [string, string, 'silent' | 'gone' | 'stopped']> = { noanswer: ['relay-fra', 'deploy', 'silent'], dropped: ['relay-fra', 'deploy', 'gone'], changed: ['vault-ams', 'backups', 'stopped'] };
 const ls = linkStates[scene];
@@ -53,6 +63,49 @@ function BoxMenu() {
   );
 }
 
+// When the tabs would not fit, a box with several tabs folds into one: its tab in front (or the last used),
+// and how many it holds. The count opens the box's tabs as a list. A box with one tab never folds.
+function Folded(props: { g: (typeof tabGroups)[number] }) {
+  const g = props.g;
+  const front = g.tabs.find((t) => t.active) ?? g.tabs[0]!;
+  const others = g.tabs.filter((t) => t !== front);
+  const busy = others.some((t) => t.signal === 'output' || t.signal === 'done' || t.signal === 'running');
+  const open = scene === 'sevenopen' && g.box === 'relay-fra';
+  return (
+    <div class={`tab-group folded st-${g.state}`} style={{ '--hue': g.hue }}>
+      <span class={`tab ${front.active ? 'active' : ''}`}>
+        <span class={`conn conn-${front.state ?? g.state}`} />
+        <span class="tab-box">{g.box}</span>
+        <span class="tab-place">{front.place}</span>
+        <span class="tab-end">
+          {front.signal === 'running' && <span class="sig sig-running">1:42</span>}
+          <button class={`fold-n ${open ? 'open' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-label={`${g.tabs.length} tabs on ${g.box}`}>
+            {busy && <span class="fold-dot" />}
+            {g.tabs.length}
+            <Glyph name="chevron" class="caret" />
+          </button>
+          {front.active && <Glyph name="close" class="tab-x" label="Close tab" />}
+        </span>
+      </span>
+      {open && (
+        <div class="fold-menu" role="menu" aria-label={`Tabs on ${g.box}`}>
+          {g.tabs.map((t) => (
+            <div class={`fm-row ${t === front ? 'front' : ''}`} key={t.place} role="menuitem">
+              <span class={`conn conn-${t.state ?? g.state}`} />
+              <Glyph name="place" class="fm-glyph" />
+              <span class="fm-place">{t.place}</span>
+              {t.signal === 'running' && <span class="sig sig-running">1:42</span>}
+              {t.signal === 'output' && <span class="sig sig-output" title="new output" />}
+              {t.signal === 'done' && <Glyph name="check" class="sig sig-done" label="command finished" />}
+              <Glyph name="close" class="fm-x" label={`Close ${t.place}`} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TabBar() {
   return (
     <header class="tabbar">
@@ -63,8 +116,8 @@ function TabBar() {
       <button class={`boxes-btn ${scene === 'boxes' ? 'open' : ''}`} aria-haspopup="menu" aria-expanded={scene === 'boxes'}>
         <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />
       </button>
-      <div class="tab-groups">
-        {tabGroups.map((g) => (
+      <div class="tab-groups" style={{ '--n': tabGroups.reduce((n, g) => n + (sevenScene ? 1 : g.tabs.length), 0) }}>
+        {tabGroups.map((g) => sevenScene && g.tabs.length > 1 ? <Folded g={g} key={g.box} /> : (
           <div class={`tab-group st-${g.state}`} key={g.box} style={{ '--hue': g.hue }}>
             {g.tabs.map((t) => (
               <span class={`tab ${t.active ? 'active' : ''}`} key={t.place}>
@@ -400,6 +453,8 @@ function Window() {
       {scene === 'addbox' && <AddBoxDialog />}
       {scene === 'trust' && <TrustDialog />}
       {scene === 'changed' && <ChangedDialog />}
+      {scene === 'mismatch' && <MismatchDialog />}
+      {scene === 'unreachable' && <UnreachableDialog />}
     </div>
   );
 }

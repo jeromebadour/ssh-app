@@ -434,20 +434,47 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .gate-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
 .tab-close { display: grid; place-items: center; }
 .tabbar.scaffold { height: 44px; }
-/* Every tab stays in sight. Tabs are 168 wide while there is room; in a narrower window, or with more tabs, they
+/* Every tab stays in sight. Tabs are 168 wide, or their words' width, while there is room; in a narrower window, or with more tabs, they
    all narrow together and their words are cut with a mark, the place first. None ever slides past the edge, and
    the button that opens one more stays where it can be pressed (found 2026-11-16: at 1024 wide, tabs six and
    seven of seven were out of the window). The tab in front keeps enough width to say which box it is. */
+.tab-group { flex: 0 1 auto; min-width: 0; }
+/* At least 168 wide, or this tab's share of the bar when all of them would not fit (--n is how many tabs there
+   are); as wide as its words beyond that while there is room. */
+.tab-groups { container-type: inline-size; }
+.tab { flex: 0 1 auto; min-width: min(168px, calc((100cqw - 48px) / var(--n, 1) - 10px)); }
+.tab.active { min-width: max(92px, min(168px, calc((100cqw - 48px) / var(--n, 1) - 10px))); }
+.tab-box { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-place { flex: 0 20 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-end { flex: none; }
+.tab-groups > .new-tab { flex: none; }
 .scaffold .tab-groups { gap: 2px; }
-.scaffold .tab { flex: 1 1 0; max-width: 168px; min-width: 0; overflow: hidden; }
-.scaffold .tab.active { min-width: 88px; }
-.scaffold .tab-box { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scaffold .tab-place { flex: 0 20 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scaffold .tab-end { flex: none; padding-left: 2px; }
-.scaffold .new-tab { flex: none; margin-left: 6px; }
+.scaffold .tab-end { padding-left: 2px; }
+.scaffold .new-tab { margin-left: 6px; }
 /* Every press answers at once: whatever can be pressed shows the press itself, before anything it causes. */
 .new-tab:active, .tab-close:active, .pick:active, .tool:active, .ft-btn:active { background: color-mix(in srgb, var(--text) 12%, transparent); }
 .btn:active { filter: brightness(1.12); }
 /* A tab too, the front one included: a press on the tab already in front changes nothing else, so the press
    itself is what shows. */
 .tab:active { filter: brightness(1.12); }
+
+/* The first-connection check: a box that answered with another identity, or could not be reached. */
+.fp-pair.indent, .dlg-fact.indent { margin-left: 36px; }
+.reach-bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border-radius: var(--r); background: color-mix(in srgb, var(--problem) 10%, transparent); border: 1px solid color-mix(in srgb, var(--problem) 35%, transparent); }
+.reach-bar > .glyph { width: 16px; height: 16px; color: var(--problem); flex: none; }
+.reach-bar > div { flex: 1; min-width: 0; }
+.reach-title { font-weight: 500; color: var(--text); }
+.reach-sub { margin-top: 3px; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.dlg-actions.gap-top { margin-top: 18px; }
+/* A box's tabs folded into one when the bar is full: the count opens them as a list. */
+.tab-group.folded { position: relative; }
+.fold-n { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 5px 0 6px; border-radius: var(--r-s); background: color-mix(in srgb, var(--hue) 18%, transparent); color: var(--text); font: 600 11.5px/1 var(--ui); cursor: pointer; }
+.fold-n .caret { width: 11px; height: 11px; color: var(--text-2); transform: rotate(90deg); }
+.fold-n.open, .fold-n:active { background: color-mix(in srgb, var(--hue) 32%, transparent); }
+.fold-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-2); }
+.fold-menu { position: absolute; z-index: 20; top: 40px; left: 0; min-width: 210px; padding: 4px; border: 1px solid var(--line); border-top: 2px solid var(--hue); border-radius: var(--r); background: var(--panel-2); box-shadow: 0 12px 30px rgba(0, 0, 0, .4); }
+.fm-row { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--r-s); cursor: pointer; }
+.fm-row.front { background: color-mix(in srgb, var(--hue) 14%, transparent); }
+.fm-glyph { width: 14px; height: 14px; color: var(--text-3); }
+.fm-place { flex: 1; font-size: 13.5px; }
+.fm-x { width: 13px; height: 13px; color: var(--text-3); }
