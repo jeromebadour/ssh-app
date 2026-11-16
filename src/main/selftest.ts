@@ -300,6 +300,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       }
       const holding = await filesHolding(PASSWORD);
       check('no file the app wrote holds the password, or the wrong one', holding.length === 0 && (await filesHolding('not the password, sorry')).length === 0, holding);
+
+      // A stalled main cannot report itself. The key process times main's beat, so it is the one part that
+      // can say main stopped (plan B1, B8 rule 5). Main is stopped here on purpose, which is the only place
+      // in this app where anything blocks it; the check that forbids blocking calls covers the app's code.
+      const beforeStall = await ctx.keys.request('status');
+      const stallFor = 6500;
+      const stallUntil = Date.now() + stallFor;
+      while (Date.now() < stallUntil) {
+        // nothing: main is held here, as a frozen main would be
+      }
+      const afterStall = await ctx.keys.request('status');
+      const stalls = Number(afterStall['mainStalls'] ?? -1);
+      const longest = Number(afterStall['mainLongestStallMs'] ?? -1);
+      check('the key process saw main stop, and says how long for', Number(beforeStall['mainStalls'] ?? -1) === 0 && stalls === 1 && longest >= stallFor - 500 && longest < stallFor + 4000, [beforeStall['mainStalls'], stalls, longest]);
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);

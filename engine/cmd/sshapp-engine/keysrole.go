@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -47,6 +48,34 @@ type keyProc struct {
 
 	wait      time.Duration // after a wrong password: how long the next try must wait; doubles
 	notBefore time.Time
+
+	// How long main has gone without a word. Main beats once a second; this process is the one place that
+	// can see main stop, because a stalled main cannot report itself (plan B1, B8 rule 5). The reader
+	// goroutine writes these and the worker goroutine reads them, so they are atomic.
+	lastBeat atomic.Int64 // when the last beat came, in nanoseconds
+	stalls   atomic.Int64 // how many times main went quiet for longer than mainQuietAfter
+	longest  atomic.Int64 // the longest of those silences, in nanoseconds
+}
+
+// How long main may go without a word before this process counts it as a stall. Main beats every second, so
+// this is five beats missed. The same five seconds main allows this process (keyproc.ts).
+const mainQuietAfter = 5 * time.Second
+
+// beat is called for every word from main: a stall is the gap since the last one.
+func (k *keyProc) beat(now time.Time) {
+	was := k.lastBeat.Swap(now.UnixNano())
+	if was == 0 {
+		return // the first word: there is no gap before it
+	}
+	if gap := now.Sub(time.Unix(0, was)); gap > mainQuietAfter {
+		k.stalls.Add(1)
+		for {
+			longest := k.longest.Load()
+			if int64(gap) <= longest || k.longest.CompareAndSwap(longest, int64(gap)) {
+				break
+			}
+		}
+	}
 }
 
 type keyRequest struct {
@@ -98,8 +127,10 @@ func runKeys(o *out, target aim) int {
 		}
 		switch f.Type {
 		case frame.TypePing:
+			k.beat(time.Now())
 			o.send(frame.TypePong, f.Body)
 		case frame.TypeKeyRequest, frame.TypePassword:
+			k.beat(time.Now())
 			work <- f
 		default:
 			o.fatal(exitBadFrame, "not a frame for the key process")
@@ -142,7 +173,7 @@ func (k *keyProc) handle(f frame.Frame) {
 			k.fail(q.ID, "cannot-read", err)
 			return
 		}
-		v := map[string]any{"exists": exists, "unlocked": k.open != nil, "hasPrevious": keys.HasPrevious(k.path)}
+		v := map[string]any{"exists": exists, "unlocked": k.open != nil, "hasPrevious": keys.HasPrevious(k.path), "mainStalls": k.stalls.Load(), "mainLongestStallMs": k.longest.Load() / int64(time.Millisecond)}
 		if left := time.Until(k.notBefore); left > 0 {
 			v["retryAfterMs"] = left.Milliseconds()
 		}

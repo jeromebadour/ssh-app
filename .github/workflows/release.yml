@@ -57,10 +57,16 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
-          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs[] | "\(.name) \(.conclusion)"')
+          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion)"')
           echo "$runs"
           for job in checks lab vuln; do
-            printf '%s\n' "$runs" | grep -qx "$job success" || { echo "::error::CI's $job job did not pass on $SHA. Nothing is released from a commit CI has not approved."; exit 1; }
+            line=$(printf '%s\n' "$runs" | grep "^$job " || true)
+            case "$line" in
+              "$job completed success") ;;
+              '') echo "::error::CI has not run its $job job on $SHA at all. Nothing is released from a commit CI has not approved."; exit 1 ;;
+              "$job completed"*) echo "::error::CI's $job job did not pass on $SHA ($line). Nothing is released from a commit CI has not approved."; exit 1 ;;
+              *) echo "::error::CI is still running on $SHA ($line). It is a few minutes after a merge; start this again when CI is green."; exit 1 ;;
+            esac
           done
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
