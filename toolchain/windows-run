@@ -20,3 +20,4 @@
 2026-11-16: Edit box, Forget its identity and Delete box, driven by hand, on Windows.
 2026-11-16: the installer: the release zip unpacked, install.ps1 and uninstall.ps1 driven for real on Windows.
 2026-11-16: the program file is Berth.exe, and the packages are named for it.
+2026-11-16: the network listener on Windows, through Chromium's own proxy switch; and memory measured with every terminal holding a full scrollback.

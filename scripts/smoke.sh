@@ -81,6 +81,18 @@ read -r canary_port <&"${CANARY[0]}"
 [[ "$canary_port" =~ ^[0-9]+$ ]] || { echo "smoke: the network canary did not start" >&2; exit 1; }
 canary="http://127.0.0.1:$canary_port"
 trap 'kill "$CANARY_PID" 2>/dev/null; rm -rf "$work"' EXIT
+# canary_hears: runs a program of its own, behind the same proxy, and fails unless the listener wrote it down.
+# Without this, a listener that hears nothing because it is broken looks exactly like one that hears nothing
+# because the app is quiet, which is the whole claim being made here.
+canary_hears() {
+  local code
+  code="$(start 60 "$log" -- "$1" scripts/lib/net-control)"
+  grep -aq '^NET-CONTROL answered' "$log" || { echo "FAIL  the control program could not reach the listener through the proxy (exit $code):" >&2; grep -a '^NET-CONTROL' "$log" >&2 || tail -5 "$log" >&2; exit 1; }
+  grep -q 'the-canary-must-hear-this' "$canary_log" || { echo "FAIL  the control program reached out and the listener wrote nothing down" >&2; exit 1; }
+  say "the listener hears: a program behind the same proxy reached out and landed in it"
+  : >"$canary_log" # the app's own run starts from silence
+}
+
 # quiet_network: fails if the app tried to reach anything by itself since the smoke run began.
 quiet_network() {
   if [ -s "$canary_log" ]; then
@@ -102,6 +114,10 @@ case "$mode" in
     # way, so the picture tool itself is run and checked (a picture must show the tab through the shell).
     mkdir -p "$work/pictures" && chmod 777 "$work/pictures"
     selftest_mode=boxes-ui selftest_pictures="$work/pictures" selftest "$log" "$electron" .
+    # Before requiring silence, the listener is proven able to hear: a program of its own, behind the same
+    # proxy, reaches out once and must land in its log. A listener that is broken is silent too, and Berth's
+    # own code has no such call anywhere (check.sh fails the build if the app ever sets a proxy of its own).
+    canary_hears "$electron"
     quiet_network
     ;;
 

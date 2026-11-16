@@ -980,10 +980,17 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       ctx.forcePace(null);
       check('told a small share, a flooded tab behind rests and works through far less than the tab in front, which never rests', small.behindRested > 0 && small.frontRested === 0 && small.behind * 3 < small.front, small);
       check('told the whole of its time, no tab rests', whole.behindRested === 0 && whole.frontRested === 0 && whole.behind > 0, whole);
+      // What the memory number is worth depends on what the terminals are holding, so it is said with it:
+      // the plan's figure is a tab with a real terminal and a full scrollback (30,000 lines), and the flood
+      // above is what fills them. A number measured with empty terminals would mean nothing.
+      const held = await Promise.all(all.map((t) => js<number>(t.view, `window.berthTerm.held()`)));
+      const fullest = Math.max(...held);
+      const leanest = Math.min(...held);
+      check(`every terminal is holding a full scrollback before memory is measured: ${leanest} to ${fullest} lines of 30,000`, leanest >= 30_000, held);
       const mem = await memory(all.map((t) => t.engine.pid));
       for (const lab of labs) lab.end();
       const budget = 300 + 7 * 220;
-      check(`memory with seven tabs: ${mem.fairMB} MB (${mem.how}); budget ${budget} MB; plain per-process sum ${mem.plainMB} MB`, mem.fairMB > 0 && mem.fairMB < budget, mem);
+      check(`memory with seven tabs, each holding ${leanest} lines: ${mem.fairMB} MB (${mem.how}); budget ${budget} MB; plain per-process sum ${mem.plainMB} MB`, mem.fairMB > 0 && mem.fairMB < budget, mem);
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);

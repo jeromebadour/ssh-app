@@ -5,6 +5,7 @@
 //   release package  starts and stays up as a release build; exits on any argument; the lab marker changes
 //                    nothing; and, what only Windows can show: a changed app archive is refused by Electron
 import { execFile, spawn } from 'node:child_process';
+import { createServer, Socket } from 'node:net';
 import { cp, mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,23 @@ const alive = (pid) => {
 };
 const endByForce = (pid) => new Promise((resolve) => execFile('taskkill', ['/F', '/PID', String(pid)], () => resolve()));
 
+// The listener that must never hear from the app. Windows ignores the proxy settings in the environment that
+// the Linux runs use, so here the proxy is given to the package as Chromium's own switch, and loopback is not
+// bypassed, so a connection to any address lands here. The app sets no proxy of its own (checked in
+// scripts/check.sh), so it cannot step around this.
+const heard = [];
+const listener = createServer((socket) => {
+  socket.setTimeout(3000, () => socket.destroy());
+  socket.once('data', (first) => {
+    heard.push(first.toString('latin1').split('\r\n')[0].slice(0, 200));
+    socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+  });
+  socket.on('error', () => undefined);
+});
+await new Promise((ready) => listener.listen(0, '127.0.0.1', ready));
+const CANARY = `127.0.0.1:${listener.address().port}`;
+const THROUGH_CANARY = [`--proxy-server=${CANARY}`, '--proxy-bypass-list=<-loopback>'];
+
 // Starts a package. Resolves when it exits, when `until` matches its output, or after `ms` (then it is ended).
 function run(dir, args, env, { ms, until }) {
   return new Promise((resolve) => {
@@ -59,7 +77,7 @@ function run(dir, args, env, { ms, until }) {
 }
 
 async function selftest(name, dir, mode) {
-  const r = await run(dir, ['--lab'], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor, SSHAPP_LABBOX: path.resolve('.build/labbox/labbox.exe') }, { ms: 150_000 });
+  const r = await run(dir, ['--lab', ...THROUGH_CANARY], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor, SSHAPP_LABBOX: path.resolve('.build/labbox/labbox.exe') }, { ms: 150_000 });
   const line = r.out.split('\n').find((l) => l.startsWith('SELFTEST '));
   if (!line) {
     if (r.how === 'still up') await r.end();
@@ -184,6 +202,34 @@ for (const [what, label0] of [['index', 'its index'], ['file', 'a file inside it
     if (r.how === 'still up') await r.end();
   }
 }
+
+// What the listener heard. The app's promise is that there is nothing: no update check, no telemetry,
+// nothing but the SSH connections its user opens, and those are the engine's own sockets, not Chromium's.
+if (heard.length === 0) {
+  say('the app made no network connection of its own (Windows, through Chromium\'s own proxy switch)');
+} else {
+  fail('the app made no network connection of its own', [...new Set(heard)].slice(0, 10).join(' | '));
+}
+// And the listener is proven able to hear, so that silence means something: one connection is made here, by
+// this script, through the same listener. Nothing in the app does this anywhere.
+const spoke = await new Promise((done) => {
+  const client = new Socket();
+  client.setTimeout(5000, () => {
+    client.destroy();
+    done(false);
+  });
+  client.connect(listener.address().port, '127.0.0.1', () => {
+    client.write('GET http://berth-net-control.invalid/the-canary-must-hear-this HTTP/1.1\r\nHost: berth-net-control.invalid\r\n\r\n');
+  });
+  client.on('data', () => {
+    client.destroy();
+    done(true);
+  });
+  client.on('error', () => done(false));
+});
+if (spoke && heard.some((line) => line.includes('the-canary-must-hear-this'))) say('the listener hears: one connection made on purpose landed in it');
+else fail('the listener can hear at all', `answered=${spoke}, heard=${heard.length}`);
+listener.close();
 
 await rm(work, { recursive: true, force: true }).catch(() => undefined);
 console.log(failures ? `smoke-windows: ${failures} check(s) FAILED` : 'smoke-windows: every check held');

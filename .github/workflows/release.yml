@@ -4,6 +4,9 @@ name: Release
 # asked for, and what comes out is a DRAFT release with the zip attached: GitHub makes no tag and shows
 # nothing to anyone until someone presses Publish on it. Deleting the draft undoes the whole run.
 #
+# "Do everything and make no release at all" does the whole of it and stops before the release is made, so
+# that the first real run is not also the first time this file is tried.
+#
 # Before it builds anything it checks that CI already passed on the commit it is standing on.
 on:
   workflow_dispatch:
@@ -14,6 +17,10 @@ on:
       confirm:
         description: "The same version again"
         required: true
+      dry_run:
+        description: "Do everything and make no release at all"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -117,6 +124,7 @@ jobs:
       - name: The draft release, with the zip on it
         env:
           GH_TOKEN: ${{ secrets.SSHAPP_MERGE_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
           REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
           SHA: ${{ github.sha }}
@@ -150,5 +158,12 @@ jobs:
             echo "The first one checks every file and writes nothing. Nothing here is signed, so Smart App Control"
             echo "blocks it while it is on; the install script reads that setting and says what it found."
           } > notes.md
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "A dry run: everything above was built and proven, and nothing is released."
+            echo "What a real run would make: a draft release v$VERSION at $SHA, with out/$zip on it, and these notes:"
+            echo
+            cat notes.md
+            exit 0
+          fi
           gh release create "v$VERSION" "out/$zip" -R "$REPO" --draft --target "$SHA" --title "$VERSION" --notes-file notes.md
           echo "A draft release v$VERSION is waiting. GitHub makes the tag only when it is published."
