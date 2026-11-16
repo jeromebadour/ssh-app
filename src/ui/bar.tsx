@@ -15,6 +15,8 @@ export interface BarActions {
   close(id: number): void;
   open(box: string, place: string): void; // a pinned box: a tab; a box never checked: its check
   addBox(): void;
+  editBox(box: string): void;
+  removeBox(box: string): void;
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
 }
 
@@ -207,12 +209,21 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
             {!b.pinned && <Glyph name="identity" class="bm-unchecked" label="not checked yet" />}
             {state !== '' && <span class={`conn conn-${state}`} title={state} />}
             {b.places.length > 0 && b.pinned && <Glyph name="chevron" class="bm-more" />}
+            {/* Edit and Delete, on the row of the box they are for: nothing is hidden behind a right-click. */}
+            <span class="bm-acts">
+              <button type="button" class="bm-act" data-edit={b.name} title={`Edit ${b.name}`} aria-label={`Edit ${b.name}`} onClick={(e) => { e.stopPropagation(); props.done(); props.act.editBox(b.id); }}>
+                <Glyph name="edit" />
+              </button>
+              <button type="button" class="bm-act remove" data-remove={b.name} title={`Delete ${b.name}`} aria-label={`Delete ${b.name}`} onClick={(e) => { e.stopPropagation(); props.done(); props.act.removeBox(b.id); }}>
+                <Glyph name="stop" />
+              </button>
+            </span>
             {places === b.id && (
               <div class="bm-places" role="menu" aria-label={`Places on ${b.name}`}>
                 {b.places.map((p) => (
-                  <div class="bm-row" key={p} role="menuitem" data-place={p} onClick={(e) => { e.stopPropagation(); open(b, p); }}>
+                  <div class="bm-row" key={p.name} role="menuitem" data-place={p.name} onClick={(e) => { e.stopPropagation(); open(b, p.name); }}>
                     <Glyph name="place" class="fm-glyph" />
-                    <span class="bm-name">{p}</span>
+                    <span class="bm-name">{p.name}</span>
                   </div>
                 ))}
               </div>

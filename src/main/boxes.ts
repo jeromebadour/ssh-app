@@ -119,6 +119,55 @@ export class Boxes {
     });
   }
 
+  // Edit box: everything about a box but its key and its id. Two changes are not just fields:
+  //   - its user: the key is bound to one user on one box, so the key process is told to bind it anew;
+  //   - its address: an address that changes may be another machine, so the identity pinned for the old one
+  //     is forgotten and the box is checked again before it can be opened.
+  // Nothing is saved unless every field is right, and the key is never remade.
+  edit(id: string, draft: BoxDraft): Promise<Result> {
+    return this.oneAtATime(async () => {
+      if (!this.loaded || this.fault) return { ok: false, error: this.fault || 'locked' };
+      const was = this.get(id);
+      if (!was) return { ok: false, error: 'no such box' };
+      const d = cleanDraft(draft);
+      if (!d) return { ok: false, error: 'not a box' };
+      const fields = draftFaults(d, this.list.filter((b) => b.id !== id).map((b) => b.name));
+      if (Object.keys(fields).length > 0) return { ok: false, error: 'fields', fields };
+      const moved = d.host !== was.host || portOf(d.port) !== was.port;
+      const next: Box = { ...was, name: d.name, colour: d.colour, host: d.host, port: portOf(d.port), user: d.user, folder: d.folder, places: placesOf(d) };
+      if (moved) {
+        next.pin = '';
+        next.pinFingerprint = '';
+        next.pinnedAt = '';
+      }
+      if (d.user !== was.user) {
+        const bound = await this.keys.request('rebind', { key: id, box: id, user: d.user });
+        if (!bound.ok) return { ok: false, error: `its key could not be bound to ${d.user}: ${String(bound.detail ?? bound.error ?? '')}` };
+      }
+      const saved = await this.save(this.list.map((b) => (b.id === id ? next : b)));
+      if (!saved.ok) {
+        // The list was not written: put the key's user back, so what the key process holds matches the list.
+        if (d.user !== was.user) await this.keys.request('rebind', { key: id, box: id, user: was.user });
+        return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}` };
+      }
+      if (moved || d.user !== was.user) this.dropCheck(id);
+      return { ok: true, id };
+    });
+  }
+
+  // Forget the identity pinned for a box: a box that was rebuilt shows another one, and is checked again
+  // the same way as the first time. Nothing else about the box changes.
+  forget(id: string): Promise<Result> {
+    return this.oneAtATime(async () => {
+      const was = this.get(id);
+      if (!was) return { ok: false, error: 'no such box' };
+      if (was.pin === '') return { ok: true, id };
+      this.dropCheck(id);
+      const saved = await this.save(this.list.map((b) => (b.id === id ? { ...b, pin: '', pinFingerprint: '', pinnedAt: '' } : b)));
+      return saved.ok ? { ok: true, id } : { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}` };
+    });
+  }
+
   // Delete box: the box and its key go together.
   remove(id: string): Promise<Result> {
     return this.oneAtATime(async () => {

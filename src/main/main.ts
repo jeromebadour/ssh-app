@@ -8,6 +8,7 @@ import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
 import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
+import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -162,17 +163,14 @@ interface Tab {
   engine: Engine;
   begin(cols: number, rows: number): void; // starts the engine, once, at the view's size
   reopen(now: boolean): void; // a new session on the same box and place (a new engine: an engine is one link)
-  stopReopen(): void;
+  stopReopen(forGood?: boolean): void;
   againAt: number; // when the new session opens; 0 when none is coming
+  cancelled: boolean; // the person stopped the new session: nothing may start one by itself again
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
 }
 
-// An ending Berth never opens a new session after: the same thing would happen again, or it is the person's
-// own doing. A changed identity and a refused key are stops, not hiccups (plan A3 decision 6, B8).
-const NEVER_AGAIN: readonly string[] = ['identity-changed', 'sign-in-failed', 'no-signature', 'weak-offer', 'cancelled', 'shell-exited'];
-const AGAIN_AFTER_MS = 5000;
 
 // New connections to one box are paced: at most five in any thirty seconds, whatever asks for them (plan B1).
 const OPENED_MAX = 5;
@@ -232,12 +230,14 @@ function tellGate(): void {
 }
 
 function info(t: Tab): TabInfo {
-  const place = t.box?.places.find((p) => p.name === t.place);
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place, addr: addrOf(t.box), user: t.box.user, folder: place?.folder ?? t.box.folder, pinType: t.box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
+  // The box as it stands now: a box that was edited while its tabs are open says its new name on them.
+  const box = t.box ? (boxes?.get(t.box.id) ?? t.box) : null;
+  const place = box?.places.find((p) => p.name === t.place);
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
 }
 
 function boxView(b: Box): BoxView {
-  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => p.name), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
+  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => ({ name: p.name, folder: p.folder })), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
 }
 
 function checkShown(): CheckShown | null {
@@ -435,9 +435,8 @@ function openTab(boxId = '', place = ''): Tab | null {
   // When a link is certainly gone, a new session opens by itself, after a wait the tab counts down.
   const maybeAgain = (): void => {
     const t = tabs.get(id);
-    if (!t || t !== tab || !box || t.againAt > 0) return;
-    const l = t.engine.link;
-    if (l.phase !== 'ended' || NEVER_AGAIN.includes(l.cause)) return;
+    if (!t || t !== tab || !box) return;
+    if (!mayOpenAgain(t.engine.link, t.againAt, t.cancelled)) return;
     t.reopen(false);
   };
   const origin = `app://tab-${id}`;
@@ -486,15 +485,19 @@ function openTab(boxId = '', place = ''): Tab | null {
   // A new session: a new engine, aimed at the same box and place, opened at the size the view has now.
   // The view keeps everything it has drawn, and is told plainly that this is a new session.
   let againTimer: NodeJS.Timeout | null = null;
-  const stopReopen = (): void => {
+  // forGood: the person pressed Cancel. A late word from the box (its process ending is one) must not
+  // start the countdown again behind their back, so the tab remembers that they stopped it.
+  const stopReopen = (forGood = false): void => {
     if (againTimer) clearTimeout(againTimer);
     againTimer = null;
     tab.againAt = 0;
+    if (forGood) tab.cancelled = true;
     if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
     tellShell();
   };
   const reopen = (now: boolean): void => {
     if (!box || tabs.get(id) !== tab) return;
+    tab.cancelled = false;
     const wait = now ? waitForBox(box.id) : Math.max(AGAIN_AFTER_MS, waitForBox(box.id));
     if (againTimer) clearTimeout(againTimer);
     tab.againAt = Date.now() + wait;
@@ -517,7 +520,7 @@ function openTab(boxId = '', place = ''): Tab | null {
     sendTo(view, CH.tabState, info(tab));
     tellShell();
   };
-  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, origin, box, place };
+  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, cancelled: false, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
@@ -613,7 +616,7 @@ ipcMain.on(CH.tabReopen, (e, now: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof now !== 'boolean' || !tab.box) return drop('tab:reopen', e);
   if (now) tab.reopen(true);
-  else tab.stopReopen();
+  else tab.stopReopen(true);
 });
 
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {
@@ -658,6 +661,35 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
         b.reach(r.id);
         done = `Added ${b.get(r.id)!.name}: its key was made, and Berth is asking it who it is`;
       }
+      tellShell();
+    });
+  } else if (c?.op === 'editBox' && typeof c.req === 'number' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    const was = b.get(id)!.name;
+    void b.edit(id, c.draft as BoxDraft).then((r) => {
+      added = { req: c.req!, ok: r.ok, id: r.ok ? r.id : '', error: r.ok ? '' : r.error, fields: r.ok ? {} : (r.fields ?? {}) };
+      if (r.ok) {
+        const now = b.get(id)!;
+        done = now.pin === '' ? `Saved ${now.name}: its address changed, so it is checked again before it opens` : `Saved ${was === now.name ? now.name : `${was}, now ${now.name}`}`;
+      }
+      tellShell();
+    });
+  } else if (c?.op === 'forgetIdentity' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    void b.forget(id).then((r) => {
+      done = r.ok ? `${b.get(id)?.name ?? 'The box'} is checked again before it opens` : `Its identity could not be forgotten: ${r.error}`;
+      tellShell();
+    });
+  } else if (c?.op === 'removeBox' && isBox(c.box) && boxes) {
+    const b = boxes;
+    const id = c.box;
+    const name = b.get(id)!.name;
+    // Every tab on that box goes with it: there is nothing left for them to be on.
+    for (const t of [...tabs.values()]) if (t.box?.id === id) closeTab(t.id);
+    void b.remove(id).then((r) => {
+      done = r.ok ? `Deleted ${name}, and its key with it` : `${name} was not deleted: ${r.error}`;
       tellShell();
     });
   } else if (c?.op === 'check' && isBox(c.box)) {

@@ -537,6 +537,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('tab-gone', 'the link gone: a new session is coming', open1);
         await clickOn('#cancel', open1);
         check('Cancel stops it: no new session opens, and the tab keeps everything it drew', (await until(async () => !(await text('#bar', open1)).includes('A new session opens'), 3000)) && open1.engine.pid === engineBefore && (await shown(open1)).includes(marker), [await text('#bar', open1), open1.engine.pid === engineBefore]);
+        // The engine of a gone link ends a moment later, and its ending is another word from below. A word
+        // that arrives after Cancel must not start the countdown again: the person stopped it.
+        const engineGone = await until(() => open1.engine.state === 'gone', 15_000);
+        check('and a word from the box after Cancel does not start it again', engineGone && !(await text('#bar', open1)).includes('A new session opens') && open1.engine.pid === engineBefore, [engineGone, open1.engine.state, await text('#bar', open1)]);
         // Reconnect: a new session, a new engine, said in the terminal; the old output is still there.
         await clickOn('#reconnect', open1);
         const again = await until(() => open1.engine.pid !== engineBefore && open1.engine.link.phase === 'up', 30_000);
@@ -628,7 +632,8 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('#check-close');
 
         // Another identity at the box's address: the tab stops, and the stop is said in its dialog.
-        await lab.tell('rekey');
+        const rekeyed = await lab.tell('rekey');
+        const printedNow = String(rekeyed['printed'] ?? ''); // the box's identity from here on: it was rebuilt
         ctx.openTab(id, '');
         check('a box showing another identity: the tab stops and the dialog says so, with both fingerprints', (await until(() => has('#changed'), 20_000)) && (await text('#changed')).includes(ctx.boxes.list[0]!.pinFingerprint) && (await until(shellOnTop, 1000)), [await has('#changed'), await text('#changed'), shellOnTop(), ctx.shellState().tabs.map((t) => [t.link.phase, t.link.cause]), ctx.shellState().check?.boxId ?? '', ctx.boxes.list.map((b) => [b.name, b.pinFingerprint])]);
         await shot('changed', 'a box whose identity changed');
@@ -640,6 +645,77 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         }
         await clickOn('#changed-close');
         check('Close: the dialog goes, the tab stays, marked stopped', (await until(async () => !(await has('#changed')), 2000)) && (await js<string>(ctx.shell, `document.querySelector('[data-tab]')?.dataset.state ?? ''`)) === 'stopped', '');
+
+        // ---- Edit box and Delete box, driven by hand from the Boxes menu. ----
+        await clickOn('#boxes');
+        await until(() => has('#box-menu'), 2000);
+        await moveTo('[data-box="lab-box"]');
+        check('each box in the menu carries Edit and Delete of its own', (await has('[data-edit="lab-box"]')) && (await has('[data-remove="lab-box"]')), '');
+        await clickOn('[data-edit="lab-box"]');
+        const openedEdit = await until(() => has('#add-box'), 2000);
+        const editSaid = await text('#add-box');
+        check('Edit opens the box as it stands: the same fields, its own values, its key kept and its identity shown', openedEdit && editSaid.includes('Edit lab-box') && editSaid.includes('This box keeps the key Berth made for it') && (await has('#edit-pinned')) && (await text('#edit-pinned')).includes(ctx.boxes.list[0]!.pinFingerprint), [editSaid.slice(0, 120), await text('#edit-pinned')]);
+        await shot('edit-box', 'Edit box, with the identity it is pinned to');
+        // The name is changed to one already taken: refused by name, and nothing is saved.
+        const nameField = '#box-name';
+        const pickAll = async (sel: string) => js(ctx.shell, `(() => { const i = document.querySelector(${JSON.stringify(sel)}); if (!i) return 'no field'; i.focus(); i.setSelectionRange(0, i.value.length); return 'ok'; })()`);
+        check('the name field is there to change', (await pickAll(nameField)) === 'ok', await js(ctx.shell, `[...document.querySelectorAll('#add-box input')].map((i) => i.id || i.name || i.placeholder).join(',')`));
+        await typeKeys('quiet-box');
+        await sleep(200);
+        check('a name another box has is refused as you type, and Save is held back', (await text('#add-box')).includes('taken') || (await has('#add-to-fix')), await text('#add-box'));
+        await pickAll(nameField);
+        await typeKeys('lab-box-renamed');
+        await sleep(150);
+        await clickOn('#add-submit');
+        const renamed = await until(() => ctx.boxes.list.some((b) => b.name === 'lab-box-renamed'), 4000);
+        const box0 = () => ctx.boxes.list.find((b) => b.id === id)!;
+        check('Save writes what changed, keeps the key and the identity, and the window says so', renamed && box0().publicKey !== '' && box0().pin !== '' && (await text('#status-done')).includes('Saved'), [box0().name, box0().pin !== '', await text('#status-done')]);
+        check('and the tabs open on it say its new name', await until(async () => (await text('[data-tab]')).includes('lab-box-renamed'), 2000), await text('[data-tab]'));
+
+        // Forget the identity: a box that was rebuilt is checked again, and cannot be opened until it is.
+        await clickOn('#boxes');
+        await moveTo('[data-box="lab-box-renamed"]');
+        await clickOn('[data-edit="lab-box-renamed"]');
+        await until(() => has('#add-box'), 2000);
+        await clickOn('#edit-forget');
+        const forgot = await until(() => ctx.boxes.list.find((b) => b.id === id)?.pin === '', 4000);
+        check('Forget it: the identity pinned for the box goes, and nothing else about it changes', forgot && box0().name === 'lab-box-renamed' && box0().publicKey !== '' && (await has('#edit-unpinned')), [box0().pin, box0().publicKey !== '']);
+        await clickOn('#add-cancel');
+        check('and a box with no identity cannot be opened: picking it opens its check instead', ctx.openTab(id) === null, '');
+        // Pinned again, the straight way: the check, with the box's own lines.
+        await clickOn('#boxes');
+        const menuThere = await until(() => has('[data-box="lab-box-renamed"]'), 2000);
+        await clickOn('[data-box="lab-box-renamed"]');
+        const checkThere = await until(() => has('#check'), 3000);
+        check('a box whose identity was forgotten opens its check, not a tab', menuThere && checkThere, [menuThere, checkThere, await text('#box-menu')]);
+        await clickOn('#check-paste');
+        await typeKeys(printedNow.trim()); // the box was rebuilt earlier in this run: these are its lines now
+        const matched = await until(async () => (await step()) === 'match', 4000);
+        check('its new lines are a match, and only then may it be trusted', matched && (await has('#check-trust')), await step());
+        await clickOn('#check-trust');
+        check('checked again, it is pinned again and opens', await until(() => box0().pin !== '' && [...ctx.tabs.values()].some((t) => t.box?.id === id), 20_000), box0().pin.slice(0, 20));
+
+        // Delete box: what goes is named before anything happens, and Keep it changes nothing.
+        await clickOn('#boxes');
+        await moveTo('[data-box="lab-box-renamed"]');
+        await clickOn('[data-remove="lab-box-renamed"]');
+        const askedRemove = await until(() => has('#remove-box'), 2000);
+        const goes = await text('#remove-goes');
+        check('Delete asks first, naming what goes: the box, its key, its pinned identity, and the tabs open on it', askedRemove && goes.includes('lab-box-renamed') && goes.includes('its key') && goes.includes('the identity pinned for it') && /\d+ open tabs? on it/.test(goes), goes);
+        check('and it says what stays on the box itself', (await text('#remove-stays')).includes('only the box can take it out'), await text('#remove-stays'));
+        check('the way out has the focus, so Enter keeps the box', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'remove-cancel', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
+        await shot('remove-box', 'Delete box: what goes with it');
+        await clickOn('#remove-cancel');
+        check('Keep it: the box, its key and its tabs are all still there', (await until(async () => !(await has('#remove-box')), 2000)) && ctx.boxes.list.some((b) => b.id === id) && [...ctx.tabs.values()].some((t) => t.box?.id === id), '');
+        // And deleted for real: the box, its key and its tabs go together.
+        await clickOn('#boxes');
+        await moveTo('[data-box="lab-box-renamed"]');
+        await clickOn('[data-remove="lab-box-renamed"]');
+        await until(() => has('#remove-box'), 2000);
+        await clickOn('#remove-do');
+        const held = await until(async () => !ctx.boxes.list.some((b) => b.id === id), 5000) ? await ctx.keys.request('keys') : { keys: [] };
+        check('Delete: the box, its key and its tabs go together, and the window says so', !ctx.boxes.list.some((b) => b.id === id) && Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id) && ![...ctx.tabs.values()].some((t) => t.box?.id === id) && (await text('#status-done')).includes('Deleted lab-box-renamed'), [ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
+
         lab.end();
       }
       canary.close();
@@ -1410,6 +1486,50 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('a box showing another identity is a hard stop: said with what it showed, no key used, no sign-in tried', stopped && t3.engine.link.cause === 'identity-changed' && t3.engine.link.endedIn === 'key-exchange' && t3.engine.link.shownFingerprint !== '' && printed2.includes(t3.engine.link.shownFingerprint) && !printed.includes(t3.engine.link.shownFingerprint) && t3.engine.signAsked === 0 && t.engine.signAsked === before && Number(after['tries']) === 0 && triesBefore >= 1, [t3.engine.link, t3.engine.signAsked, after['tries'], triesBefore]);
       check('and the pin is unchanged', printed.includes(box().pinFingerprint), box().pinFingerprint);
       ctx.closeTab(t3.id);
+
+      // ---- Edit box: what main checks itself, whatever a dialog may or may not have checked first. ----
+      const asItWas = { name: box().name, colour: box().colour, host: box().host, port: String(box().port), user: box().user, folder: box().folder, places: box().places.map((p) => ({ name: p.name, folder: p.folder })) };
+      const neighbour = await B.add({ name: 'other-box', colour: 4, host: '127.0.0.1', port, user: 'demo', folder: '', places: [] });
+      const takenName = await B.edit(id, { ...asItWas, name: 'other-box' });
+      check('a name another box already has is refused by main, by field, and nothing is saved', neighbour.ok && !takenName.ok && takenName.error === 'fields' && (takenName.fields ?? {})['name'] === 'another box has this name' && box().name === 'lab-box', [neighbour, takenName, box().name]);
+      const sameName = await B.edit(id, { ...asItWas, folder: '/srv/ledger' });
+      check('a box keeping its own name is not called taken: it is itself', sameName.ok && box().folder === '/srv/ledger' && box().name === 'lab-box', [sameName, box().folder]);
+      const badField = await B.edit(id, { ...asItWas, port: '70000' });
+      check('a field that is not right is refused by main, by field', !badField.ok && badField.error === 'fields' && !!(badField.fields ?? {})['port'] && box().port !== 70000, badField);
+      // The user: the key is bound to one user on one box, so the key process is told anew.
+      const movedUser = await B.edit(id, { ...asItWas, user: 'someone-else' });
+      const keysNow = await ctx.keys.request('keys');
+      const bound = (keysNow['keys'] as Record<string, unknown>[] | undefined)?.find((k) => k['box'] === id);
+      check('changing the box\'s user binds its key to that user, and the key itself is the same', movedUser.ok && box().user === 'someone-else' && bound?.['user'] === 'someone-else' && bound?.['publicKey'] === box().publicKey, [movedUser, bound]);
+      await B.edit(id, { ...asItWas, user: 'demo' });
+      // The address: an address that changed may be another machine, so the identity pinned for the old one goes.
+      const pinWas = box().pinFingerprint;
+      const movedAddr = await B.edit(id, { ...asItWas, host: '127.0.0.2' });
+      check('changing the address forgets the identity pinned for the old one: the box must be checked again', movedAddr.ok && box().host === '127.0.0.2' && box().pin === '' && box().pinFingerprint === '' && ctx.openTab(id) === null, [movedAddr, box().pin, box().pinFingerprint]);
+      // Put it back and pin it again, so the rest of this run has its box.
+      await B.edit(id, asItWas);
+      B.reach(id);
+      await until(() => B.check(id).step === 'reached', 20_000);
+      B.paste(id, printed2); // the box was rebuilt a moment ago: these are the lines it prints now
+      const pinnedAgain = await B.trust(id);
+      check('checked again at its own address, it is pinned again, to the identity it shows now', pinnedAgain.ok && box().pin !== '' && printed2.includes(box().pinFingerprint) && box().pinFingerprint !== pinWas, [pinnedAgain, box().pinFingerprint]);
+      // Forget it, on purpose: the identity goes and nothing else does.
+      const keyWas = box().publicKey;
+      const forgot = await B.forget(id);
+      check('forgetting an identity leaves the box and its key exactly as they were', forgot.ok && box().pin === '' && box().publicKey === keyWas && box().name === 'lab-box' && ctx.openTab(id) === null, [forgot, box().publicKey === keyWas]);
+      const forgotAgain = await B.forget(id);
+      check('forgetting one that is already forgotten changes nothing and is not an error', forgotAgain.ok && box().pin === '', forgotAgain);
+      // A box that is not there cannot be edited, forgotten or deleted.
+      const noBox = await Promise.all([B.edit('bno-such-box', asItWas), B.forget('bno-such-box'), B.remove('bno-such-box')]);
+      check('a box that is not there cannot be edited, forgotten or deleted', noBox.every((r) => !r.ok && r.error === 'no such box'), noBox);
+      await B.remove(neighbour.ok ? neighbour.id : '');
+      // Pinned once more, so what this run leaves on disk is a box as it should be: the next start reads it.
+      B.reach(id);
+      await until(() => B.check(id).step === 'reached', 20_000);
+      B.paste(id, printed2);
+      const pinnedLast = await B.trust(id);
+      check('and after all of that the box is left as a box should be: named, keyed and pinned', pinnedLast.ok && box().name === 'lab-box' && box().publicKey !== '' && box().pin !== '', [pinnedLast, box().name, box().pin !== '']);
+
       ctx.closeTab(t.id);
       lab.end();
       // With the app closed the PC holds one locked file: no box's name is readable in anything the app wrote.

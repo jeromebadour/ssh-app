@@ -1,4 +1,4 @@
-import type { BoxDraft } from './boxes';
+import type { BoxDraft, Place } from './boxes';
 
 // The whole list of messages a view may exchange with main. A message not listed here does not exist.
 // Views get no Node and no Electron object: each preload exposes only the functions below.
@@ -112,7 +112,7 @@ export interface BoxView {
   port: number;
   user: string;
   folder: string;
-  places: string[];
+  places: Place[]; // each with its folder, so Edit box shows what a place really is
   pinned: boolean;
   pinFingerprint: string;
   pinType: string; // 'ED25519' or 'RSA' once pinned
@@ -181,7 +181,10 @@ export type ShellCmd =
   | { op: 'close'; id: number }
   | { op: 'open'; box: string; place: string } // a tab on a pinned box, in one of its places or its starting folder
   | { op: 'overlay'; on: boolean } // a menu or dialog is open: the shell must be above the tabs
-  | { op: 'addBox'; req: number; draft: BoxDraft }
+  | { op: 'addBox'; req: number; draft: BoxDraft } // a new box: its key is made and it goes straight to its check
+  | { op: 'editBox'; req: number; box: string; draft: BoxDraft } // save what changed about a box
+  | { op: 'forgetIdentity'; box: string } // a rebuilt box: forget the identity pinned for it
+  | { op: 'removeBox'; box: string } // delete a box: it and its key go together
   | { op: 'check'; box: string } // open the first-connection check for a box, and ask it who it is
   | { op: 'paste'; box: string; text: string }
   | { op: 'openLink' } // the address being shown: open it in the browser

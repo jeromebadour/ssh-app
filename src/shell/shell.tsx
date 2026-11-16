@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
-import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
+import { AddBoxDialog, ChangedDialog, CheckDialog, RemoveBoxDialog } from '../ui/boxdialogs';
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
@@ -38,7 +38,7 @@ const act = { create: (p: Uint8Array) => port.gateCreate(p), unlock: (p: Uint8Ar
 
 // What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
 // the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
-type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'changed'; tab: number };
+type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number };
 
 let nextReq = 1;
 
@@ -52,7 +52,7 @@ function Unlocked(props: { s: ShellState }) {
   useLayoutEffect(() => port.cmd({ op: 'overlay', on: over }), [over]);
   // The box was added: its check opens (main has started it), and Add box closes.
   useEffect(() => {
-    if (dialog.kind === 'add' && s.added?.req === dialog.req && s.added.ok) setDialog({ kind: 'none' });
+    if ((dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req === dialog.req && s.added.ok) setDialog({ kind: 'none' });
   }, [s.added]);
   // A tab stopped because its box showed another identity: said at once, once per tab.
   const stopped = s.tabs.find((t) => t.box && t.link.cause === 'identity-changed' && !seenChanged.includes(t.id));
@@ -68,11 +68,15 @@ function Unlocked(props: { s: ShellState }) {
       else port.cmd({ op: 'open', box, place });
     },
     addBox: () => setDialog({ kind: 'add', req: nextReq++ }),
+    editBox: (box) => setDialog({ kind: 'edit', box, req: nextReq++ }),
+    removeBox: (box) => setDialog({ kind: 'remove', box }),
     menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
   };
   const front = s.tabs.find((t) => t.id === s.active);
-  const adding = dialog.kind === 'add' && s.added?.req !== dialog.req;
-  const refusal = dialog.kind === 'add' && s.added?.req === dialog.req && !s.added.ok ? s.added : null;
+  const adding = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req !== dialog.req;
+  const refusal = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req === dialog.req && !s.added.ok ? s.added : null;
+  const editing = dialog.kind === 'edit' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
+  const removing = dialog.kind === 'remove' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
   const changedTab = dialog.kind === 'changed' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
   const changedBox = changedTab?.box ? s.boxes.find((b) => b.id === changedTab.box!.id) : undefined;
   return (
@@ -107,6 +111,33 @@ function Unlocked(props: { s: ShellState }) {
         <span class="s-last" id="status-done">{s.done}</span>
       </footer>
       {dialog.kind === 'add' && <AddBoxDialog taken={s.boxes.map((b) => b.name)} working={adding && pendingAdd === dialog.req} refused={refusal?.fields ?? {}} error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''} onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'addBox', req: dialog.req, draft }); }} onCancel={() => setDialog({ kind: 'none' })} />}
+      {/* The same dialog, with the box in it: one way of drawing a box's fields, for adding and for editing. */}
+      {dialog.kind === 'edit' && editing && (
+        <AddBoxDialog
+          key={editing.id}
+          taken={s.boxes.filter((b) => b.id !== editing.id).map((b) => b.name)}
+          working={adding && pendingAdd === dialog.req}
+          refused={refusal?.fields ?? {}}
+          error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''}
+          editing={{
+            draft: { name: editing.name, colour: editing.colour, host: editing.host, port: String(editing.port), user: editing.user, folder: editing.folder, places: editing.places.map((p) => ({ name: p.name, folder: p.folder })) },
+            pinType: editing.pinType,
+            pinFingerprint: editing.pinFingerprint,
+            pinnedAt: editing.pinnedAt,
+            onForget: () => port.cmd({ op: 'forgetIdentity', box: editing.id }),
+          }}
+          onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'editBox', req: dialog.req, box: editing.id, draft }); }}
+          onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {dialog.kind === 'remove' && removing && (
+        <RemoveBoxDialog
+          box={removing}
+          tabs={s.tabs.filter((t) => t.box?.id === removing.id).length}
+          onRemove={() => { port.cmd({ op: 'removeBox', box: removing.id }); setDialog({ kind: 'none' }); }}
+          onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
       {s.check && dialog.kind === 'none' && (
         <CheckDialog key={s.check.boxId} c={s.check} act={{
           copy: () => port.cmd({ op: 'copyBlock', box: s.check!.boxId }),
