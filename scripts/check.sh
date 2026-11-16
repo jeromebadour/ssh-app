@@ -37,6 +37,9 @@ echo "check: a short fuzz run on the frame reader"
 echo "check: a short fuzz run on opening the locked list"
 (cd engine && go test -run '^$' -fuzz '^FuzzOpen$' -fuzztime 5s ./internal/vault | tail -2)
 
+echo "check: a short fuzz run on what a key may be asked to sign"
+(cd engine && go test -run '^$' -fuzz '^FuzzSign$' -fuzztime 5s ./internal/keys | tail -2)
+
 echo "check: TypeScript tests"
 rm -rf .build/tests && mkdir -p .build/tests
 for t in tests/*.test.ts; do
