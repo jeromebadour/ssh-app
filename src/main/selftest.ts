@@ -48,6 +48,7 @@ interface Ctx {
   lateFromClosed(): number;
   missing(): Record<string, number>;
   opened(): { url: string; asked: number; refused: number };
+  windowAsked(): string[];
   pace: Pace;
   forcePace(share: number | null): void;
 }
@@ -250,6 +251,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     if (ctx.mode === 'all') {
       // The first start, through the real screen with real keys.
       check('first start: the lock asks to make a password', phase() === 'create' && (await until(() => has('#gate-create'), 5000)) && !(await has('#bar')), phase());
+      // Windows draws no title bar for Berth, so the screens before the lock carry the window's own buttons
+      // themselves. Without them this screen could not be put away or moved with the mouse at all.
+      check('the screens before the lock carry the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
       await lockHolds('before any password');
       await clickOn('#pw-one');
       await typeKeys('too short');
@@ -290,8 +294,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('the right password during the wait is not looked at', phase() === 'locked', phase());
       await until(async () => (await text('#gate-submit')).trim() === 'Unlock', 5000);
       await pressEnter();
+      // The window's own three buttons, before the lock opens: Windows draws no title bar for Berth, so if these
+      // were not here a person could not put the password screen away or move it with the mouse at all.
+      check('the lock screen carries the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), await text('#win-strip'));
       check('after the wait the right password unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       check('the window is the app now', await until(() => has('#bar'), 5000), '');
+
       // What the first start left in the list is there again: the box, pinned, with its key in the key process.
       if (process.env['SSHAPP_LABBOX']) {
         const kept = ctx.boxes.list;
@@ -411,6 +419,43 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       else await ctx.gate.unlock(Buffer.from(PASSWORD));
       check('unlocked', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       await until(() => has('#bar'), 5000);
+    }
+
+    // The bar is Berth's title bar: Windows draws none. Its own surface drags the window, what can be pressed
+    // in it is pressed and not dragged, and the window's three buttons are at its end and do what they say.
+    if (ctx.mode !== 'direction' && ctx.mode !== 'engine-must-be-refused' && (await has('#bar'))) {
+      stage = 'the title bar';
+      const region = (id: string) => js<string>(ctx.shell, `(getComputedStyle(document.getElementById(${JSON.stringify(id)}))['-webkit-app-region'] ?? getComputedStyle(document.getElementById(${JSON.stringify(id)})).getPropertyValue('-webkit-app-region') ?? '').trim()`);
+      const maxBtn = () => js<string>(ctx.shell, `document.getElementById('win-max')?.getAttribute('aria-label') ?? ''`);
+      check('the bar carries the window\'s own three buttons', (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
+      check('and the bar is the title bar: its own surface drags the window', (await region('bar')) === 'drag', await region('bar'));
+      check('a button in the bar is pressed, not dragged', (await region('boxes')) === 'no-drag', await region('boxes'));
+      const wasMax = ctx.win.isMaximized();
+      check('the maximize button offers what the window is not already', (await maxBtn()) === (wasMax ? 'Restore' : 'Maximize'), [await maxBtn(), wasMax]);
+
+      // Whether a window can be maximized at all is the screen's to decide, not Berth's: the test screen the
+      // lab runs on under Linux has no window manager, so nothing there maximizes. What is Berth's own, and is
+      // checked here wherever the lab runs, is that pressing the button asks the window for the right thing.
+      const askedBefore = ctx.windowAsked().length;
+      await clickOn('#win-max');
+      const asked = await until(() => ctx.windowAsked().length > askedBefore, 4000);
+      check('pressing the maximize button asks the window to maximize', asked && ctx.windowAsked()[askedBefore] === 'maximize', ctx.windowAsked());
+
+      // And where the screen does maximize, the window moves and the button turns round with it. Where it does
+      // not, that is said here rather than passed over in silence.
+      ctx.win.maximize();
+      const screenMaximizes = await until(() => ctx.win.isMaximized(), 2000);
+      if (!screenMaximizes) {
+        check('this screen maximizes no window, so the window moving is not checked here (it is on Windows)', true, 'no window manager');
+      } else {
+        check('the button turns round when the window is maximized', await until(async () => (await maxBtn()) === 'Restore', 4000), await maxBtn());
+        ctx.win.unmaximize();
+        check('and back again when it is put back', await until(async () => (await maxBtn()) === 'Maximize', 4000), await maxBtn());
+      }
+      // Put back as it was, so what follows is measured in the window the rest of the run expects.
+      if (wasMax) ctx.win.maximize();
+      else ctx.win.unmaximize();
+      await until(() => ctx.win.isMaximized() === wasMax, 4000);
     }
 
     // "boxes-ui": the box screens driven by hand, as they will be used: real clicks and keys into the real

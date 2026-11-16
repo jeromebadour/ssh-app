@@ -65,6 +65,12 @@ const shapes: Record<string, JSX.Element> = {
   fix: <><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.5M8 10.75v.25" /></>,
   find: <><circle cx="7" cy="7" r="4" /><path d="M10 10l3.5 3.5" /></>,
   term: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.75 6.5l2 1.5-2 1.5M8.5 10H11" /></>,
+  // The window's own three. Drawn on the 10 by 10 square in the middle, which is where Windows has drawn these
+  // three for thirty years: a person reaches for them without looking, so they are where the hand expects.
+  winMinimize: <><path d="M3.5 8h9" /></>,
+  winMaximize: <><rect x="3.5" y="3.5" width="9" height="9" rx="1" /></>,
+  winRestore: <><path d="M5.5 5.5V4.4A1 1 0 0 1 6.5 3.5h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1.1" /><rect x="3.5" y="5.5" width="7" height="7" rx="1" /></>,
+  winClose: <><path d="M4 4l8 8M12 4l-8 8" /></>,
 };
 
 export function Glyph(props: { name: keyof typeof shapes | string; class?: string; label?: string }) {

@@ -60,6 +60,25 @@ ul { list-style: none; }
 .mark-beam { fill: var(--main); opacity: .35; }
 .wordmark { font-size: 18px; font-weight: 500; letter-spacing: .03em; color: var(--text); }
 .tab-groups { display: flex; align-items: flex-end; gap: 8px; min-width: 0; flex: 1; padding-left: 6px; }
+
+/* Windows draws no title bar for Berth, so the bar is the title bar: the empty part of it drags the window and
+   a double-click on it maximizes, as a title bar does. Everything that can be pressed takes itself back out of
+   that, or it could be dragged instead of pressed. */
+.tabbar { -webkit-app-region: drag; }
+.tabbar button, .tabbar .tab, .tabbar .tab-group, .tabbar .boxes-btn, .box-menu, .fold-menu, .menu-away { -webkit-app-region: no-drag; }
+/* The strip above the screens shown before the lock opens: it draws nothing of its own, holds the three window
+   buttons at its right-hand end, and drags the window everywhere else. */
+.win-strip { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 5; display: flex; justify-content: flex-end; -webkit-app-region: drag; }
+.win-strip .win-buttons { margin: 0; }
+.win-buttons { display: flex; align-items: center; align-self: stretch; gap: 2px; flex: none; margin-left: 8px; margin-right: -10px; -webkit-app-region: no-drag; }
+.win-btn { display: flex; align-items: center; justify-content: center; width: 44px; align-self: stretch; border: 0; background: none; color: var(--text-2); cursor: pointer; }
+.win-btn:hover { background: var(--panel-2); color: var(--text); }
+.win-btn:active { background: color-mix(in srgb, var(--panel-2) 60%, var(--bg)); }
+.win-btn:focus-visible { outline: 2px solid var(--main); outline-offset: -2px; }
+/* Close is the one press that ends the session, so it says so on the way: the red is Windows' own signal for
+   this button, and nothing else in the bar uses it. */
+.win-close:hover { background: var(--remove); color: var(--bg); }
+.win-close:active { background: color-mix(in srgb, var(--remove) 85%, #000); color: var(--bg); }
 .tab-group { display: flex; align-items: flex-end; gap: 2px; }
 .tab { position: relative; display: flex; align-items: center; gap: 7px; height: 36px; min-width: 168px; padding: 0 8px 0 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: var(--r) var(--r) 0 0; background: var(--panel-2); color: var(--text-2); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--hue) 70%, transparent); cursor: pointer; }
 .tab-box { font-weight: 600; color: var(--hue); }
