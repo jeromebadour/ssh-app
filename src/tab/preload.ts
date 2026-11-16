@@ -16,6 +16,12 @@ const port: TabPort = {
   onShown(cb) {
     ipcRenderer.on(CH.tabShown, () => cb());
   },
+  onBanner(cb) {
+    ipcRenderer.on(CH.tabBanner, (_e, bytes: Uint8Array) => cb(bytes));
+  },
+  taken(total) {
+    ipcRenderer.send(CH.tabTaken, Number(total));
+  },
   meter(n) {
     ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs), reactionKind: Number(n.reactionKind), reactionWaitMs: Number(n.reactionWaitMs), reactionHandlerMs: Number(n.reactionHandlerMs) });
   },

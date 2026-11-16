@@ -59,7 +59,7 @@ function run(dir, args, env, { ms, until }) {
 }
 
 async function selftest(name, dir, mode) {
-  const r = await run(dir, ['--lab'], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor }, { ms: 150_000 });
+  const r = await run(dir, ['--lab'], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor, SSHAPP_LABBOX: path.resolve('.build/labbox/labbox.exe') }, { ms: 150_000 });
   const line = r.out.split('\n').find((l) => l.startsWith('SELFTEST '));
   if (!line) {
     if (r.how === 'still up') await r.end();

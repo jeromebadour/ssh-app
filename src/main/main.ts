@@ -4,9 +4,13 @@ import { app, BaseWindow, dialog, ipcMain, protocol, session, WebContentsView, t
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import firstConnection from '../../protocol/first-connection.json';
+import { addrOf, type Box } from '../common/boxes';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
-import { Engine } from './engine';
+import { Boxes } from './boxes';
+import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
+import { identifyWith } from './identify';
 import { KeyProc } from './keyproc';
 import { isLabPackageNow } from './lab-proof';
 import { Meter } from './meter';
@@ -148,6 +152,8 @@ interface Tab {
   view: WebContentsView;
   engine: Engine;
   origin: string;
+  box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
+  place: string;
 }
 
 const tabs = new Map<number, Tab>();
@@ -160,13 +166,16 @@ let droppedMessages = 0;
 const meter = new Meter();
 let keys: KeyProc | null = null;
 let gate: Gate | null = null;
+let boxes: Boxes | null = null;
+let signsRefused = 0;
+let signsPassedOn = 0; // requests main let through to the key process
 
 function tellGate(): void {
   if (gate) sendTo(shell, CH.gateState, gate.view());
 }
 
 function info(t: Tab): TabInfo {
-  return { id: t.id, state: t.engine.state, cause: t.engine.cause };
+  return { id: t.id, state: t.engine.state, cause: t.engine.cause, box: t.box ? { id: t.box.id, name: t.box.name, colour: t.box.colour, place: t.place } : null, link: t.engine.link };
 }
 
 function shellState(): ShellState {
@@ -194,8 +203,38 @@ function layout(): void {
   }
 }
 
-function openTab(): Tab | null {
+// A signature for a box's sign-in. Which key signs, and for which box, is decided here from the box the asking
+// engine was aimed at when its tab was opened: nothing the engine says can name another. The key process then
+// checks every field of the request itself.
+async function signFor(box: Box, req: SignRequest): Promise<SignAnswer> {
+  if (!keys || !gate?.unlocked || req.key !== box.id || req.algorithm !== 'ssh-ed25519') {
+    signsRefused++;
+    return { error: 'refused' };
+  }
+  signsPassedOn++;
+  const r = await keys.request('sign', { key: box.id, box: box.id, algorithm: req.algorithm, data: req.data });
+  const signature = r['signature'];
+  if (!r.ok || typeof signature !== 'string') {
+    signsRefused++;
+    return { error: String(r.error ?? 'refused').slice(0, 40) };
+  }
+  return { signature };
+}
+
+// Opens a tab: on a box (which must be pinned: there is no way to a box whose identity was never checked), in
+// one of its places or in its starting folder; or, with no box, the skeleton's tab that the self-test uses.
+function openTab(boxId = '', place = ''): Tab | null {
   if (!win || tabs.size >= TABS_MAX) return null;
+  let box: Box | null = null;
+  let aim: EngineAim = { stub: true };
+  if (boxId !== '') {
+    box = boxes?.get(boxId) ?? null;
+    if (!box || box.pin === '') return null;
+    const at = place === '' ? null : box.places.find((p) => p.name === place);
+    if (place !== '' && !at) return null;
+    aim = { stub: false, box: { addr: addrOf(box), user: box.user, hostKey: box.pin, key: box.id, publicKey: box.publicKey }, shell: { folder: at ? at.folder : box.folder, term: 'xterm-256color', cols: 120, rows: 40 } };
+  }
+  const aimedAt = box;
   const id = nextTabId++;
   const origin = `app://tab-${id}`;
   // Its own partition (in memory only) and its own origin: nothing is shared with another tab.
@@ -212,8 +251,17 @@ function openTab(): Tab | null {
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
-  });
-  const tab: Tab = { id, view, engine, origin };
+    link: () => {
+      if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
+      tellShell();
+    },
+    // Text a box sent before sign-in: it goes to the tab's own view, for its terminal, and nowhere else.
+    banner: (bytes) => {
+      if (tabs.get(id) === tab) sendTo(view, CH.tabBanner, bytes);
+    },
+    sign: (req) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
+  }, aim);
+  const tab: Tab = { id, view, engine, origin, box, place };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
@@ -253,6 +301,11 @@ ipcMain.on(CH.tabInput, (e, bytes: unknown) => {
     return;
   }
   tab.engine.input(bytes);
+});
+
+ipcMain.on(CH.tabTaken, (e, total: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof total !== 'number' || !tab.engine.taken(total)) droppedMessages++;
 });
 
 ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
@@ -365,9 +418,11 @@ if (!app.requestSingleInstanceLock()) {
     const listFile = path.join(app.getPath('userData'), 'list.berth');
     const backups = LAB_PROFILE ? path.join(LAB_PROFILE, 'backups') : path.join(app.getPath('documents'), 'Berth backups');
     const k = new KeyProc(ENGINE_BIN, ENGINE_HASHES, listFile, () => void g.keysChanged());
-    const g = new Gate(k, tellGate, backups);
+    const b = new Boxes(k, identifyWith(ENGINE_BIN, ENGINE_HASHES), firstConnection.block, tellShell);
+    const g = new Gate(k, tellGate, backups, (publicPart, keyInfos) => b.load(publicPart, keyInfos));
     keys = k;
     gate = g;
+    boxes = b;
     void k.start();
     win.on('resize', layout);
     win.on('closed', () => {
@@ -388,7 +443,10 @@ if (!app.requestSingleInstanceLock()) {
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ gate: g, keys: k, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
+      await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
+        const box = b.get(boxId);
+        return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
         const ses = session.fromPartition(partition, { cache: false });
         harden(ses);
         return new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-shell.js', false) });
