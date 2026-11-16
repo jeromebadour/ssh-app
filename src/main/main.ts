@@ -420,10 +420,22 @@ function sendTo(view: WebContentsView | null, channel: string, payload: unknown)
 }
 
 function tellShell(): void {
+  tellTitle();
   sendTo(shell, CH.shellState, shellState());
 }
 
 const frontTold = new Map<number, boolean>(); // what each tab's view was last told: in front, or not
+
+// What the window calls itself. Berth draws its own title bar, so this is read in the taskbar and in Alt+Tab
+// rather than on the window: with several boxes open, that is where a person tells one Berth window from the
+// state of another (SSH-APP-DETAILS 2: "<box> . <place> of the active tab, so the taskbar says which box").
+function tellTitle(): void {
+  if (!win) return;
+  const t = tabs.get(active);
+  const i = t ? info(t) : null;
+  const name = i?.box ? `${i.box.name}${t?.place ? ` · ${t.place}` : ''} · Berth` : 'Berth';
+  if (win.title !== name) win.setTitle(name);
+}
 
 function layout(): void {
   if (!win || !shell) return;

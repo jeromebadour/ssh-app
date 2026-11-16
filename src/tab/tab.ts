@@ -123,6 +123,13 @@ const draw = (): void => drawChrome(chromeAt, signInAt, chrome);
 
 let last = '';
 port.onState((info) => {
+  // The terminal is framed in its box's colour, so which box you are typing into is visible without reading a
+  // tab label: the tabs already carry that colour and the terminal did not, which the design always said it
+  // should (Kami, 2026-11-17). The frame goes quiet when the session is not up, so a dead tab does not wear
+  // the same colour as a live one.
+  const live = info.box !== null && ['connecting', 'key-exchange', 'signing-in', 'up'].includes(info.link.phase);
+  document.documentElement.style.setProperty('--hue', info.box ? `var(--box-${info.box.colour})` : 'var(--line)');
+  document.documentElement.dataset['live'] = live ? 'yes' : 'no';
   const now = words(info);
   state.textContent = now;
   state.dataset['phase'] = info.box ? info.link.phase : info.state;

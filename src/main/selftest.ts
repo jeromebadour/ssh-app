@@ -625,6 +625,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        // The terminal is framed in its box's colour too. The tabs carry it already; the thing a person types
+        // into did not, so with two boxes open there was nothing in the terminal itself to say which it was.
+        {
+          const front = [...ctx.tabs.values()].find((t) => t.place === 'logs')!;
+          const hue = () => js<string>(front.view, `getComputedStyle(document.documentElement).getPropertyValue('--hue').trim()`);
+          const shadow = () => js<string>(front.view, `getComputedStyle(document.getElementById('term')).boxShadow`);
+          const live = () => js<string>(front.view, `document.documentElement.dataset.live ?? ''`);
+          // The browser gives a custom property back worked out, so --hue reads as the colour itself, not as the
+          // name it was set from: it is compared with that box's colour, worked out the same way.
+          const itsColour = await js<string>(front.view, `getComputedStyle(document.documentElement).getPropertyValue('--box-${front.box!.colour}').trim()`);
+          const framed = await until(async () => (await hue()) === itsColour && itsColour !== '', 4000);
+          // The box's colour is mixed into the frame, so the frame is not the one a tab with no box wears. The
+          // two are compared as the browser works them out, not as they are written.
+          const wearing = await shadow();
+          const plainFrame = await js<string>(front.view, `(() => { const d = document.createElement('div'); d.style.boxShadow = 'inset 0 0 0 1px var(--line)'; document.body.appendChild(d); const v = getComputedStyle(d).boxShadow; d.remove(); return v; })()`);
+          check('the terminal is framed in its box\'s own colour, not the plain line colour', framed && (await live()) === 'yes' && wearing !== plainFrame, [await hue(), wearing.slice(0, 70), plainFrame.slice(0, 70)]);
+          // And the window says which box it is on, for the taskbar: Berth draws its own title bar, so this is
+          // the only place that name is read.
+          check('the window names the box and place it is on', ctx.win.title.startsWith('lab-box') && ctx.win.title.includes('logs') && ctx.win.title.includes('Berth'), ctx.win.title);
+        }
         const open1 = [...ctx.tabs.values()].find((x) => x.place === 'logs')!;
         {
           const front = open1;
