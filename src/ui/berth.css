@@ -483,9 +483,13 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 html[data-gate='unlocked'], html[data-gate='unlocked'] body { background: transparent; }
 .window.live { grid-template-rows: 46px 1fr 30px; }
 .window.live .middle { position: relative; display: grid; place-items: center; min-height: 0; }
-.first-use { display: grid; place-items: center; }
-.first-hint { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
-.first-hint .glyph { width: 16px; height: 16px; color: var(--text-3); }
+.window.live .middle:has(.first-use) { background: var(--bg); }
+.first-use { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+.first-use > .mark { width: 56px; height: 56px; opacity: .55; }
+.fu-boxes { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 640px; }
+.fu-box { display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 14px 0 12px; border-radius: var(--r); background: var(--panel-2); border: 1px solid var(--line); box-shadow: inset 0 2px 0 color-mix(in srgb, var(--hue) 70%, transparent); color: var(--text); font-size: 13.5px; cursor: pointer; }
+.fu-box:hover { background: color-mix(in srgb, var(--hue) 10%, var(--panel-2)); }
+.fu-box:active { filter: brightness(1.12); }
 .tab .tab-close { display: grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; border-radius: var(--r-s); }
 .tab .tab-close:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .menu-away { position: fixed; inset: 0; z-index: 15; }
