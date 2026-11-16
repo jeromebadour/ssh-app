@@ -1,14 +1,13 @@
 // The shell view: the password before anything else, then the bar of tabs. It only draws: what the lock says
 // and which tabs exist come from main, and everything it asks goes through the few messages in common/ipc.ts.
-// The tab bar here is still the skeleton's (plain numbered tabs): boxes, places and the Boxes menu replace it
-// when Add box is built.
 import { render } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
-import type { GateState, ShellPort, ShellState } from '../common/ipc';
+import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
+import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
+import { Bar, placeLabel, tabLook, type BarActions } from '../ui/bar';
+import { AddBoxDialog, ChangedDialog, CheckDialog } from '../ui/boxdialogs';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateNotice, UnlockScreen } from '../ui/gate';
 import { Glyph } from '../ui/glyphs';
-import { Mark } from '../ui/marks';
 
 declare global {
   interface Window {
@@ -21,7 +20,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false };
-let shellNow: ShellState = { tabs: [], active: 0 };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '' };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -33,30 +32,99 @@ port.onState((s) => {
 });
 const act = { create: (p: Uint8Array) => port.gateCreate(p), unlock: (p: Uint8Array) => port.gateUnlock(p), pickBackup: () => port.gatePickBackup() };
 
-// Every press answers at once (BUILD-RULES 2.18): the pressed tab takes its selected look the moment it is
-// pressed, here in the view, and keeps it until main says which tab is in front. It never waits for main.
-function Bar(props: { s: ShellState }) {
-  const [pressed, setPressed] = useState(0);
-  useEffect(() => setPressed(0), [props.s.active]);
-  const front = pressed || props.s.active;
+// What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
+// the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
+type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'changed'; tab: number };
+
+let nextReq = 1;
+
+function Unlocked(props: { s: ShellState }) {
+  const s = props.s;
+  const [dialog, setDialog] = useState<Dialog>({ kind: 'none' });
+  const [seenChanged, setSeenChanged] = useState<number[]>([]);
+  // A dialog or the check is open: the shell is above the tabs, so no tab can draw over it or take its clicks.
+  const over = dialog.kind !== 'none' || s.check !== null;
+  // Said before the dialog is painted, so the shell is raised as it appears.
+  useLayoutEffect(() => port.cmd({ op: 'overlay', on: over }), [over]);
+  // The box was added: its check opens (main has started it), and Add box closes.
+  useEffect(() => {
+    if (dialog.kind === 'add' && s.added?.req === dialog.req && s.added.ok) setDialog({ kind: 'none' });
+  }, [s.added]);
+  // A tab stopped because its box showed another identity: said at once, once per tab.
+  const stopped = s.tabs.find((t) => t.box && t.link.cause === 'identity-changed' && !seenChanged.includes(t.id));
+  useEffect(() => {
+    if (stopped && dialog.kind === 'none' && !s.check) setDialog({ kind: 'changed', tab: stopped.id });
+  }, [stopped?.id, dialog.kind, s.check === null]);
+  const act: BarActions = {
+    select: (id) => port.cmd({ op: 'select', id }),
+    close: (id) => port.cmd({ op: 'close', id }),
+    open: (box, place) => {
+      const b = s.boxes.find((x) => x.id === box);
+      if (b && !b.pinned) port.cmd({ op: 'check', box });
+      else port.cmd({ op: 'open', box, place });
+    },
+    addBox: () => setDialog({ kind: 'add', req: nextReq++ }),
+    menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
+  };
+  const front = s.tabs.find((t) => t.id === s.active);
+  const adding = dialog.kind === 'add' && s.added?.req !== dialog.req;
+  const refusal = dialog.kind === 'add' && s.added?.req === dialog.req && !s.added.ok ? s.added : null;
+  const changedTab = dialog.kind === 'changed' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
+  const changedBox = changedTab?.box ? s.boxes.find((b) => b.id === changedTab.box!.id) : undefined;
   return (
-    <header class="tabbar scaffold" id="bar">
-      <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
-      <div class="tab-groups" style={{ '--n': props.s.tabs.length }}>
-        {props.s.tabs.map((t) => (
-          <span class={`tab ${t.id === front ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={t.state} aria-selected={t.id === front} title={`tab ${t.id} · ${t.state}`} style={{ '--hue': 'var(--box-1)' }} onPointerDown={() => setPressed(t.id)} onClick={() => port.cmd({ op: 'select', id: t.id })}>
-            <span class={`conn conn-${t.state === 'ready' ? 'connected' : t.state === 'starting' ? 'connecting' : 'gone'}`} />
-            <span class="tab-box">tab {t.id}</span>
-            <span class="tab-place">{t.state}</span>
-            <span class="tab-end">
-              <button type="button" class="tab-close" data-close={t.id} aria-label={`Close tab ${t.id}`} onClick={(e) => { e.stopPropagation(); port.cmd({ op: 'close', id: t.id }); }}><Glyph name="close" class="tab-x" /></button>
-            </span>
-          </span>
-        ))}
-        <button type="button" class="new-tab" id="new" aria-label="New tab" onClick={() => port.cmd({ op: 'new' })}><Glyph name="plus" /></button>
-      </div>
-    </header>
+    <div class="window live">
+      <Bar s={s} act={act} />
+      <main class="middle">
+        {s.tabs.length === 0 && (
+          <div class="first-use" id="first-use">
+            {s.boxes.length === 0 ? (
+              <button type="button" class="btn primary" id="first-add" onClick={act.addBox}><Glyph name="plus" />Add box</button>
+            ) : (
+              <span class="first-hint"><Glyph name="boxes" />{s.boxes.length} {s.boxes.length === 1 ? 'box' : 'boxes'}: open one from Boxes</span>
+            )}
+          </div>
+        )}
+      </main>
+      <footer class="status" id="status">
+        {front ? (
+          <>
+            <span class="s-tab"><TabStateMark t={front} />{front.box ? `${front.box.name}, ${placeLabel(front, s.boxes)}` : `tab ${front.id}`}</span>
+            <span>{statusWords(front)}</span>
+          </>
+        ) : <span />}
+        <span class="s-last" id="status-done">{s.done}</span>
+      </footer>
+      {dialog.kind === 'add' && <AddBoxDialog taken={s.boxes.map((b) => b.name)} working={adding && pendingAdd === dialog.req} refused={refusal?.fields ?? {}} error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''} onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'addBox', req: dialog.req, draft }); }} onCancel={() => setDialog({ kind: 'none' })} />}
+      {s.check && dialog.kind === 'none' && (
+        <CheckDialog key={s.check.boxId} c={s.check} act={{
+          copy: () => port.cmd({ op: 'copyBlock', box: s.check!.boxId }),
+          paste: (text) => port.cmd({ op: 'paste', box: s.check!.boxId, text }),
+          again: () => port.cmd({ op: 'check', box: s.check!.boxId }),
+          trust: () => port.cmd({ op: 'trust', box: s.check!.boxId }),
+          close: () => port.cmd({ op: 'closeCheck', box: s.check!.boxId }),
+        }} />
+      )}
+      {changedTab && changedBox && (
+        <ChangedDialog name={changedBox.name} addr={`${changedBox.host}:${changedBox.port}`} pinType={changedBox.pinType} pinFingerprint={changedBox.pinFingerprint} pinnedAt={changedBox.pinnedAt} shownFingerprint={changedTab.link.shownFingerprint} onClose={() => { setSeenChanged([...seenChanged, changedTab.id]); setDialog({ kind: 'none' }); }} />
+      )}
+    </div>
   );
+}
+let pendingAdd = 0;
+
+function TabStateMark(props: { t: TabInfo }) {
+  return <span class={`conn conn-${tabLook(props.t).mark}`} />;
+}
+
+function statusWords(t: TabInfo): string {
+  const l = t.link;
+  if (!t.box) return t.state;
+  if (l.phase === 'up') {
+    if (l.silentSinceMs > 0) return `no answer for ${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s, the link is kept`;
+    return `${l.rttMs >= 0 ? `round trip ${l.rttMs} ms` : 'connected'}${l.postQuantum ? ', post-quantum' : ''}`;
+  }
+  if (l.phase === 'ended') return `ended: ${l.cause.replace(/-/g, ' ')}`;
+  return tabLook(t).words;
 }
 
 function App() {
@@ -72,7 +140,7 @@ function App() {
     else if (gate.phase !== 'working') setScreen('notice');
   }, [gate.phase]);
   document.documentElement.dataset['gate'] = gate.phase;
-  if (gate.phase === 'unlocked') return <Bar s={shell} />;
+  if (gate.phase === 'unlocked') return <Unlocked s={shell} />;
   if (screen === 'create' && (gate.phase === 'create' || gate.phase === 'working')) return <CreateScreen gate={gate} act={act} />;
   if (screen === 'unlock' && (gate.phase === 'locked' || gate.phase === 'working')) return <UnlockScreen gate={gate} act={act} />;
   return <GateNotice gate={gate} />;

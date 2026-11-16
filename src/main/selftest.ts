@@ -2,7 +2,7 @@
 // and only in an unpackaged build started with SSHAPP_SELFTEST=1. It prints one line, "SELFTEST <json>",
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
-import { app, type BaseWindow, type Session, type WebContentsView } from 'electron';
+import { app, clipboard, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -312,6 +312,166 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       else await ctx.gate.unlock(Buffer.from(PASSWORD));
       check('unlocked', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       await until(() => has('#bar'), 5000);
+    }
+
+    // "boxes-ui": the box screens driven by hand, as Kami will use them: real clicks and keys into the real
+    // dialogs, against the lab's SSH server. SSHAPP_PICTURES=<folder> also pictures each screen on the way.
+    if (ctx.mode === 'boxes-ui') {
+      const labBin = process.env['SSHAPP_LABBOX'] ?? '';
+      const shots = process.env['SSHAPP_PICTURES'] ?? '';
+      const commit = process.env['SSHAPP_PICTURE_COMMIT'] ?? '';
+      const size = ctx.win.getContentBounds();
+      const shot = async (name: string, what: string) => {
+        if (!shots) return;
+        await sleep(350);
+        const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
+        const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
+        check(`a picture: ${what}`, made.width > 0, made);
+      };
+      const shellOnTop = () => {
+        const kids = ctx.win.contentView.children;
+        return kids[kids.length - 1] === ctx.shell;
+      };
+      const moveTo = async (sel: string) => {
+        const p = await at(sel);
+        if (p) sh.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
+        await sleep(120);
+        return !!p;
+      };
+      const selectAll = async () => {
+        sh.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['control'] });
+        sh.sendInputEvent({ type: 'keyUp', keyCode: 'A', modifiers: ['control'] });
+        await sleep(60);
+      };
+      const step = () => js<string>(ctx.shell, `document.getElementById('check')?.dataset.step ?? ''`);
+      if (labBin === '') {
+        check('a lab box to connect to', false, 'SSHAPP_LABBOX is not set');
+      } else {
+        const { box: lab, first } = await LabBox.start(labBin);
+        const addr = String(first['addr'] ?? '');
+        const port = addr.split(':')[1] ?? '';
+        const printed = String(first['printed'] ?? '');
+
+        check('a first start with no box shows one thing: Add box', await until(() => has('#first-add'), 5000), '');
+        await clickOn('#first-add');
+        check('Add box opens, with the shell above the tabs', (await until(() => has('#add-box'), 3000)) && (await until(shellOnTop, 1000)), '');
+        await shot('add-empty', 'Add box, empty');
+        // Add with nothing typed: every required field says so, and nothing is asked of main.
+        await clickOn('#add-submit');
+        check('Add with nothing typed: the fields to fix are counted and named', (await text('#add-to-fix')).includes('3 fields to fix') && (await text('#box-name-check')) === 'needed' && ctx.boxes.list.length === 0, await text('#add-to-fix'));
+        await clickOn('#box-name');
+        await typeKeys('lab-box');
+        await clickOn('#box-host');
+        await typeKeys('127.0.0.1');
+        await clickOn('#box-port');
+        await typeKeys('99999');
+        check('each field checks itself as it is typed', (await text('#box-name-check')).includes('free') && (await text('#box-host-check')) === 'an IP address' && (await text('#box-port-check')) === '1 to 65535', [await text('#box-name-check'), await text('#box-port-check')]);
+        await selectAll();
+        await typeKeys(port);
+        await clickOn('#box-user');
+        await typeKeys('demo');
+        await clickOn('#place-0-name');
+        await typeKeys('logs');
+        await clickOn('#place-0-folder');
+        await typeKeys('/var/log');
+        check('a new place row appears under the one filled', await until(() => has('#place-1-name'), 2000), '');
+        await shot('add-filled', 'Add box, filled in');
+        await clickOn('#add-submit');
+        const reached = await until(async () => (await step()) === 'reached', 20_000);
+        check('Add box: the box is added and its check opens at once, asking the box who it is', reached && ctx.boxes.list.length === 1 && !(await has('#add-box')) && shellOnTop(), [await step(), ctx.boxes.list.length]);
+        const id = ctx.boxes.list[0]?.id ?? '';
+        const shownBefore = await js<string>(ctx.shell, `document.getElementById('check').textContent`);
+        check('what the box showed is nowhere on the screen before a paste', !shownBefore.includes('SHA256:') || !printed.split(' ').some((w) => w.startsWith('SHA256:') && shownBefore.includes(w)), '');
+        await clickOn('#check-copy');
+        const copied = await until(async () => (await clipboard.readText()) === ctx.boxes.block(id), 2000);
+        check('Copy puts the exact block on the clipboard', copied && (await clipboard.readText()).includes(ctx.boxes.list[0]!.publicKey), (await clipboard.readText()).slice(0, 60));
+        await shot('check-asked', 'the first-connection check, waiting for the paste');
+
+        await clickOn('#check-paste');
+        await typeKeys('256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)');
+        check('a paste from another box: the dialog turns to a mismatch, both shown, no Trust', (await until(async () => (await step()) === 'mismatch', 3000)) && (await has('#check-mismatch')) && !(await has('#check-trust')), await step());
+        await shot('check-mismatch', 'the first-connection check, another box answered');
+        await clickOn('#check-paste');
+        await selectAll();
+        await typeKeys(printed.trim());
+        check('the box\'s own line: a match, and Trust and connect', (await until(async () => (await step()) === 'match', 3000)) && (await has('#check-trust')), await step());
+        await shot('check-match', 'the first-connection check, a match');
+        await clickOn('#check-trust');
+        check('Trust and connect: the dialog closes, the box is pinned, and a tab opens on it, the tab above the shell again', (await until(() => ctx.boxes.list[0]?.pin !== '' && !shellOnTop() && ctx.shellState().tabs.length === 1, 10_000)) && !(await has('#check')), [ctx.boxes.list[0]?.pin !== '', shellOnTop()]);
+        const t1 = [...ctx.tabs.values()][0]!;
+        await until(() => t1.engine.link.phase === 'ended', 20_000);
+        check('the key is not on the box yet: the tab says the sign-in failed', t1.engine.link.cause === 'sign-in-failed' && (await text(`[data-tab="${t1.id}"]`)).includes('lab-box'), t1.engine.link);
+        ctx.closeTab(t1.id);
+        await lab.tell(`accept ${ctx.boxes.list[0]!.publicKey}`);
+
+        // The Boxes menu: the box, its place beside it; a place opens a tab there.
+        await clickOn('#boxes');
+        check('Boxes opens the menu, above the tabs', (await until(() => has('#box-menu'), 2000)) && (await until(shellOnTop, 1000)) && (await text('#box-menu')).includes('lab-box'), '');
+        await moveTo('[data-box="lab-box"]');
+        check('its places open beside it', await until(() => has('[data-place="logs"]'), 2000), '');
+        await shot('boxes-menu', 'the Boxes menu, a box\'s places open');
+        await clickOn('[data-place="logs"]');
+        const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
+        check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
+        check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        await shot('tab-open', 'a tab open on a box');
+
+        // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
+        for (let i = 0; i < 6; i++) ctx.openTab(id, i % 2 ? 'logs' : '');
+        ctx.win.setContentSize(1024, 640);
+        await sleep(500);
+        check('seven tabs on one box in a small window fold into one tab with a count', (await until(async () => (await js<number>(ctx.shell, `document.querySelectorAll('[data-tab]').length`)) === 1 && (await has('[data-fold]')), 3000)) && (await text('[data-fold]')).includes('7'), await js<number>(ctx.shell, `document.querySelectorAll('[data-tab]').length`));
+        await clickOn('[data-fold]');
+        const listed = await js<number>(ctx.shell, `document.querySelectorAll('[data-fold-tab]').length`);
+        check('the count opens the seven as a list', listed === 7, listed);
+        await shot('fold-open', 'seven tabs on one box, folded and opened');
+        const third = [...ctx.tabs.values()][2]!;
+        await clickOn(`[data-fold-tab="${third.id}"]`);
+        check('picking one from the list brings it to the front', await until(() => ctx.shellState().active === third.id && !shellOnTop(), 3000), ctx.shellState().active);
+        for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
+        ctx.win.setContentSize(size.width, size.height);
+
+        // A box that cannot be reached: said with the cause, in place of the paste step.
+        const closed = await new Promise<number>((resolve) => {
+          const srv = createServer();
+          srv.listen(0, '127.0.0.1', () => {
+            const p = (srv.address() as AddressInfo).port;
+            srv.close(() => resolve(p));
+          });
+        });
+        await clickOn('#boxes');
+        await clickOn('#add-box-open');
+        await until(() => has('#add-box'), 2000);
+        await clickOn('#box-name');
+        await typeKeys('quiet-box');
+        await clickOn('#box-host');
+        await typeKeys('127.0.0.1');
+        await clickOn('#box-port');
+        await typeKeys(String(closed));
+        await clickOn('#box-user');
+        await typeKeys('demo');
+        await pressEnter();
+        check('a box nothing answers at: the check says it was refused, with Try again', (await until(async () => (await step()) === 'unreachable', 15_000)) && (await text('#check-unreachable')).includes('refused the connection') && (await has('#check-again')), await text('#check-unreachable'));
+        await shot('check-unreachable', 'the first-connection check, the box cannot be reached');
+        await clickOn('#check-close');
+        check('Close: no dialog, the box is kept, never checked', (await until(async () => !(await has('#check')), 2000)) && ctx.boxes.list.find((b) => b.name === 'quiet-box')?.pin === '', '');
+        await clickOn('#boxes');
+        await clickOn('[data-box="quiet-box"]');
+        check('a box never checked, picked from Boxes, opens its check and no tab', (await until(() => has('#check'), 3000)) && ctx.shellState().tabs.length === 0, '');
+        await clickOn('#check-close');
+
+        // Another identity at the box's address: the tab stops, and the stop is said in its dialog.
+        await lab.tell('rekey');
+        ctx.openTab(id, '');
+        check('a box showing another identity: the tab stops and the dialog says so, with both fingerprints', (await until(() => has('#changed'), 20_000)) && (await text('#changed')).includes(ctx.boxes.list[0]!.pinFingerprint) && (await until(shellOnTop, 1000)), [await has('#changed'), await text('#changed'), shellOnTop(), ctx.shellState().tabs.map((t) => [t.link.phase, t.link.cause]), ctx.shellState().check?.boxId ?? '', ctx.boxes.list.map((b) => [b.name, b.pinFingerprint])]);
+        await shot('changed', 'a box whose identity changed');
+        await clickOn('#changed-close');
+        check('Close: the dialog goes, the tab stays, marked stopped', (await until(async () => !(await has('#changed')), 2000)) && (await js<string>(ctx.shell, `document.querySelector('[data-tab]')?.dataset.state ?? ''`)) === 'stopped', '');
+        lab.end();
+      }
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
     }
 
     // The short mode, for a package whose engine file was changed on purpose: one tab, and its engine must be

@@ -92,6 +92,7 @@ async function flipByte(file, position) {
 // ---- the lab package
 await selftest('the lab package, self-test', LAB, 'all');
 await selftest('the lab package, seven tabs', LAB, 'seven');
+await selftest('the lab package, the box screens', LAB, 'boxes-ui');
 
 {
   const r = await run(LAB, ['--lab'], { SSHAPP_SELFTEST: 'hold' }, { ms: 60_000, until: /^HOLD .*$/m });

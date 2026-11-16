@@ -63,6 +63,7 @@ const shapes: Record<string, JSX.Element> = {
   start: <><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /><path d="M7 8.5l2 1.25-2 1.25z" /></>,
   ok: <><circle cx="8" cy="8" r="5.5" /><path d="M5.5 8.25l1.75 1.75 3.25-3.5" /></>,
   fix: <><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.5M8 10.75v.25" /></>,
+  find: <><circle cx="7" cy="7" r="4" /><path d="M10 10l3.5 3.5" /></>,
   term: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.75 6.5l2 1.5-2 1.5M8.5 10H11" /></>,
 };
 

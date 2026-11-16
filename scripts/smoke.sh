@@ -97,6 +97,8 @@ case "$mode" in
     [ -f dist/main.js ] || { echo "smoke: nothing built (run scripts/build.sh)" >&2; exit 1; }
     helper node_modules/electron/dist/chrome-sandbox
     selftest "$log" "$electron" .
+    # The box screens, by real clicks and keys, against the lab's SSH server.
+    selftest_mode=boxes-ui selftest "$log" "$electron" .
     quiet_network
     ;;
 
@@ -117,6 +119,8 @@ case "$mode" in
       || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
     # Seven tabs at once.
     selftest_mode=seven selftest "$log" "$pkg/ssh-app" --lab
+    # The box screens, by real clicks and keys.
+    selftest_mode=boxes-ui selftest "$log" "$pkg/ssh-app" --lab
     # The same seven in the narrowest window the app allows, on a small screen (GitHub's Windows machine has
     # 1024 x 768; a 1280-wide window at 125 % scaling is 1024 wide too): every tab must still be there to press.
     selftest_mode=seven selftest_window=800x500 selftest_screen=1024x768 selftest "$log" "$pkg/ssh-app" --lab
