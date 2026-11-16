@@ -16,10 +16,8 @@
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { writeZip } from './lib/zip.mjs';
 
-const run = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '..');
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 
@@ -128,12 +126,15 @@ const readme = [
 ].join('\r\n');
 await writeFile(path.join(dest, 'README.txt'), readme);
 
+// The zip is written here, by us: a Windows machine has no `zip`, and every entry carries one fixed moment,
+// so the same files always make the same zip (the two builders are compared byte for byte).
 const zip = path.join(out, `${stem}-win32-x64.zip`);
 await rm(zip, { force: true });
-await run('zip', ['-q', '-r', '-X', zip, stem], { cwd: path.join(out, 'release') });
-const zipSha = sha(await readFile(zip));
+const made = await writeZip(zip, dest);
+const zipSha = made.sha256;
+if (made.files !== p.files + 5) throw new Error(`release: the zip holds ${made.files} files, wanted ${p.files + 5} (the package, and the five this script adds)`);
 await writeFile(path.join(out, 'release.json'), JSON.stringify({ name: NAME, version, zip: path.basename(zip), sha256: zipSha, ...plan }, null, 2) + '\n');
 
 console.log(`release: ${path.basename(zip)}`);
 console.log(`release: sha256 ${zipSha}`);
-console.log(`release: ${p.files} files checked against the manifest, all of them match`);
+console.log(`release: ${made.files} files in the zip, ${p.files} of them the package, each checked against the manifest`);
