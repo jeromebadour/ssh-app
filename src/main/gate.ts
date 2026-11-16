@@ -7,7 +7,7 @@ import { PASSWORD_MAX_BYTES, PASSWORD_MIN, type GateState } from '../common/ipc'
 import { PW, type KeyProc, type KeyReply } from './keyproc';
 
 export class Gate {
-  state: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false };
+  state: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
   backup = ''; // after unlock: what became of the last backup ('none', 'written', 'failed')
   private waitUntil = 0;
 
@@ -39,6 +39,38 @@ export class Gate {
     if (s['exists'] === true) return this.set({ phase: 'locked', hasPrevious: s['hasPrevious'] === true });
     await this.checkBackupDir();
     this.set({ phase: 'create' });
+  }
+
+  // A list that cannot be read is not the end of the boxes: a backup, or the copy saved before this one, can
+  // take its place. The file is always main's own (a native dialog, or the copy beside the list); the screen
+  // never names a file, only types the password for the one that was chosen (plan B2.7).
+  chooseRestore(from: string): void {
+    if (this.state.phase !== 'damaged' || from === '') return;
+    this.set({ restoreFrom: from, detail: this.state.detail, wrong: false });
+  }
+
+  forgetRestore(): void {
+    if (this.state.phase !== 'damaged') return;
+    this.set({ restoreFrom: '', wrong: false });
+  }
+
+  async restore(password: Uint8Array): Promise<void> {
+    if (this.state.phase !== 'damaged' || this.state.restoreFrom === '' || !(password instanceof Uint8Array) || password.byteLength === 0 || password.byteLength > PASSWORD_MAX_BYTES || Date.now() < this.waitUntil) {
+      wipe(password);
+      if (this.state.phase === 'damaged' && this.state.restoreFrom !== '' && Date.now() >= this.waitUntil) this.set({ detail: 'that password is not one this app will take' });
+      return;
+    }
+    const from = this.state.restoreFrom;
+    this.set({ phase: 'working', wrong: false });
+    const opened = await this.keys.restore(from, password);
+    wipe(password);
+    if (!opened.ok) {
+      // Back to the damaged screen with the same backup still chosen, so a wrong password is one more try.
+      this.state.restoreFrom = from;
+      return this.failed(opened, 'damaged');
+    }
+    this.opened(opened['public'], opened['keys']);
+    this.set({ phase: 'unlocked', backupDir: String(opened['backupDir'] ?? ''), restoreFrom: '' });
   }
 
   async setBackupDir(dir: string): Promise<void> {
@@ -101,13 +133,13 @@ export class Gate {
     this.set({ phase: 'unlocked', backupDir: String(opened['backupDir'] ?? '') });
   }
 
-  private failed(r: KeyReply, back: 'create' | 'locked'): void {
+  private failed(r: KeyReply, back: 'create' | 'locked' | 'damaged'): void {
     const wait = typeof r['retryAfterMs'] === 'number' ? r['retryAfterMs'] : 0;
     this.waitUntil = Date.now() + wait;
     switch (r.error) {
       case 'wrong-password':
       case 'wait':
-        return this.set({ phase: 'locked', wrong: true });
+        return this.set({ phase: back === 'damaged' ? 'damaged' : 'locked', wrong: true });
       case 'damaged':
       case 'not-a-list':
       case 'newer-version':

@@ -228,6 +228,7 @@ const lookPace = (): void => {
 };
 let keys: KeyProc | null = null;
 let gate: Gate | null = null;
+let listOnDisk = ''; // where the list is kept: main's own, never a view's word for it
 let boxes: Boxes | null = null;
 let signsRefused = 0;
 let copiesRefused = 0; // a tab not in front, or a window not in use, offered text for the clipboard
@@ -761,6 +762,41 @@ ipcMain.on(CH.gateUnlock, (e, password: unknown) => {
   void gate.unlock(password);
 });
 
+// A list that cannot be read: the ways back. The file is always main's own, never named by a view.
+ipcMain.on(CH.gatePickRestore, (e) => {
+  if (!fromShell(e) || !gate || !win || gate.state.phase !== 'damaged') return void drop('gate');
+  const g = gate;
+  void dialog
+    .showOpenDialog(win, {
+      title: 'A backup of the list',
+      defaultPath: g.state.backupDir || path.dirname(listOnDisk),
+      filters: [{ name: 'Berth list', extensions: ['berth'] }],
+      properties: ['openFile'],
+    })
+    .then((picked) => {
+      const file = picked.filePaths[0];
+      if (!picked.canceled && file) g.chooseRestore(file);
+    });
+});
+
+ipcMain.on(CH.gateUsePrevious, (e) => {
+  if (!fromShell(e) || !gate || gate.state.phase !== 'damaged' || !gate.state.hasPrevious || listOnDisk === '') return void drop('gate');
+  gate.chooseRestore(`${listOnDisk}.previous`);
+});
+
+ipcMain.on(CH.gateForgetRestore, (e) => {
+  if (!fromShell(e) || !gate || gate.state.phase !== 'damaged') return void drop('gate');
+  gate.forgetRestore();
+});
+
+ipcMain.on(CH.gateRestore, (e, password: unknown) => {
+  // A password may be typed by the view; which file it opens is main's own and must already be chosen. A
+  // message that arrives without one is a message the view may not send: it is dropped and counted, not
+  // turned into something the person is told (plan B2.7).
+  if (!fromShell(e) || !gate || !(password instanceof Uint8Array) || gate.state.phase !== 'damaged' || gate.state.restoreFrom === '') return void drop('gate');
+  void gate.restore(password);
+});
+
 ipcMain.on(CH.gatePickBackup, (e) => {
   if (!fromShell(e) || !gate || !win || gate.state.phase !== 'create') return void drop('gate');
   const g = gate;
@@ -813,7 +849,7 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     const kind = !app.isPackaged ? 'dev' : LAB ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-shot', 'boxes-ui'].includes(asked) ? asked : '';
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-restore', 'gate-shot', 'boxes-ui'].includes(asked) ? asked : '';
     if (SELFTEST === 'direction') await listFiles('directions');
     await listFiles('shell');
     await listFiles('tab');
@@ -838,6 +874,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     // The key process, and the lock in front of everything else.
     const listFile = path.join(app.getPath('userData'), 'list.berth');
+    listOnDisk = listFile;
     const backups = LAB_PROFILE ? path.join(LAB_PROFILE, 'backups') : path.join(app.getPath('documents'), 'Berth backups');
     const k = new KeyProc(ENGINE_BIN, ENGINE_HASHES, listFile, () => void g.keysChanged());
     const b = new Boxes(k, identifyWith(ENGINE_BIN, ENGINE_HASHES), firstConnection.block, tellShell);

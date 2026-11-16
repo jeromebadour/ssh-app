@@ -21,6 +21,18 @@ const port: ShellPort = {
   gatePickBackup() {
     ipcRenderer.send(CH.gatePickBackup);
   },
+  gatePickRestore() {
+    ipcRenderer.send(CH.gatePickRestore);
+  },
+  gateUsePrevious() {
+    ipcRenderer.send(CH.gateUsePrevious);
+  },
+  gateRestore(password) {
+    ipcRenderer.send(CH.gateRestore, password);
+  },
+  gateForgetRestore() {
+    ipcRenderer.send(CH.gateForgetRestore);
+  },
   meter(n) {
     ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs), reactionKind: Number(n.reactionKind), reactionWaitMs: Number(n.reactionWaitMs), reactionHandlerMs: Number(n.reactionHandlerMs) });
   },

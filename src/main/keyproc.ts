@@ -74,6 +74,23 @@ export class KeyProc {
     }, true);
   }
 
+  // Restoring: the backup's full path goes with the password, length first. The path is main's own (a native
+  // dialog, or the copy beside the list); no view ever names a file (plan B2.7).
+  restore(from: string, password: Uint8Array): Promise<KeyReply> {
+    return this.ask((id) => {
+      const where = Buffer.from(from, 'utf8');
+      const body = Buffer.alloc(13 + where.byteLength + password.byteLength);
+      body.writeBigUInt64BE(BigInt(id), 0);
+      body[8] = PW.restore;
+      body.writeUInt32BE(where.byteLength, 9);
+      where.copy(body, 13);
+      body.set(password, 13 + where.byteLength);
+      const frame = encodeFrame(T.Password, body);
+      body.fill(0);
+      return frame;
+    }, true);
+  }
+
   close(): void {
     this.closing = true;
     this.child?.stdin.end();
