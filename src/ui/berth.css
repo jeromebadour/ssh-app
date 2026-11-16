@@ -369,7 +369,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .g-mark.now { background: var(--box-1); }
 .s-rtt.problem, .s-conn.st-silent, .s-conn.st-gone { color: var(--problem); }
 
-/* ---------- fields, as every field in Berth is drawn (Kami, 2026-11-16, from his console's Add region) ---------- */
+/* ---------- fields, as every field in Berth is drawn (decided 2026-11-16, from an Add region dialog) ---------- */
 .field-label { display: flex; align-items: center; gap: 6px; }
 .field-label .glyph { width: 14px; height: 14px; color: var(--text-3); }
 .input.sized { width: calc(var(--w) + 24px); max-width: 100%; }
@@ -516,7 +516,7 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 /* One colour per dialog: a field being typed in is outlined in a quiet neutral, not the main colour. */
 .dialog .input:focus-within { border-color: var(--text-3); box-shadow: none; }
 .dialog .input.wrong:focus-within { border-color: var(--problem); box-shadow: none; }
-/* The box's colour as an option inside its name field (Kami, 2026-11-16 06:43: the row of colours took the
+/* The box's colour as an option inside its name field (decided 2026-11-16: the row of colours took the
    middle of the dialog from the values that matter). */
 .input.hued input { color: var(--hue); font-weight: 600; }
 .hue-pick-wrap { position: relative; display: flex; align-items: center; margin-right: -6px; }

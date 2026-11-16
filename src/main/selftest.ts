@@ -336,7 +336,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await until(() => has('#bar'), 5000);
     }
 
-    // "boxes-ui": the box screens driven by hand, as Kami will use them: real clicks and keys into the real
+    // "boxes-ui": the box screens driven by hand, as they will be used: real clicks and keys into the real
     // dialogs, against the lab's SSH server. SSHAPP_PICTURES=<folder> also pictures each screen on the way.
     if (ctx.mode === 'boxes-ui') {
       const labBin = process.env['SSHAPP_LABBOX'] ?? '';
@@ -543,7 +543,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('Reconnect opens a new session on the same box and place: a new engine, said in the terminal, the old output kept', again && (await until(async () => (await shown(open1)).includes('new-session-ok'), 5000)) && (await shown(open1)).includes('Berth: a new session on lab-box') && (await shown(open1)).includes(marker), [again, (await shown(open1)).slice(-200)]);
         await shot('tab-again', 'a new session on the same box', open1);
 
-        // A paste of more than one line, read before it is sent: the picture Kami judges it by.
+        // A paste of more than one line, read before it is sent: the picture it is judged by.
         clipboard.writeText('cd /srv/ledger/app\nsha256sum ledger-4f2c1a9.tar.gz\n./scripts/deploy.sh 4f2c1a9 2>&1 | tee deploy-4f2c1a9.log\n');
         open1.view.webContents.focus();
         open1.view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control', 'shift'] });
