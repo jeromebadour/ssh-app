@@ -32,6 +32,9 @@ const (
 
 type aim struct {
 	V     int      `json:"v"`
+	Role  string   `json:"role"` // "keys" for the key process; otherwise a tab's engine
+	File  string   `json:"file"` // the key process: where the list is
+	Cost  *costAim `json:"cost"` // the key process: the cost a new list is sealed with, when it was tuned
 	Tab   string   `json:"tab"`
 	Stub  bool     `json:"stub"`  // the skeleton's echo, for the app's own self-test: no box, no network
 	Box   boxAim   `json:"box"`   // not a stub: the one box
@@ -83,7 +86,7 @@ func main() {
 		if f.Type != frame.TypeAim {
 			o.fatal(exitNoAim, "the first frame was not Aim")
 		}
-		if err := json.Unmarshal(f.Body, &target); err != nil || target.V != 1 || target.Tab == "" {
+		if err := json.Unmarshal(f.Body, &target); err != nil || target.V != 1 || (target.Tab == "" && target.Role != "keys") {
 			o.fatal(exitNoAim, "Aim could not be read")
 		}
 	case err := <-firstErr:
@@ -93,6 +96,10 @@ func main() {
 		o.fatal(exitBadFrame, "bad first frame: "+err.Error())
 	case <-time.After(aimWait):
 		o.fatal(exitNoAim, "no Aim arrived")
+	}
+
+	if target.Role == "keys" {
+		os.Exit(runKeys(o, target))
 	}
 
 	hello, _ := json.Marshal(map[string]any{"v": 1, "role": "engine", "stub": target.Stub, "tab": target.Tab})
