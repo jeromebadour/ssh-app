@@ -254,6 +254,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // Windows draws no title bar for Berth, so the screens before the lock carry the window's own buttons
       // themselves. Without them this screen could not be put away or moved with the mouse at all.
       check('the screens before the lock carry the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
+      // And the same status line the window has. These screens had none at all, so the app's one place for
+      // saying where things stand vanished on them (Kami, 2026-11-17: "no real thin footer everywhere").
+      check('the screens before the lock carry the status line too', (await has('#gate-status')) && (await text('#gate-status')).includes('Berth') && (await text('#gate-status-where')) === 'First start', await text('#gate-status'));
       await lockHolds('before any password');
       // Pressing with nothing typed: it must say what is in the way and put the cursor where it is. Before, the
       // press did nothing whatever, on the first screen anyone sees.
@@ -517,6 +520,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('first-use', 'a first start: no box yet');
         await clickOn('#first-add');
         check('Add box opens, with the shell above the tabs', (await until(() => has('#add-box'), 3000)) && (await until(shellOnTop, 1000)), '');
+        // A dialog dims the window behind it but must leave the status line alone: that line is where the app
+        // says what it just did, and a dialog is exactly when it is needed. Under the dim it could not be read.
+        const overFoot = await js<boolean>(ctx.shell, `(() => { const s = document.querySelector('.scrim'); const f = document.getElementById('status'); if (!s || !f) return true; return Math.round(s.getBoundingClientRect().bottom) > Math.round(f.getBoundingClientRect().top); })()`);
+        check('a dialog leaves the status line clear of its dim', !overFoot, overFoot);
         await shot('add-empty', 'Add box, empty');
         // Add with nothing typed: every required field says so, and nothing is asked of main.
         await clickOn('#add-submit');
@@ -603,8 +610,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         // The Boxes menu: the box, its place beside it; a place opens a tab there.
         await clickOn('#boxes');
         check('Boxes opens the menu, above the tabs', (await until(() => has('#box-menu'), 2000)) && (await until(shellOnTop, 1000)) && (await text('#box-menu')).includes('lab-box'), '');
+        // Nothing a person is pointing at may move under them. Edit and Delete appear on the row when it is
+        // hovered, and their room has to be there before that: taken out of the row and put back, they made the
+        // row grow and pushed the box's name into wrapping (Kami, 2026-11-17).
+        const rowBox = () => js<{ h: number; nameW: number; rowW: number }>(ctx.shell, `(() => { const r = document.querySelector('[data-box="lab-box"]'); const n = r.querySelector('.bm-name'); return { h: Math.round(r.getBoundingClientRect().height), nameW: Math.round(n.getBoundingClientRect().width), rowW: Math.round(r.getBoundingClientRect().width) }; })()`);
+        const before = await rowBox();
         await moveTo('[data-box="lab-box"]');
         check('its places open beside it', await until(() => has('[data-place="logs"]'), 2000), '');
+        const after = await rowBox();
+        const actsShown = await js<boolean>(ctx.shell, `(() => { const a = document.querySelector('[data-box="lab-box"] .bm-acts'); return a !== null && getComputedStyle(a).opacity === '1'; })()`);
+        check('hovering a box row shows Edit and Delete without the row moving under the hand', actsShown && after.h === before.h && after.nameW === before.nameW && after.rowW === before.rowW, [before, after, actsShown]);
         await shot('boxes-menu', 'the Boxes menu, a box\'s places open');
         await clickOn('[data-place="logs"]');
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
