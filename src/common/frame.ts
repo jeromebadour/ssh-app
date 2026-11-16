@@ -20,6 +20,9 @@ export const T = {
   Banner: 0x24,
   Exit: 0x25,
   Notice: 0x26,
+  KeyRequest: 0x30,
+  KeyReply: 0x31,
+  Password: 0x32,
   Fatal: 0x7f,
 } as const;
 
