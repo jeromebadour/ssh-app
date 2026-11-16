@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	sshappsftp "sshapp/engine/internal/sftp"
 
 	"sshapp/engine/internal/lab/faultproxy"
 )
@@ -296,6 +298,130 @@ func TestOpenSSH(t *testing.T) {
 				if code, ok := sh.ExitStatus(); !ok || code == 0 {
 					t.Fatalf("exit status %d %v", code, ok)
 				}
+			})
+
+			// The file protocol, against a real server's own sftp subsystem: what this app's file browser,
+			// its viewer and every transfer will run on.
+			t.Run("the file protocol: a real listing, a real file, and the disk's free space", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+
+				// A folder of our own with known contents, made through the shell so the listing is compared
+				// with something this test did not write through the protocol it is testing.
+				dir := "/tmp/berth-files-" + box.name
+				run(t, l, "rm -rf "+dir+"; mkdir -p "+dir+"/sub && printf 'hello files' > "+dir+"/one.txt && ln -s one.txt "+dir+"/a-link && echo done", 15*time.Second)
+
+				files, err := l.OpenFiles()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				c, err := sshappsftp.Start(ctx, files)
+				if err != nil {
+					t.Fatalf("the file protocol did not start: %v", err)
+				}
+				defer c.Close()
+
+				// Where "." is, as the box itself works it out.
+				home, err := c.Realpath(ctx, ".")
+				if err != nil || home == "" {
+					t.Fatalf("realpath gave %q, %v", home, err)
+				}
+
+				// The listing: every row, and what each one is.
+				kinds := map[string]string{}
+				if err := c.List(ctx, dir, func(e []sshappsftp.Entry) error {
+					for _, x := range e {
+						kinds[x.Name] = x.Attrs.Kind()
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("the listing failed: %v", err)
+				}
+				if kinds["one.txt"] != "file" || kinds["sub"] != "folder" || kinds["a-link"] != "link" {
+					t.Fatalf("the listing says %v; a file, a folder and a link must each be known as itself", kinds)
+				}
+				if _, there := kinds["."]; there {
+					t.Fatal("the listing carried \".\", which is the folder itself")
+				}
+
+				// A file read back byte for byte.
+				f, err := c.Open(ctx, dir+"/one.txt")
+				if err != nil {
+					t.Fatal(err)
+				}
+				buf := make([]byte, 64)
+				n, err := f.ReadAt(ctx, buf, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(buf[:n]) != "hello files" {
+					t.Fatalf("the file read back as %q", buf[:n])
+				}
+				// And from a place inside it, which is what a transfer taken up again does.
+				n, err = f.ReadAt(ctx, buf, 6)
+				if err != nil || string(buf[:n]) != "files" {
+					t.Fatalf("reading from the sixth byte gave %q, %v", buf[:n], err)
+				}
+				if err := f.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+
+				// A file written, read back, and moved into place as a transfer does.
+				w, err := c.Create(ctx, dir+"/new.part", 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.WriteAt(ctx, []byte("written by Berth"), 0); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Rename(ctx, dir+"/new.part", dir+"/one.txt"); err != nil {
+					t.Fatalf("the rename failed: %v", err)
+				}
+				back := run(t, l, "cat "+dir+"/one.txt", 10*time.Second)
+				if back != "written by Berth" {
+					t.Fatalf("after the move the file holds %q", back)
+				}
+
+				// Creating a file that is already there is refused, never silently replaced.
+				if _, err := c.Create(ctx, dir+"/one.txt", 0o600); err == nil {
+					t.Fatal("a file that is already there was replaced")
+				}
+
+				// Where a link points, without following it.
+				if to, err := c.Readlink(ctx, dir+"/a-link"); err != nil || to != "one.txt" {
+					t.Fatalf("the link reads as %q, %v", to, err)
+				}
+
+				// A file that is not there is said as that, not as some other failure.
+				if _, err := c.Stat(ctx, dir+"/nothing-here"); !errors.Is(err, sshappsftp.ErrNoSuchFile) {
+					t.Fatalf("a missing file gave %v", err)
+				}
+
+				// The disk, as OpenSSH's own extension reports it.
+				if !c.Can("statvfs@openssh.com") {
+					t.Fatal("a real OpenSSH server did not offer the extension this app reads free space from")
+				}
+				sp, err := c.Space(ctx, dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sp.Total == 0 || sp.Free == 0 || sp.Free > sp.Total {
+					t.Fatalf("the disk reads as %+v", sp)
+				}
+
+				// And the terminal on the same link is untouched by all of it.
+				if got := run(t, l, "echo still here", 10*time.Second); got != "still here\n" {
+					t.Fatalf("after the file work the shell said %q", got)
+				}
+				run(t, l, "rm -rf "+dir+" && echo cleaned", 10*time.Second)
 			})
 
 			t.Run("the keepalive is answered by a real server", func(t *testing.T) {
