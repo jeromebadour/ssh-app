@@ -27,6 +27,9 @@ const port: ShellPort = {
   gateUsePrevious() {
     ipcRenderer.send(CH.gateUsePrevious);
   },
+  keyPassphrase(passphrase) {
+    ipcRenderer.send(CH.keyPassphrase, passphrase);
+  },
   gateRestore(password) {
     ipcRenderer.send(CH.gateRestore, password);
   },

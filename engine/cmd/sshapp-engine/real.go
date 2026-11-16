@@ -155,6 +155,12 @@ func algorithmsOf(pub ssh.PublicKey) []string {
 		return []string{ssh.KeyAlgoED25519}
 	case ssh.KeyAlgoRSA:
 		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+	case ssh.KeyAlgoECDSA256:
+		return []string{ssh.KeyAlgoECDSA256}
+	case ssh.KeyAlgoECDSA384:
+		return []string{ssh.KeyAlgoECDSA384}
+	case ssh.KeyAlgoECDSA521:
+		return []string{ssh.KeyAlgoECDSA521}
 	}
 	return nil
 }

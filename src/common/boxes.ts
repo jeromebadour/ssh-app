@@ -191,3 +191,27 @@ export function firstConnectionBlock(template: string, publicKey: string, boxNam
   const label = boxName.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, NAME_MAX);
   return template.replace('{KEY}', `${publicKey} berth:${label}`);
 }
+
+// Which sign-in algorithms a box's own key may be asked for, worked out from the key itself: an authorized-keys
+// line begins with the kind of key it is. A key Berth makes is ed25519; a key brought in from a file (plan O1)
+// can be of another kind, so this is not a constant.
+//
+// ssh-rsa is left out on purpose: it is SHA-1. OpenSSH stopped offering it by default in 8.8 and the oldest
+// version this app supports is 8.9, so no box needs it. The key process holds this same rule, and it is the one
+// that counts; this is main refusing early, not main deciding.
+export function signsWith(publicKey: string): readonly string[] {
+  switch (publicKey.split(' ')[0]) {
+    case 'ssh-ed25519':
+      return ['ssh-ed25519'];
+    case 'ssh-rsa':
+      return ['rsa-sha2-512', 'rsa-sha2-256'];
+    case 'ecdsa-sha2-nistp256':
+      return ['ecdsa-sha2-nistp256'];
+    case 'ecdsa-sha2-nistp384':
+      return ['ecdsa-sha2-nistp384'];
+    case 'ecdsa-sha2-nistp521':
+      return ['ecdsa-sha2-nistp521'];
+    default:
+      return [];
+  }
+}

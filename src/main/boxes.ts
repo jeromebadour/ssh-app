@@ -45,7 +45,7 @@ interface Checking {
   cancel: (() => void) | null;
 }
 
-export type Result = { ok: true; id: string } | { ok: false; error: string; fields?: Record<string, string> };
+export type Result = { ok: true; id: string } | { ok: false; error: string; fields?: Record<string, string>; code?: string };
 
 const blank = (boxId: string): CheckView => ({ boxId, step: 'idle', phase: '', cause: '', detail: '', what: '', ours: [], theirs: [], shownType: '', shownFingerprint: '', pasted: [] });
 
@@ -97,7 +97,13 @@ export class Boxes {
   }
 
   // Add box: the fields are checked, the key process makes the box's key, and the box is saved, not yet pinned.
-  add(draft: BoxDraft): Promise<Result> {
+  // Adding a box. Its key is either one the key process makes for it, or one brought in from a file the person
+  // already has (plan O1), which is what lets a box be added without another program: his boxes already hold
+  // his public key, so bringing in the private half is a way in that needs nothing run on the box.
+  //
+  // `withKey` is the file's own bytes and its passphrase, which reach here from main and go straight to the key
+  // process. Nothing of a key file is ever told to a view.
+  add(draft: BoxDraft, withKey?: { file: Buffer; passphrase: Buffer }): Promise<Result> {
     return this.oneAtATime(async () => {
       if (!this.loaded || this.fault) return { ok: false, error: this.fault || 'locked' };
       const d = cleanDraft(draft);
@@ -106,9 +112,14 @@ export class Boxes {
       if (Object.keys(fields).length > 0) return { ok: false, error: 'fields', fields };
       if (this.list.length >= BOXES_MAX) return { ok: false, error: `${BOXES_MAX} boxes at most` };
       const id = `b${randomBytes(8).toString('hex')}`;
-      const made = await this.keys.request('newKey', { name: id, box: id, user: d.user });
+      const made = withKey
+        ? await this.keys.request('takeKey', { name: id, box: id, user: d.user, file: withKey.file.toString('base64'), passphrase: withKey.passphrase.toString('base64') })
+        : await this.keys.request('newKey', { name: id, box: id, user: d.user });
       const publicKey = made['publicKey'];
-      if (!made.ok || typeof publicKey !== 'string' || !KEY_LINE.test(publicKey)) return { ok: false, error: `the key could not be made: ${String(made.detail ?? made.error ?? 'no key came back')}` };
+      if (!made.ok || typeof publicKey !== 'string' || !KEY_LINE.test(publicKey)) {
+        const what = withKey ? 'the key file could not be used' : 'the key could not be made';
+        return { ok: false, error: `${what}: ${String(made.detail ?? made.error ?? 'no key came back')}`, code: String(made.error ?? '') };
+      }
       const box: Box = { id, name: d.name, colour: d.colour, host: d.host, port: portOf(d.port), user: d.user, folder: d.folder, places: placesOf(d), publicKey, pin: '', pinFingerprint: '', pinnedAt: '', created: this.stamp() };
       const saved = await this.save([...this.list, box]);
       if (!saved.ok) {

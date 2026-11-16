@@ -12,6 +12,8 @@
 //
 //	accept <authorized-keys line>   let this key in, as when Berth's key is added on a box
 //	seen                            {"tries":N,"users":[...],"sessions":[...]}: every sign-in try and session so far
+//	keyfile <path> [passphrase]     write a private key file where a person's own would be, in the format
+//	                                OpenSSH writes, and say its public half and fingerprint
 //	rekey                           become another box at the same address: a new identity, nothing else changed
 //	quiet on|off                    the shells stop (or start again) sending back what they are given
 //	print <hex>                     print these bytes in every open session, as a program on the box would
@@ -38,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"encoding/pem"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -87,6 +90,35 @@ func main() {
 			let = key
 			box.Accept(key)
 			say(map[string]any{"accepting": ssh.FingerprintSHA256(key)})
+		case "keyfile":
+			// Writes a private key file of the kind a person already has, so the lab can drive bringing one in
+			// (plan O1) against a real file in the format OpenSSH writes, with or without a passphrase.
+			where, pass, _ := strings.Cut(rest, " ")
+			_, priv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			var block *pem.Block
+			if pass == "" {
+				block, err = ssh.MarshalPrivateKey(priv, "")
+			} else {
+				block, err = ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(pass))
+			}
+			if err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			if err := os.WriteFile(where, pem.EncodeToMemory(block), 0o600); err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			signer, err := ssh.NewSignerFromKey(priv)
+			if err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			say(map[string]any{"wrote": where, "publicKey": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), "fingerprint": ssh.FingerprintSHA256(signer.PublicKey())})
 		case "seen":
 			tries, users := box.SignInTries()
 			say(map[string]any{"tries": tries, "users": users, "sessions": box.Sessions()})

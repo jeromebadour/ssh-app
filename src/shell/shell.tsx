@@ -24,7 +24,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -142,7 +142,20 @@ function Unlocked(props: { s: ShellState }) {
         ) : <span />}
         <span class="s-last" id="status-done">{s.done}</span>
       </footer>
-      {dialog.kind === 'add' && <AddBoxDialog taken={s.boxes.map((b) => b.name)} working={adding && pendingAdd === dialog.req} refused={refusal?.fields ?? {}} error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''} onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'addBox', req: dialog.req, draft }); }} onCancel={() => setDialog({ kind: 'none' })} />}
+      {dialog.kind === 'add' && (
+        <AddBoxDialog
+          taken={s.boxes.map((b) => b.name)}
+          working={adding && pendingAdd === dialog.req}
+          refused={refusal?.fields ?? {}}
+          error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''}
+          keyFile={s.keyFile}
+          onPickKeyFile={() => port.cmd({ op: 'pickKeyFile' })}
+          onDropKeyFile={() => port.cmd({ op: 'dropKeyFile' })}
+          onPassphrase={(bytes) => port.keyPassphrase(bytes)}
+          onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'addBox', req: dialog.req, draft }); }}
+          onCancel={() => { port.cmd({ op: 'dropKeyFile' }); setDialog({ kind: 'none' }); }}
+        />
+      )}
       {/* The same dialog, with the box in it: one way of drawing a box's fields, for adding and for editing. */}
       {dialog.kind === 'edit' && editing && (
         <AddBoxDialog

@@ -7,11 +7,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { availableParallelism } from 'node:os';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import os, { availableParallelism } from 'node:os';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { COPY_MAX, type ShellState } from '../common/ipc';
-import type { Boxes } from './boxes';
+import { fingerprintOf, type Boxes } from './boxes';
 import type { SignAnswer, SignRequest } from './engine';
 import type { Gate } from './gate';
 import type { KeyProc } from './keyproc';
@@ -49,6 +49,8 @@ interface Ctx {
   missing(): Record<string, number>;
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
+  chooseKeyFile(file: string): Promise<void>;
+  keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
   forcePace(share: number | null): void;
 }
@@ -606,6 +608,103 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('and no new session is opened after a refused key, by itself or on a count', t1.againAt === 0 && t1.engine.pid === pidAfterRefusal && t1.engine.link.cause === 'sign-in-failed' && !(await text('#bar', t1)).includes('A new session opens'), [t1.againAt, t1.engine.pid === pidAfterRefusal, await text('#bar', t1)]);
         ctx.closeTab(t1.id);
         await lab.tell(`accept ${ctx.boxes.list[0]!.publicKey}`);
+
+        // Bringing in a key the person already has (plan O1). This is what lets a box be added without any
+        // other program: his boxes already hold his public key, so the private half is the way in, and nothing
+        // has to be run on the box first.
+        {
+          // Real key files, written by the lab box in the format OpenSSH writes, which is what a person's own
+          // files are: one plain, one with a passphrase.
+          const dir = await mkdtemp(path.join(os.tmpdir(), 'berth-keyfile-'));
+          const plain = path.join(dir, 'id_ed25519');
+          const locked = path.join(dir, 'id_ed25519_locked');
+          const plainSaid = await lab.tell(`keyfile ${plain}`);
+          const lockedSaid = await lab.tell(`keyfile ${locked} the file passphrase`);
+          check('the lab wrote two key files of the kind a person already has', typeof plainSaid['publicKey'] === 'string' && typeof lockedSaid['publicKey'] === 'string', [plainSaid['error'], lockedSaid['error']]);
+
+          await clickOn('#boxes');
+          await until(() => has('#box-menu'), 2000);
+          await clickOn('#add-box-open');
+          await until(() => has('#add-box'), 3000);
+          check('Add box offers a key file, for a box that already holds one of his keys', await has('#key-file-pick'), '');
+
+          // A file with a passphrase: said as that, and nothing is taken until it is given.
+          await ctx.chooseKeyFile(locked);
+          check('a key file with a passphrase is said to have one, and nothing is taken yet', await until(async () => (await has('#key-passphrase')) && (await text('#key-file-needs')).includes('has a passphrase'), 4000), await text('#key-file-needs'));
+          await ctx.keyPassphrase('not the passphrase');
+          check('the wrong passphrase is said plainly, and still nothing is taken', await until(async () => (await text('#key-file-needs')).includes('does not open it'), 4000), await text('#key-file-needs'));
+          await ctx.keyPassphrase('the file passphrase');
+          const opened = await until(async () => has('#key-file-key'), 4000);
+          check('the right passphrase opens it, and the screen says which key it is', opened && (await text('#key-file-key')).includes('SHA256:'), await text('#key-file-key'));
+
+          // Add box while the file has not opened: refused, with the reason, and no box is made. Adding with a
+          // file that has not opened would be adding a box with no key at all.
+          {
+            await ctx.keyPassphrase('still not the passphrase');
+            await until(async () => (await text('#key-file-needs')).includes('does not open it'), 4000);
+            const before = ctx.boxes.list.length;
+            await clickOn('#box-name');
+            await typeKeys('not-added');
+            await clickOn('#box-host');
+            await typeKeys('127.0.0.1');
+            await clickOn('#box-user');
+            await typeKeys('demo');
+            await clickOn('#add-submit');
+            await sleep(600);
+            check('Add box with a key file that has not opened is refused, and no box is made', ctx.boxes.list.length === before && !ctx.boxes.list.some((b) => b.name === 'not-added') && (await has('#add-box')), [ctx.boxes.list.length, before, await text('#add-error')]);
+            for (const id of ['#box-name', '#box-host', '#box-user']) {
+              await clickOn(id);
+              await selectAll();
+              sh.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
+              sh.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
+              await sleep(60);
+            }
+          }
+
+          // Put it aside: the box would get a key Berth makes, as before.
+          await clickOn('#key-file-drop');
+          check('the key file can be put aside, and Berth makes one again', await until(async () => (await has('#key-file-pick')) && !(await has('#key-file-key')), 3000), '');
+
+          // The plain file, and a box added with it.
+          await ctx.chooseKeyFile(plain);
+          const shown = await until(async () => has('#key-file-key'), 4000);
+          const fileFingerprint = (await text('#key-file-key')).split(' ').find((w) => w.startsWith('SHA256:')) ?? '';
+          check('a key file with no passphrase opens at once and names its key', shown && fileFingerprint !== '', await text('#key-file-key'));
+          await shot('add-key-file', 'Add box, with a key file he already has');
+          await clickOn('#box-name');
+          await typeKeys('own-key-box');
+          await clickOn('#box-host');
+          await typeKeys('127.0.0.1');
+          await clickOn('#box-port');
+          await typeKeys(port);
+          await clickOn('#box-user');
+          await typeKeys('demo');
+          await clickOn('#add-submit');
+          const brought = await until(() => ctx.boxes.list.some((b) => b.name === 'own-key-box'), 20_000);
+          const box = ctx.boxes.list.find((b) => b.name === 'own-key-box');
+          const held = await ctx.keys.request('keys');
+          const its = Array.isArray(held['keys']) ? (held['keys'] as Record<string, unknown>[]).find((k) => k['box'] === box?.id) : undefined;
+          check('the box carries the key from his own file, not one Berth made', brought && box !== undefined && its !== undefined && box!.publicKey === its!['publicKey'] && fingerprintOf(box!.publicKey) === fileFingerprint, [box?.publicKey.slice(0, 40), fileFingerprint, its?.['origin']]);
+          check('and the list says that key was brought in, not made here', its?.['origin'] === 'imported', its?.['origin']);
+          check('the window says the box was added with his own key', (await text('#status-done')).includes('with your own key'), await text('#status-done'));
+          // Nothing of the file is left in main once the box is made.
+          check('the key file is let go once the box has it', ctx.shellState().keyFile === null, ctx.shellState().keyFile);
+
+          // And the whole point of it: the box already knows this key, so Berth signs in with it and no block
+          // was ever run on the box. The lab box is told to let that key in, as a real box already would.
+          await lab.tell(`accept ${String(plainSaid['publicKey'])}`);
+          await clickOn('#check-paste');
+          await typeKeys(printed.trim());
+          const matched2 = await until(async () => (await step()) === 'match', 6000);
+          check('a box added with his own key is checked like any other', matched2, await step());
+          await clickOn('#check-trust');
+          const inWithOwn = await until(() => [...ctx.tabs.values()].some((t) => t.box?.id === box?.id && t.engine.link.phase === 'up'), 25_000);
+          check('and Berth signs in to it with that key, having run nothing on the box', inWithOwn, [...ctx.tabs.values()].map((t) => t.engine.link.phase));
+          for (const t of [...ctx.tabs.values()].filter((t) => t.box?.id === box?.id)) ctx.closeTab(t.id);
+          await lab.tell(`accept ${ctx.boxes.list.find((b) => b.name === 'lab-box')?.publicKey ?? ''}`);
+          for (const b of ctx.boxes.list.filter((x) => x.name === 'own-key-box')) await ctx.boxes.remove(b.id);
+          await rm(dir, { recursive: true, force: true });
+        }
 
         // The Boxes menu: the box, its place beside it; a place opens a tab there.
         await clickOn('#boxes');
@@ -1223,7 +1322,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

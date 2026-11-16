@@ -6,7 +6,7 @@
 // again before anything is saved; what the box showed is in the check only once main has compared a paste.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { BOX_COLOURS, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, type BoxDraft, type Check, type Place } from '../common/boxes';
-import type { BoxView, CheckShown } from '../common/ipc';
+import type { BoxView, CheckShown, KeyFileChosen } from '../common/ipc';
 import { Glyph } from './glyphs';
 
 // A field, the way every field in Berth is drawn: a label with its glyph, the input as wide as the value it will
@@ -60,6 +60,9 @@ function SectionHead(props: { glyph: string; title: string; aside?: string }) {
   return <div class="sect-head"><Glyph name={props.glyph} />{props.title}{props.aside && <span class="sect-aside">{props.aside}</span>}</div>;
 }
 
+// What a kind of key is called where a person reads it.
+const kindOf = (t: string) => (t === 'ssh-ed25519' ? 'ED25519' : t === 'ssh-rsa' ? 'RSA' : t.startsWith('ecdsa-') ? t.replace('ecdsa-sha2-', 'ECDSA ') : t);
+
 const EMPTY: BoxDraft = { name: '', colour: 1, host: '', port: '', user: '', folder: '', places: [] };
 
 // The fields in the order they stand in the dialog, so "the first one to fix" is the first a person's eye
@@ -89,6 +92,12 @@ export interface AddBoxProps {
   editing?: { draft: BoxDraft; pinType: string; pinFingerprint: string; pinnedAt: string; onForget(): void };
   onAdd(draft: BoxDraft): void;
   onCancel(): void;
+  // A key the person already has, brought in from a file instead of one Berth makes (plan O1). The file's own
+  // bytes never reach here: this is what main says about it.
+  keyFile?: KeyFileChosen | null;
+  onPickKeyFile?(): void;
+  onDropKeyFile?(): void;
+  onPassphrase?(bytes: Uint8Array): void;
 }
 
 export function AddBoxDialog(props: AddBoxProps) {
@@ -96,6 +105,14 @@ export function AddBoxDialog(props: AddBoxProps) {
   const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? editing?.draft ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
   const [tried, setTried] = useState(props.demo?.tried ?? false);
   const [hueOpen, setHueOpen] = useState(false);
+  // The key file's passphrase. It is typed here, sent as raw bytes on its own channel and dropped at once: it
+  // is never part of the draft, and never goes anywhere a draft goes.
+  const [passphrase, setPassphrase] = useState('');
+  const sendPassphrase = () => {
+    if (passphrase === '') return;
+    props.onPassphrase?.(new TextEncoder().encode(passphrase));
+    setPassphrase('');
+  };
   const set = (change: Partial<BoxDraft>) => setD({ ...d, ...change });
   // There is always one empty place row at the end, showing an example.
   const rows: Place[] = [...d.places.filter((p) => p.name !== '' || p.folder !== ''), { name: '', folder: '' }];
@@ -187,13 +204,6 @@ export function AddBoxDialog(props: AddBoxProps) {
               </div>
             </div>
 
-            <div class="sect key-sect first-gap">
-              <Glyph name="key" class="key-glyph" />
-              <div class="key-main">
-                <div class="key-line">{editing ? 'This box keeps the key Berth made for it' : 'Berth makes a new key for this box'}</div>
-                <div class="key-sub">ed25519, kept only inside your locked list</div>
-              </div>
-            </div>
             {editing && (
               <div class="sect">
                 <SectionHead glyph="identity" title="Its identity" />
@@ -221,6 +231,57 @@ export function AddBoxDialog(props: AddBoxProps) {
             )}
           </div>
         </div>
+            {/* The box's key: one Berth makes, or one the person already has, brought in from a file. The second
+                is what lets a box be added without another program at all (plan O1): his boxes already hold his
+                public key, so the private half is a way in that needs nothing run on the box. */}
+            <div class="sect key-sect first-gap">
+              <Glyph name={props.keyFile ? 'fileKey' : 'key'} class="key-glyph" />
+              <div class="key-main">
+                {editing ? (
+                  <>
+                    <div class="key-line">This box keeps the key Berth made for it</div>
+                    <div class="key-sub">kept only inside your locked list</div>
+                  </>
+                ) : props.keyFile ? (
+                  <>
+                    <div class="key-line" id="key-file-name">{props.keyFile.name}</div>
+                    {props.keyFile.publicKey !== '' ? (
+                      <div class="key-sub mono" id="key-file-key">{kindOf(props.keyFile.keyType)} {props.keyFile.fingerprint}</div>
+                    ) : props.keyFile.fault !== '' ? (
+                      <span class="check check-fix" id="key-file-fault"><Glyph name="fix" />{props.keyFile.fault}</span>
+                    ) : props.keyFile.needsPassphrase ? (
+                      <span class="check check-hint" id="key-file-needs">{props.keyFile.wrongPassphrase ? 'That passphrase does not open it' : 'This key file has a passphrase'}</span>
+                    ) : (
+                      <span class="check check-hint" id="key-file-reading"><span class="wait-ring small" />Reading it</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div class="key-line">Berth makes a new key for this box</div>
+                    <div class="key-sub">ed25519, kept only inside your locked list</div>
+                  </>
+                )}
+              </div>
+              {!editing && (
+                props.keyFile ? (
+                  <button type="button" class="btn quiet" id="key-file-drop" onClick={props.onDropKeyFile}><Glyph name="close" />Let Berth make one</button>
+                ) : (
+                  <button type="button" class="btn quiet" id="key-file-pick" onClick={props.onPickKeyFile}><Glyph name="fileKey" />Use a key file</button>
+                )
+              )}
+            </div>
+            {!editing && props.keyFile?.needsPassphrase && (
+              <div class="sect">
+                <label class="field">
+                  <span class="field-label"><Glyph name="lock" />Its passphrase</span>
+                  <span class={`input sized ${props.keyFile.wrongPassphrase ? 'wrong' : ''}`} style={{ '--w': '28ch' }}>
+                    <input id="key-passphrase" type="password" autocomplete="off" spellcheck={false} value={passphrase} onInput={(e) => setPassphrase((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && sendPassphrase()} />
+                  </span>
+                  <span class="check check-hint">The key file's own passphrase, not your Berth password. It opens the file and is not kept.</span>
+                </label>
+                <button type="button" class="btn quiet" id="key-passphrase-go" onClick={sendPassphrase}><Glyph name="ok" />Open the key file</button>
+              </div>
+            )}
         <div class="dlg-actions">
           {props.error !== '' && <span class="to-fix" id="add-error"><Glyph name="fix" />{props.error}</span>}
           {props.error === '' && toFix > 0 && <span class="to-fix" id="add-to-fix"><Glyph name="fix" />{firstWord(faults)}{toFix > 1 ? `, ${toFix} fields to fix` : ''}</span>}
@@ -350,7 +411,6 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
     }
   };
   const mismatch = c.step === 'mismatch';
-  const kindOf = (t: string) => (t === 'ssh-ed25519' ? 'ED25519' : t === 'ssh-rsa' ? 'RSA' : t);
   return (
     <div class="scrim">
       <div class={`dialog wide ${mismatch ? 'dlg-problem' : 'dlg-checked'}`} id="check" data-step={c.step} role="dialog" aria-modal="true" aria-labelledby="check-title">
