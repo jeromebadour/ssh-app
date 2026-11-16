@@ -35,7 +35,11 @@ h1 .mark.now { animation: none; }
 
 /* The one folded line of what the box said at sign-in, and the bars. They lie over the terminal's first rows,
    so the terminal's size, which the box is told, never changes because a link went quiet. */
-.signin, .bar { position: absolute; left: 18px; right: 18px; top: 16px; z-index: 2; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px 0 12px; border-radius: 4px; font: 400 12.5px/1.35 'Plex Sans Condensed', sans-serif; }
+/* The strip the folded sign-in line sits in. It is there from the first frame, empty or not: the box is told
+   the terminal's size once, before it opens the terminal, and a line arriving later must not change it. */
+#signin-at { flex: none; height: 34px; margin: 12px 18px 0; }
+.signin, .bar { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px 0 12px; border-radius: 4px; font: 400 12.5px/1.35 'Plex Sans Condensed', sans-serif; }
+.bar { position: absolute; left: 18px; right: 18px; top: 16px; z-index: 2; width: auto; }
 .signin { width: auto; text-align: left; border: 0; background: #1b242c; box-shadow: inset 0 0 0 1px #2b3642; color: #aab5bf; cursor: pointer; }
 .signin:hover { background: #1f2932; color: #c3ccd3; }
 .signin .said { flex: none; }

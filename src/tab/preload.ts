@@ -37,6 +37,9 @@ const port: TabPort = {
   resize(cols, rows) {
     ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
   },
+  link(url) {
+    ipcRenderer.send(CH.tabLink, String(url));
+  },
   copy(text) {
     ipcRenderer.send(CH.tabCopy, String(text));
   },

@@ -1,12 +1,12 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, type Box, type BoxDraft } from '../common/boxes';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { Boxes } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
@@ -247,7 +247,55 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink };
+}
+
+// ---- An address a box printed (plan B2.7) ----
+// A box can print whatever it likes, so nothing it prints opens by itself: the terminal's own opening is off,
+// a link hidden behind other words is refused before the terminal sees it, and a plain click does nothing. A
+// Ctrl+click asks here, and the whole address is shown on the window's own surface before anything opens.
+let waitingLink: LinkAsked | null = null;
+let linksRefused = 0;
+let lastOpened = ''; // the last address handed to Windows, for the lab
+let opensAsked = 0;
+
+function linkAsked(tab: Tab, url: string): void {
+  if (tab.id !== active || overlay || !win?.isFocused() || !tab.box || waitingLink || url.length > 2048) {
+    linksRefused++;
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    linksRefused++;
+    return;
+  }
+  // Only the two schemes a browser takes. Anything else a box prints is not an address to open.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    linksRefused++;
+    return;
+  }
+  waitingLink = { tab: tab.id, box: tab.box.name, place: tab.place, url: parsed.href, host: parsed.host, scheme: parsed.protocol.replace(':', '') };
+  overlay = true;
+  stack();
+  tellShell();
+}
+
+function closeLink(open: boolean): void {
+  const asked = waitingLink;
+  waitingLink = null;
+  overlay = false;
+  stack();
+  if (asked && open) {
+    opensAsked++;
+    lastOpened = asked.url;
+    done = `Opened ${asked.host} in the browser`;
+    // The app opens nothing itself: the address is handed to Windows, which opens it where the person's
+    // own browser is. Nothing of Berth goes with it.
+    void osShell.openExternal(asked.url).catch(() => undefined);
+  } else if (asked) done = 'The address was not opened';
+  tellShell();
 }
 
 // ---- Paste (plan B2.7, B3) ----
@@ -512,6 +560,7 @@ function closeTab(id: number): void {
   frontTold.delete(id);
   protectedPaste.delete(id);
   if (waitingPaste?.shown.tab === id) closePaste(false);
+  if (waitingLink?.tab === id) closeLink(false);
   tab.stopReopen();
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
   layout();
@@ -548,6 +597,12 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
 // that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
 // A new session, asked for by the tab (the picture's Reconnect, Now and Cancel; R while a bar is showing).
 // A tab's box asked to be told where a paste begins and ends (or stopped asking): its own view says so.
+ipcMain.on(CH.tabLink, (e, url: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof url !== 'string' || url === '') return drop('tab:link', e);
+  linkAsked(tab, url);
+});
+
 ipcMain.on(CH.tabPasteMode, (e, on: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof on !== 'boolean') return drop('tab:paste-mode', e);
@@ -640,7 +695,9 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     frontTold.delete(c.id); // told again even if it was in front already: its frame ends the switch
     layout();
     tellShell();
-  } else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
+  } else if (c?.op === 'openLink' && waitingLink) closeLink(true);
+  else if (c?.op === 'dropLink' && waitingLink) closeLink(false);
+  else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
   else if (c?.op === 'dropPaste' && waitingPaste) closePaste(false);
   else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
@@ -766,7 +823,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), kind, mode: SELFTEST, meter, pace, forcePace: (share: number | null) => {
         pace.force(share);
         lookPace();
       }, win, dist: DIST, harden, newView: (partition: string) => {

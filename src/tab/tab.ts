@@ -23,6 +23,7 @@ const port = window.tabPort;
 const state = document.getElementById('state') as HTMLDivElement;
 const host = document.getElementById('term') as HTMLDivElement;
 const chromeAt = document.getElementById('chrome') as HTMLDivElement;
+const signInAt = document.getElementById('signin-at') as HTMLDivElement;
 
 const term = openTerminal(host, {
   typed: (bytes) => {
@@ -30,6 +31,7 @@ const term = openTerminal(host, {
     for (let at = 0; at < bytes.byteLength; at += 32 * 1024) port.send(bytes.subarray(at, at + 32 * 1024));
   },
   selected: (text) => port.copy(text),
+  link: (url) => port.link(url),
 });
 window.berthTerm = { ...term, policyFaults: () => policyFaults.slice(0, 20), pace: () => ({ front, share, rested, taken: total, waiting: waiting.length }) };
 
@@ -117,7 +119,7 @@ const chrome: Chrome = {
     draw();
   },
 };
-const draw = (): void => drawChrome(chromeAt, chrome);
+const draw = (): void => drawChrome(chromeAt, signInAt, chrome);
 
 let last = '';
 port.onState((info) => {

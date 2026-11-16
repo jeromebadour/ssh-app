@@ -542,3 +542,9 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 #paste .paste-lines li code { font: 400 12.5px/1.6 var(--mono); white-space: pre; }
 #paste .paste-lines li[data-odd] { background: color-mix(in srgb, var(--problem) 12%, transparent); }
 #paste .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
+
+/* An address a box printed, shown whole before anything opens (ui/linkdialog.tsx). */
+#link .said { margin: 0 0 10px; }
+#link .link-url { margin: 0 0 14px; padding: 10px 12px; border-radius: 4px; background: var(--term-bg); }
+#link .link-url code { font: 400 13px/1.5 var(--mono); color: var(--text); word-break: break-all; }
+#link .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }

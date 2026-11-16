@@ -134,6 +134,14 @@ function Gone({ said, rest, again, onReconnect, onCancel }: { said: string; rest
   );
 }
 
+// The one folded line of what the box said at sign-in. It takes a row of its own above the terminal, as the
+// approved picture shows, so it never lies over what a box is printing. It appears while the link is signing
+// in, before the box is asked for a terminal, so the box is still told one size and only one.
+function SignInRow(c: Chrome) {
+  if (!c.info?.box || !c.signIn) return null;
+  return <SignIn box={c.info.box.name} said={c.signIn} open={c.signInOpen} onOpen={c.onOpenSignIn} />;
+}
+
 function View(c: Chrome) {
   const [, redraw] = useState(0);
   useEffect(() => {
@@ -147,15 +155,15 @@ function View(c: Chrome) {
   const b = bar(c.info, Date.now(), c.endedAt, c.againIn);
   return (
     <>
-      {c.signIn && b.kind === 'none' ? <SignIn box={c.info.box?.name ?? 'the box'} said={c.signIn} open={c.signInOpen} onOpen={c.onOpenSignIn} /> : null}
       {b.kind === 'quiet' ? <Quiet said={b.said} rest={b.rest} aside={b.aside} onReconnect={c.onReconnect} /> : null}
       {b.kind === 'gone' ? <Gone said={b.said} rest={b.rest} again={c.againIn > 0} onReconnect={c.onReconnect} onCancel={c.onCancel} /> : null}
     </>
   );
 }
 
-export function drawChrome(where: HTMLElement, c: Chrome): void {
-  render(<View {...c} />, where);
+export function drawChrome(over: HTMLElement, above: HTMLElement, c: Chrome): void {
+  render(<View {...c} />, over);
+  render(<SignInRow {...c} />, above);
 }
 
 export { folded };
