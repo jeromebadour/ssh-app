@@ -74,7 +74,10 @@ func (r *real) state(v map[string]any) {
 	r.o.send(frame.TypeState, body)
 }
 
-func (r *real) ended(e *link.Error) {
+func (r *real) ended(e *link.Error) { r.state(endedState(e)) }
+
+// endedState is how an end is said to main: the one cause, the phase it happened in, and what belongs to it.
+func endedState(e *link.Error) map[string]any {
 	v := map[string]any{"state": "ended", "cause": string(e.Cause), "phase": string(e.Phase)}
 	if e.What != "" {
 		v["what"], v["ours"], v["box"] = e.What, e.Ours, e.Box
@@ -86,7 +89,7 @@ func (r *real) ended(e *link.Error) {
 	if e.Err != nil {
 		v["detail"] = e.Err.Error()
 	}
-	r.state(v)
+	return v
 }
 
 // remoteSigner asks the key process, through main, for each signature. It names the algorithm, so an RSA key

@@ -14,6 +14,7 @@ import (
 // Config is how the server behaves. The zero value of each field is the honest behaviour.
 type Config struct {
 	HostSigner   ssh.Signer    // the identity it shows; required
+	MoreHosts    []ssh.Signer  // further identities of other kinds, as a real box has (one per kind)
 	Accept       ssh.PublicKey // the one key it lets in; nil lets nobody in
 	KeyExchanges []string      // what it offers; nil is the library's own list
 	Ciphers      []string
@@ -36,6 +37,15 @@ type Box struct {
 	mu     sync.Mutex
 	conns  []net.Conn
 	seen   []*Session
+	tries  int // sign-in attempts of any kind, "none" included
+	users  []string
+}
+
+// SignInTries is how often anyone tried to sign in, in any way, and the user names they gave.
+func (b *Box) SignInTries() (int, []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tries, append([]string(nil), b.users...)
 }
 
 // Session is everything one terminal session asked of the box, in order.
@@ -191,6 +201,13 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 	}
 	sc := &ssh.ServerConfig{
 		Config: ssh.Config{KeyExchanges: cfg.KeyExchanges, Ciphers: cfg.Ciphers},
+		// Every sign-in attempt is written down, the first empty "none" attempt included.
+		AuthLogCallback: func(m ssh.ConnMetadata, _ string, _ error) {
+			b.mu.Lock()
+			b.tries++
+			b.users = append(b.users, m.User())
+			b.mu.Unlock()
+		},
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if cfg.StallSignIn {
 				<-b.closed
@@ -205,6 +222,9 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 		sc.BannerCallback = func(ssh.ConnMetadata) string { return cfg.Banner }
 	}
 	sc.AddHostKey(cfg.HostSigner)
+	for _, more := range cfg.MoreHosts {
+		sc.AddHostKey(more)
+	}
 	conn, chans, reqs, err := ssh.NewServerConn(c, sc)
 	if err != nil {
 		return

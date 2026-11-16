@@ -4,6 +4,9 @@
 // as frames. Aimed as a stub, it echoes typed bytes back and opens nothing: that is what the app's own
 // self-test runs, so the processes, the routing and the watchdogs are proven with no box at all.
 //
+// Aimed with the role "identify" (identify.go), it asks one box who it is, for the first-connection check, and
+// nothing else: it holds no key, signs in nowhere and ends when it has the answer.
+//
 // Rules it keeps either way:
 //   - It is aimed once: the first frame must be Aim, and there is no message to change it.
 //   - It ends when its parent is gone (standard input closes), and never because the parent is silent.
@@ -32,7 +35,7 @@ const (
 
 type aim struct {
 	V     int      `json:"v"`
-	Role  string   `json:"role"` // "keys" for the key process; otherwise a tab's engine
+	Role  string   `json:"role"` // "keys" for the key process, "identify" for a first-connection check; otherwise a tab's engine
 	File  string   `json:"file"` // the key process: where the list is
 	Cost  *costAim `json:"cost"` // the key process: the cost a new list is sealed with, when it was tuned
 	Tab   string   `json:"tab"`
@@ -86,7 +89,7 @@ func main() {
 		if f.Type != frame.TypeAim {
 			o.fatal(exitNoAim, "the first frame was not Aim")
 		}
-		if err := json.Unmarshal(f.Body, &target); err != nil || target.V != 1 || (target.Tab == "" && target.Role != "keys") {
+		if err := json.Unmarshal(f.Body, &target); err != nil || target.V != 1 || (target.Tab == "" && target.Role != "keys" && target.Role != "identify") || (target.Role != "" && target.Role != "keys" && target.Role != "identify") {
 			o.fatal(exitNoAim, "Aim could not be read")
 		}
 	case err := <-firstErr:
@@ -100,6 +103,9 @@ func main() {
 
 	if target.Role == "keys" {
 		os.Exit(runKeys(o, target))
+	}
+	if target.Role == "identify" {
+		os.Exit(runIdentify(o, target.Box.Addr))
 	}
 
 	hello, _ := json.Marshal(map[string]any{"v": 1, "role": "engine", "stub": target.Stub, "tab": target.Tab})

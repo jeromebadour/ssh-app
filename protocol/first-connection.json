@@ -1,0 +1,4 @@
+{
+  "about": "The one block Berth asks to be run on a box before the first sign-in (plan B2.3), exactly as approved in the picture. {KEY} is the public half of the box's key, one authorized-keys line. The app builds the block from this text; the lab runs this same text on real OpenSSH servers.",
+  "block": "umask 077; mkdir -p ~/.ssh && echo '{KEY}' >> ~/.ssh/authorized_keys && for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf \"$f\"; done"
+}

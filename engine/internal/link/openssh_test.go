@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -178,6 +179,65 @@ func TestOpenSSH(t *testing.T) {
 				if !ok || e.Cause != WeakOffer || e.What != "cipher" {
 					t.Fatalf("%v", err)
 				}
+			})
+
+			// The first-connection check (plan B2.3) against the real thing: asking gives the identity the
+			// server really has; the fingerprint we compute is, to the letter, what the box's own ssh-keygen
+			// prints; and the one block the app asks to be run does what it says on a real box.
+			t.Run("the first-connection check: who the box is, and what the box itself prints", func(t *testing.T) {
+				key, e := Identify(context.Background(), box.honest, Options{})
+				if e != nil || string(key.Marshal()) != string(lab.hostEd.Marshal()) {
+					t.Fatalf("asked who it is: %v %v", key, e)
+				}
+				key, e = Identify(context.Background(), box.rsaOnly, Options{})
+				if e != nil || string(key.Marshal()) != string(lab.hostRSA.Marshal()) {
+					t.Fatalf("a box with an RSA identity only: %v %v", key, e)
+				}
+				if _, e = Identify(context.Background(), box.weakCipher, Options{}); e == nil || e.Cause != WeakOffer || e.What != "cipher" {
+					t.Fatalf("a box with only a cipher we refuse: %v", e)
+				}
+
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				printed := strings.TrimSpace(run(t, l, "ssh-keygen -lf /lab/host_ed.pub", 10*time.Second))
+				if want := "256 " + ssh.FingerprintSHA256(lab.hostEd) + " lab-host (ED25519)"; printed != want {
+					t.Fatalf("the box prints %q; we would compare with %q", printed, want)
+				}
+				printed = strings.TrimSpace(run(t, l, "ssh-keygen -lf /lab/host_rsa.pub", 10*time.Second))
+				if want := "3072 " + ssh.FingerprintSHA256(lab.hostRSA) + " lab-host (RSA)"; printed != want {
+					t.Fatalf("the box prints %q; we would compare with %q", printed, want)
+				}
+
+				// The block, as the app gives it, with a key made for this run.
+				raw, err := os.ReadFile(filepath.Join("..", "..", "..", "protocol", "first-connection.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc struct{ Block string }
+				if err := json.Unmarshal(raw, &doc); err != nil || !strings.Contains(doc.Block, "{KEY}") {
+					t.Fatalf("the block's text could not be read: %v", err)
+				}
+				fresh := edKey(t)
+				line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(fresh.PublicKey()))) + " berth:" + box.name
+				run(t, l, "rm -rf ~/.ssh", 10*time.Second)
+				out := run(t, l, strings.ReplaceAll(doc.Block, "{KEY}", line), 15*time.Second)
+				shown := 0
+				for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+					f := strings.Fields(ln)
+					if len(f) >= 4 && strings.HasPrefix(f[1], "SHA256:") && len(f[1]) == 50 && strings.HasPrefix(f[len(f)-1], "(") {
+						shown++
+					}
+				}
+				if shown == 0 {
+					t.Fatalf("the block printed no identity line: %q", out)
+				}
+				if got := run(t, l, "cat ~/.ssh/authorized_keys; stat -c '%a' ~/.ssh ~/.ssh/authorized_keys", 10*time.Second); got != line+"\n700\n600\n" {
+					t.Fatalf("after the block, the key file and its rights are: %q", got)
+				}
+				t.Logf("the block printed %d identity lines", shown)
 			})
 
 			// A place opens in its folder, as the user's own login shell, with a real terminal of the size we

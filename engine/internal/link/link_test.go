@@ -164,6 +164,14 @@ func TestWeakOffersAreRefused(t *testing.T) {
 			if e.What != c.what || len(e.Ours) == 0 || len(e.Box) == 0 {
 				t.Fatalf("%+v", e)
 			}
+			// Each list is the right side's: ours holds what we offer, the box's holds what it was set to.
+			ours, boxes := strings.Join(e.Ours, ","), strings.Join(e.Box, ",")
+			if c.what == "cipher" && (!strings.Contains(ours, ssh.CipherAES256GCM) || strings.Contains(boxes, "gcm")) {
+				t.Fatalf("the lists are the wrong way round: ours %q, the box's %q", ours, boxes)
+			}
+			if c.what == "key exchange" && (!strings.Contains(ours, ssh.KeyExchangeCurve25519) || !strings.Contains(boxes, ssh.KeyExchangeDH14SHA256)) {
+				t.Fatalf("the lists are the wrong way round: ours %q, the box's %q", ours, boxes)
+			}
 			if w.user.n.Load() != 0 {
 				t.Fatal("our key was used at a box we refused")
 			}
@@ -451,12 +459,15 @@ func TestBadTargetsAreRefusedBeforeAnyConnection(t *testing.T) {
 
 // What the client offers, read off the wire: its first packet is sent in the clear and lists everything it is
 // willing to use. Nothing may be in it but what the plan allows (B2.2), whatever the library's defaults are.
-func TestWhatIsOfferedOnTheWire(t *testing.T) {
+// recordOffer listens as a box that only writes down the client's first offer (the ten name lists of its
+// key-exchange message) and then hangs up.
+func recordOffer(t *testing.T) (addr string, offered <-chan [][]string) {
+	t.Helper()
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { _ = ln.Close() })
 	lists := make(chan [][]string, 1)
 	go func() {
 		c, err := ln.Accept()
@@ -496,8 +507,13 @@ func TestWhatIsOfferedOnTheWire(t *testing.T) {
 		lists <- out
 	}()
 
+	return ln.Addr().String(), lists
+}
+
+func TestWhatIsOfferedOnTheWire(t *testing.T) {
+	addr, lists := recordOffer(t)
 	w := setup(t, nil)
-	w.target.Addr = ln.Addr().String()
+	w.target.Addr = addr
 	_, _ = Dial(context.Background(), w.target, w.user, quick)
 	var got [][]string
 	select {
