@@ -8,6 +8,8 @@ export const CH = {
   shellCmd: 'shell:cmd', // shell view to main: new, select or close a tab
   shellState: 'shell:state', // main to shell view: the tabs and their states
   tabShown: 'tab:shown', // main to tab view: you were just brought to the front
+  tabBanner: 'tab:banner', // main to tab view: the box's sign-in text, for the terminal only
+  tabTaken: 'tab:taken', // tab view to main: output bytes taken in all (a number)
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -45,10 +47,44 @@ export const TABS_MAX = 12;
 
 export type EngineState = 'starting' | 'ready' | 'not-answering' | 'gone';
 
+// Where a tab's link to its box stands. Every word in it comes from a fixed list or is a number, except
+// detail, ours and theirs: those may hold text a box sent, and are shown only escaped and marked as the box's.
+export type LinkPhase = 'none' | 'connecting' | 'key-exchange' | 'signing-in' | 'up' | 'ended';
+export const LINK_CAUSES = ['refused', 'unreachable', 'timed-out', 'weak-offer', 'identity-changed', 'sign-in-failed', 'no-signature', 'reset', 'closed-by-box', 'silent-too-long', 'cancelled', 'protocol', 'no-shell', 'shell-exited'] as const;
+export interface LinkInfo {
+  phase: LinkPhase;
+  cause: string; // ended: one of LINK_CAUSES
+  endedIn: string; // ended: the phase it happened in
+  detail: string;
+  what: string; // a weak offer: which list
+  ours: string[];
+  theirs: string[];
+  shownFingerprint: string; // identity-changed: what the box showed in place of the pinned identity
+  keyExchange: string; // up: what was agreed
+  cipher: string;
+  postQuantum: boolean;
+  silentSinceMs: number; // up: 0, or when the silence began (the link is kept)
+  rttMs: number; // up: the last round trip, -1 before the first
+  waitingOnWindow: boolean; // the box is made to wait for this window
+  exitStatus: number; // the shell's exit status, -1 while unknown
+  droppedBytes: number; // typed bytes the engine could not keep for the box (it was silent too long): never hidden
+}
+export const NO_LINK: LinkInfo = { phase: 'none', cause: '', endedIn: '', detail: '', what: '', ours: [], theirs: [], shownFingerprint: '', keyExchange: '', cipher: '', postQuantum: false, silentSinceMs: 0, rttMs: -1, waitingOnWindow: false, exitStatus: -1, droppedBytes: 0 };
+
+// Which box a tab is on, for its label. Null for the skeleton's tab with no box (the self-test's).
+export interface TabBox {
+  id: string;
+  name: string;
+  colour: number;
+  place: string;
+}
+
 export interface TabInfo {
   id: number;
   state: EngineState;
   cause: string; // why it is gone, in plain words; empty otherwise
+  box: TabBox | null;
+  link: LinkInfo;
 }
 
 export interface ShellState {
@@ -84,6 +120,8 @@ export interface TabPort {
   onOutput(cb: (bytes: Uint8Array) => void): void;
   onState(cb: (info: TabInfo) => void): void;
   onShown(cb: () => void): void;
+  onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
+  taken(total: number): void; // how many output bytes this view has taken in all: the box sends ahead of this by a fixed amount at most
   meter(n: ViewNumbers): void;
   frame(): void;
 }

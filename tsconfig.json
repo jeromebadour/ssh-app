@@ -14,6 +14,7 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "noEmit": true
   },
   "include": ["src", "tests"]

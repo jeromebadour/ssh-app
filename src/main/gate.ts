@@ -15,6 +15,8 @@ export class Gate {
     private readonly keys: KeyProc,
     private readonly tell: () => void,
     defaultBackupDir: string,
+    // Told once the list is open, with what the key process opened: the boxes' part, and what is known of the keys.
+    private readonly opened: (publicPart: unknown, keyInfos: unknown) => void = () => undefined,
   ) {
     this.state.backupDir = defaultBackupDir;
   }
@@ -70,6 +72,7 @@ export class Gate {
     const made = await this.keys.password(PW.create, password);
     wipe(password);
     if (!made.ok) return this.failed(made, 'create');
+    this.opened(made['public'], made['keys']);
     const folder = await mkdir(this.state.backupDir, { recursive: true }).then(() => '', (err: Error) => err.message);
     const set = folder === '' ? await this.keys.request('setBackupDir', { dir: this.state.backupDir }) : { ok: false, detail: folder };
     this.backup = set.ok ? String((set as KeyReply)['backup'] ?? '') : 'failed';
@@ -82,6 +85,7 @@ export class Gate {
     const opened = await this.keys.password(PW.unlock, password);
     wipe(password);
     if (!opened.ok) return this.failed(opened, 'locked');
+    this.opened(opened['public'], opened['keys']);
     this.set({ phase: 'unlocked', backupDir: String(opened['backupDir'] ?? '') });
   }
 

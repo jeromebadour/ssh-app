@@ -3,11 +3,15 @@
 // and exits with 0 only if every probe held. The lab (Playwright, real SSH servers, the fault proxy)
 // grows out of this; these probes stay as its first cases.
 import { app, type BaseWindow, type Session, type WebContentsView } from 'electron';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ShellState } from '../common/ipc';
+import type { Boxes } from './boxes';
+import type { SignAnswer, SignRequest } from './engine';
 import type { Gate } from './gate';
 import type { KeyProc } from './keyproc';
 import type { Tab } from './main';
@@ -18,6 +22,10 @@ import { takePicture } from './picture';
 interface Ctx {
   gate: Gate;
   keys: KeyProc;
+  boxes: Boxes;
+  signsRefused(): number;
+  signsPassedOn(): number;
+  signAs(boxId: string, req: SignRequest): Promise<SignAnswer>;
   listFile: string;
   backups: string;
   shell: WebContentsView;
@@ -29,7 +37,7 @@ interface Ctx {
   dist: string;
   harden(ses: Session): void;
   newView(partition: string): WebContentsView;
-  openTab(): Tab | null;
+  openTab(boxId?: string, place?: string): Tab | null;
   closeTab(id: number): void;
   tabs: Map<number, Tab>;
   shellState(): ShellState;
@@ -43,6 +51,61 @@ interface Result {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// The lab's stand-in for a box (engine/internal/lab/cmd/labbox): a real SSH server on this machine, told what to
+// do by lines and answering each with one line of JSON. Only a lab or development run can start it.
+class LabBox {
+  private readonly lines: string[] = [];
+  private buf = '';
+  private constructor(private readonly child: ChildProcessWithoutNullStreams) {
+    child.stdout.on('data', (chunk: Buffer) => {
+      this.buf += chunk.toString('utf8');
+      for (let at = this.buf.indexOf('\n'); at >= 0; at = this.buf.indexOf('\n')) {
+        this.lines.push(this.buf.slice(0, at));
+        this.buf = this.buf.slice(at + 1);
+      }
+    });
+    child.stderr.on('data', () => undefined);
+    child.on('error', () => undefined);
+  }
+  static async start(bin: string): Promise<{ box: LabBox; first: Record<string, unknown> }> {
+    const box = new LabBox(spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'], env: {}, windowsHide: true }));
+    return { box, first: await box.next() };
+  }
+  private async next(): Promise<Record<string, unknown>> {
+    await until(() => this.lines.length > 0, 10_000);
+    const line = this.lines.shift();
+    return line ? (JSON.parse(line) as Record<string, unknown>) : { error: 'the lab box said nothing' };
+  }
+  tell(line: string): Promise<Record<string, unknown>> {
+    this.child.stdin.write(`${line}\n`);
+    return this.next();
+  }
+  end(): void {
+    this.child.stdin.end();
+  }
+}
+
+// Exactly what the SSH protocol has a client sign for a public-key sign-in (RFC 4252, section 7).
+function signInData(user: string, keyLine: string, session = randomBytes(32)): Buffer {
+  const s = (b: Buffer | string): Buffer => {
+    const body = Buffer.from(b);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(body.length);
+    return Buffer.concat([len, body]);
+  };
+  const blob = Buffer.from(keyLine.split(' ')[1] ?? '', 'base64');
+  return Buffer.concat([s(session), Buffer.from([50]), s(user), s('ssh-connection'), s('publickey'), Buffer.from([1]), s('ssh-ed25519'), s(blob)]);
+}
+
+// Does this signature, in the protocol's form, verify under this ed25519 key line?
+function verifies(keyLine: string, data: Buffer, signatureB64: string): boolean {
+  const blob = Buffer.from(keyLine.split(' ')[1] ?? '', 'base64');
+  const sig = Buffer.from(signatureB64, 'base64');
+  if (blob.length < 32 || sig.length < 64) return false;
+  const key = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), blob.subarray(blob.length - 32)]), format: 'der', type: 'spki' });
+  return verify(null, data, key, sig.subarray(sig.length - 64));
+}
 
 async function until(what: () => boolean | Promise<boolean>, ms: number): Promise<boolean> {
   const end = Date.now() + ms;
@@ -206,6 +269,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await pressEnter();
       check('after the wait the right password unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       check('the window is the app now', await until(() => has('#bar'), 5000), '');
+      // What the first start left in the list is there again: the box, pinned, with its key in the key process.
+      if (process.env['SSHAPP_LABBOX']) {
+        const kept = ctx.boxes.list;
+        const heldNow = await ctx.keys.request('keys');
+        check('the boxes are back as they were saved: one box, pinned, with its own key', ctx.boxes.loaded && ctx.boxes.fault === '' && kept.length === 1 && kept[0]!.name === 'lab-box' && kept[0]!.pin !== '' && kept[0]!.places[0]?.name === 'logs' && Array.isArray(heldNow['keys']) && (heldNow['keys'] as Record<string, unknown>[]).length === 1 && (heldNow['keys'] as Record<string, unknown>[])[0]!['publicKey'] === kept[0]!.publicKey, [ctx.boxes.fault, kept.map((b) => [b.name, b.pin !== ''])]);
+      }
       const holding = await filesHolding(PASSWORD);
       check('no file the app wrote holds the password, or the wrong one', holding.length === 0 && (await filesHolding('not the password, sorry')).length === 0, holding);
       canary.close();
@@ -404,7 +473,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'frame,meter,onOutput,onShown,onState,sandboxed,send'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'frame,meter,onBanner,onOutput,onShown,onState,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -488,6 +557,127 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     check('the other tab is untouched', await until(async () => (await shown(a)).includes('after-kill-9d0'), 3000) && a.engine.state === 'ready', a.engine.state);
     const seen = ctx.shellState().tabs.map((t) => `${t.id}:${t.state}`).join();
     check('the shell is told each state', seen === '1:ready,2:gone', seen);
+
+    // ---- A box, for real: added, checked, pinned, connected to, signed in by the key process. ----
+    // The box is the lab's own SSH server on this machine; the app reaches it the way it reaches any box.
+    const labBin = process.env['SSHAPP_LABBOX'] ?? '';
+    if (labBin === '') check('a lab box to connect to', false, 'SSHAPP_LABBOX is not set: the box probes need the lab\'s SSH server');
+    else {
+      const { box: lab, first } = await LabBox.start(labBin);
+      const addr = String(first['addr'] ?? '');
+      const printed = String(first['printed'] ?? '');
+      const port = addr.split(':')[1] ?? '';
+      check('the lab box is up', /^127\.0\.0\.1:\d+$/.test(addr) && printed.includes('SHA256:'), first);
+      const B = ctx.boxes;
+      const view = (id: string) => B.check(id);
+
+      check('a draft with a field to fix is not added, and says which', JSON.stringify(await B.add({ name: 'lab-box', colour: 2, host: '127.0.0.1', port: 'x', user: 'demo', folder: '', places: [] })) === JSON.stringify({ ok: false, error: 'fields', fields: { port: '1 to 65535' } }), '');
+      const added = await B.add({ name: 'lab-box', colour: 2, host: '127.0.0.1', port, user: 'demo', folder: '', places: [{ name: 'logs', folder: "/var/log/it's here" }] });
+      const id = added.ok ? added.id : '';
+      const box = () => B.get(id)!;
+      check('a box is added: its key is made by the key process, and it is not pinned', added.ok && box().pin === '' && /^ssh-ed25519 [A-Za-z0-9+/]+=*$/.test(box().publicKey), added);
+      const held = await ctx.keys.request('keys');
+      check('the key process holds one key for it, bound to that box and user', Array.isArray(held['keys']) && JSON.stringify((held['keys'] as Record<string, unknown>[]).map((k) => [k['name'], k['box'], k['user'], k['publicKey']])) === JSON.stringify([[id, id, 'demo', box().publicKey]]), held);
+      check('a box that was never checked cannot be connected to', ctx.openTab(id) === null && ctx.openTab(id, 'logs') === null, '');
+      check('the block to run holds the approved text and this box\'s key', B.block(id) === `umask 077; mkdir -p ~/.ssh && echo '${box().publicKey} berth:lab-box' >> ~/.ssh/authorized_keys && for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done`, B.block(id));
+
+      // The check. The box is asked who it is; what it showed is told to no view before a paste is compared.
+      B.reach(id);
+      check('the box is reached, and what it showed is kept back', (await until(() => view(id).step === 'reached', 20_000)) && view(id).shownFingerprint === '' && !JSON.stringify(view(id)).includes('SHA256'), view(id));
+      const asked = await lab.tell('seen');
+      check('asking who it is tried no sign-in and sent no user name', asked['tries'] === 0 && !asked['users'], asked);
+      B.paste(id, '256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)\n');
+      const mis = view(id);
+      const tried = await B.trust(id);
+      check('a paste from another box is a mismatch: both are shown, nothing is pinned', mis.step === 'mismatch' && printed.includes(mis.shownFingerprint) && mis.pasted.length === 1 && !tried.ok && box().pin === '' && ctx.openTab(id) === null, [mis, tried]);
+      B.paste(id, `3072 SHA256:p1Rt7Cz5Hm2Ve8Yq4Lb0Wn6Ks3Df9Gj1Ax7Ue5Io2Tc root@lab (RSA)\n${printed}`);
+      check('the box\'s own lines are a match', view(id).step === 'match' && printed.includes(view(id).shownFingerprint), view(id));
+      const trusted = await B.trust(id);
+      check('only then is it pinned, with the identity that matched', trusted.ok && box().pin.startsWith('ssh-ed25519 ') && printed.includes(box().pinFingerprint) && box().pinnedAt !== '', [trusted, box().pinFingerprint]);
+
+      // The key is not on the box yet: the sign-in fails, said as such, and the key process did sign.
+      const early = ctx.openTab(id)!;
+      check('before the key is on the box, the sign-in fails and is said as that', (await until(() => early.engine.link.phase === 'ended', 20_000)) && early.engine.link.cause === 'sign-in-failed' && early.engine.link.endedIn === 'signing-in', early.engine.link);
+      check('an engine whose link ended is gone, and says so', await until(() => early.engine.state === 'gone' && early.engine.cause === 'the link ended', 5000), [early.engine.state, early.engine.cause]);
+      ctx.closeTab(early.id);
+
+      // The block was "run": the box lets this key in. A tab on the place opens a real shell there.
+      const let_ = await lab.tell(`accept ${box().publicKey}`);
+      check('the key is on the box', typeof let_['accepting'] === 'string', let_);
+      const t = ctx.openTab(id, 'logs')!;
+      const phases: string[] = [];
+      const watching = setInterval(() => {
+        if (phases[phases.length - 1] !== t.engine.link.phase) phases.push(t.engine.link.phase);
+      }, 2);
+      const up = await until(() => t.engine.link.phase === 'up', 20_000);
+      clearInterval(watching);
+      check('a tab on the box: the link comes up, signed in by the key process', up && t.engine.signAsked >= 1 && t.engine.signRefused === 0 && ctx.signsRefused() === 0, [t.engine.link, phases, t.engine.signAsked, t.engine.signRefused, ctx.signsRefused()]);
+      check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
+      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs' }), ctx.shellState().tabs);
+      await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
+      await type(t, 'typed-into-the-box-5b2');
+      check('typed bytes reach the box\'s shell and its output comes back to this tab', await until(async () => (await shown(t)).includes('typed-into-the-box-5b2'), 5000), await shown(t));
+      check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
+      const seenNow = await lab.tell('seen');
+      const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
+      const last = sessions[sessions.length - 1];
+      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked) === '["pty-req","exec"]' && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color' && last?.Cols === 120 && last?.Rows === 40, seenNow);
+      check('it signed in as the box\'s user', Array.isArray(seenNow['users']) && (seenNow['users'] as string[]).every((u) => u === 'demo'), seenNow['users']);
+
+      // The key process signs a sign-in for its own box and user, and nothing else, whoever asks.
+      const data = signInData('demo', box().publicKey);
+      const good = await ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: data.toString('base64') });
+      check('a real sign-in for this box is signed, and the signature is this key\'s', 'signature' in good && verifies(box().publicKey, data, good.signature), good);
+      const other = await B.add({ name: 'second-box', colour: 3, host: '127.0.0.1', port, user: 'demo', folder: '', places: [] });
+      const id2 = other.ok ? other.id : '';
+      const passedBefore = ctx.signsPassedOn();
+      const refusals: [string, Promise<SignAnswer>][] = [
+        ['another box\'s key named through this box\'s tab', ctx.signAs(id, { key: id2, algorithm: 'ssh-ed25519', data: signInData('demo', B.get(id2)!.publicKey).toString('base64') })],
+        ['this key asked for through another box\'s tab', ctx.signAs(id2, { key: id, algorithm: 'ssh-ed25519', data: data.toString('base64') })],
+        ['a sign-in as another user', ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: signInData('root', box().publicKey).toString('base64') })],
+        ['a sign-in naming another key', ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: signInData('demo', B.get(id2)!.publicKey).toString('base64') })],
+        ['a session value of another length', ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: signInData('demo', box().publicKey, randomBytes(20)).toString('base64') })],
+        ['bytes that are no sign-in', ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: randomBytes(96).toString('base64') })],
+        ['a sign-in with a byte more', ctx.signAs(id, { key: id, algorithm: 'ssh-ed25519', data: Buffer.concat([data, Buffer.from([0])]).toString('base64') })],
+        ['another algorithm', ctx.signAs(id, { key: id, algorithm: 'ssh-rsa', data: data.toString('base64') })],
+      ];
+      const refused: string[] = [];
+      for (const [what, answer] of refusals) if ('signature' in (await answer)) refused.push(what);
+      check(`${refusals.length} requests that are not this box's own sign-in are all refused`, refused.length === 0 && ctx.signsRefused() === refusals.length, [refused, ctx.signsRefused()]);
+      // Two locks, each seen working: the three that name another key, another box or another algorithm are
+      // stopped in main and never reach the key process; the other five are stopped by the key process itself.
+      check('three of them never reached the key process; it refused the other five itself', ctx.signsPassedOn() - passedBefore === refusals.length - 3, [ctx.signsPassedOn(), passedBefore]);
+
+      // A second box, checked and pinned, whose key the box does not know: a sign-in failure, nothing more.
+      B.reach(id2);
+      await until(() => view(id2).step === 'reached', 20_000);
+      B.paste(id2, printed);
+      await B.trust(id2);
+      const t2 = ctx.openTab(id2)!;
+      check('a box that does not know our key: sign-in failed, the other tab untouched', (await until(() => t2.engine.link.phase === 'ended', 20_000)) && t2.engine.link.cause === 'sign-in-failed' && t.engine.link.phase === 'up', [t2.engine.link, t.engine.link.phase]);
+      ctx.closeTab(t2.id);
+      const removed = await B.remove(id2);
+      const left = await ctx.keys.request('keys');
+      check('removing a box removes its key', removed.ok && !B.get(id2) && Array.isArray(left['keys']) && (left['keys'] as Record<string, unknown>[]).length === 1, [removed, left]);
+
+      // The box at that address becomes another box. The open tab's link ends; a new one is a hard stop.
+      const before = t.engine.signAsked;
+      const triesBefore = Number((await lab.tell('seen'))['tries']);
+      const rekeyed = await lab.tell('rekey');
+      const printed2 = String(rekeyed['printed'] ?? '');
+      check('the open tab\'s link ended when the box went away, and says how', await until(() => t.engine.link.phase === 'ended' && t.engine.link.cause !== '', 10_000), t.engine.link);
+      const t3 = ctx.openTab(id)!;
+      const stopped = await until(() => t3.engine.link.phase === 'ended', 20_000);
+      const after = await lab.tell('seen');
+      check('a box showing another identity is a hard stop: said with what it showed, no key used, no sign-in tried', stopped && t3.engine.link.cause === 'identity-changed' && t3.engine.link.endedIn === 'key-exchange' && t3.engine.link.shownFingerprint !== '' && printed2.includes(t3.engine.link.shownFingerprint) && !printed.includes(t3.engine.link.shownFingerprint) && t3.engine.signAsked === 0 && t.engine.signAsked === before && Number(after['tries']) === 0 && triesBefore >= 1, [t3.engine.link, t3.engine.signAsked, after['tries'], triesBefore]);
+      check('and the pin is unchanged', printed.includes(box().pinFingerprint), box().pinFingerprint);
+      ctx.closeTab(t3.id);
+      ctx.closeTab(t.id);
+      lab.end();
+      // With the app closed the PC holds one locked file: no box's name is readable in anything the app wrote.
+      const named = [...(await filesHolding('lab-box')), ...(await filesHolding('second-box')), ...(await filesHolding('/var/log/it'))];
+      check('no file the app wrote names a box or a place in the clear', named.length === 0, named);
+    }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
     check('no message was dropped, but the ones the lock refused on purpose', ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock]);

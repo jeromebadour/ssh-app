@@ -28,7 +28,11 @@ const show = () => {
   out.textContent = text;
   out.scrollTop = out.scrollHeight;
 };
+let total = 0; // output bytes taken, in all
 window.tabPort.onOutput((bytes) => {
+  // Taken: said at once, so the box may send on. (The terminal will say it once it has drawn the bytes.)
+  total += bytes.byteLength;
+  window.tabPort.taken(total);
   text += decoder.decode(bytes, { stream: true });
   if (text.length > KEEP) text = text.slice(text.length - KEEP);
   if (frame !== 0) return;
@@ -36,8 +40,15 @@ window.tabPort.onOutput((bytes) => {
   timer = window.setTimeout(show, 250);
 });
 
+// The box's sign-in text: shown as inert text, like everything else a box sends.
+window.tabPort.onBanner((bytes) => {
+  text += new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  if (frame === 0) frame = requestAnimationFrame(show);
+});
+
 window.tabPort.onState((info) => {
-  state.textContent = info.cause ? `${info.state}: ${info.cause}` : info.state;
+  const link = info.link.phase === 'none' ? '' : ` | link ${info.link.phase}${info.link.cause ? `: ${info.link.cause}` : ''}`;
+  state.textContent = (info.cause ? `${info.state}: ${info.cause}` : info.state) + link;
 });
 
 out.addEventListener('keydown', (e) => {

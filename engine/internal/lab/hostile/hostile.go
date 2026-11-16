@@ -26,6 +26,8 @@ type Config struct {
 	Sessions bool
 	// OnUp runs once a client is signed in, with the connection: the place to try things against the client.
 	OnUp func(conn *ssh.ServerConn)
+	// Listen is where it listens; empty is a free local port.
+	Listen string
 }
 
 // Box is a running server.
@@ -39,6 +41,14 @@ type Box struct {
 	seen   []*Session
 	tries  int // sign-in attempts of any kind, "none" included
 	users  []string
+	accept ssh.PublicKey // set by Accept: the key let in from then on
+}
+
+// Accept changes the one key the box lets in, from now on (as when a key is added to a real box).
+func (b *Box) Accept(key ssh.PublicKey) {
+	b.mu.Lock()
+	b.accept = key
+	b.mu.Unlock()
 }
 
 // SignInTries is how often anyone tried to sign in, in any way, and the user names they gave.
@@ -155,11 +165,15 @@ func Start(cfg Config) (*Box, error) {
 	if cfg.HostSigner == nil {
 		return nil, errors.New("hostile: no identity given")
 	}
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	at := cfg.Listen
+	if at == "" {
+		at = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp4", at)
 	if err != nil {
 		return nil, err
 	}
-	b := &Box{ln: ln, closed: make(chan struct{})}
+	b := &Box{ln: ln, closed: make(chan struct{}), accept: cfg.Accept}
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
@@ -212,7 +226,10 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 			if cfg.StallSignIn {
 				<-b.closed
 			}
-			if cfg.Accept != nil && string(key.Marshal()) == string(cfg.Accept.Marshal()) {
+			b.mu.Lock()
+			let := b.accept
+			b.mu.Unlock()
+			if let != nil && string(key.Marshal()) == string(let.Marshal()) {
 				return &ssh.Permissions{}, nil
 			}
 			return nil, errors.New("not this key")

@@ -12,6 +12,12 @@ go_build() { (cd engine && GOOS="$1" GOARCH=amd64 go build -trimpath -buildvcs=f
 go_build linux sshapp-engine
 go_build windows sshapp-engine.exe
 
+# The lab's stand-in for a box, for the app's own self-test. A lab tool: it is kept apart from dist/, is in no
+# package, and no program that ships can start it.
+mkdir -p .build/labbox
+(cd engine && GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o ../.build/labbox/labbox ./internal/lab/cmd/labbox)
+(cd engine && GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o ../.build/labbox/labbox.exe ./internal/lab/cmd/labbox)
+
 # The engines' hashes go into the app's own code: main refuses to start an engine that does not match.
 node -e '
   const { createHash } = require("node:crypto"); const { readFileSync, writeFileSync } = require("node:fs");

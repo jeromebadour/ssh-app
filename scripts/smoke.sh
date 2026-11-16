@@ -36,8 +36,10 @@ start() {
   shift
   local code=0
   # The app's whole network stack is pointed at the canary: whatever it tries to reach by itself is written down.
+  # The lab's stand-in for a box: the self-test starts it and connects to it as to any box.
+  local labbox=(SSHAPP_LABBOX="$(pwd)/.build/labbox/labbox")
   local net=(http_proxy="$canary" https_proxy="$canary" HTTP_PROXY="$canary" HTTPS_PROXY="$canary" ALL_PROXY="$canary" all_proxy="$canary" no_proxy= NO_PROXY=)
-  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args="-screen 0 ${selftest_screen:-1440x900}x24" env -u NODE_OPTIONS "${net[@]}" "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
+  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args="-screen 0 ${selftest_screen:-1440x900}x24" env -u NODE_OPTIONS "${net[@]}" "${labbox[@]}" "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
   echo "$code"
 }
 
