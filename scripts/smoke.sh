@@ -35,7 +35,9 @@ start() {
   while [ "$1" != "--" ]; do envs+=("$1"); shift; done
   shift
   local code=0
-  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args='-screen 0 1440x900x24' env -u NODE_OPTIONS "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
+  # The app's whole network stack is pointed at the canary: whatever it tries to reach by itself is written down.
+  local net=(http_proxy="$canary" https_proxy="$canary" HTTP_PROXY="$canary" HTTPS_PROXY="$canary" ALL_PROXY="$canary" all_proxy="$canary" no_proxy= NO_PROXY=)
+  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args="-screen 0 ${selftest_screen:-1440x900}x24" env -u NODE_OPTIONS "${net[@]}" "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
   echo "$code"
 }
 
@@ -43,7 +45,10 @@ start() {
 selftest() {
   local log="$1"; shift
   local code line
-  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" -- "$@")"
+  local prof=()
+  [ -n "${selftest_profile:-}" ] && prof=(SSHAPP_PROFILE="$selftest_profile")
+  [ -n "${selftest_window:-}" ] && prof+=(SSHAPP_WINDOW="$selftest_window")
+  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" "${prof[@]}" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
     echo "smoke: the app gave no result (exit code $code)." >&2
@@ -64,8 +69,24 @@ say() { echo "ok    $*"; }
 fail() { echo "FAIL  $*" >&2; exit 1; }
 work="$(mktemp -d)"
 chmod 755 "$work"
-trap 'rm -rf "$work"' EXIT
 log="$work/app.log"
+
+# The network canary (scripts/lib/net-canary.mjs): it runs for the whole smoke run and must stay silent.
+canary_log="$work/net-canary.log"
+coproc CANARY { exec node scripts/lib/net-canary.mjs "$canary_log"; }
+read -r canary_port <&"${CANARY[0]}"
+[[ "$canary_port" =~ ^[0-9]+$ ]] || { echo "smoke: the network canary did not start" >&2; exit 1; }
+canary="http://127.0.0.1:$canary_port"
+trap 'kill "$CANARY_PID" 2>/dev/null; rm -rf "$work"' EXIT
+# quiet_network: fails if the app tried to reach anything by itself since the smoke run began.
+quiet_network() {
+  if [ -s "$canary_log" ]; then
+    echo "FAIL  the app tried to reach the network by itself:" >&2
+    sort -k2 "$canary_log" | cut -d' ' -f2- | sort | uniq -c | head -10 >&2
+    exit 1
+  fi
+  say "the app made no network connection of its own"
+}
 
 case "$mode" in
   dev)
@@ -74,6 +95,7 @@ case "$mode" in
     [ -f dist/main.js ] || { echo "smoke: nothing built (run scripts/build.sh)" >&2; exit 1; }
     helper node_modules/electron/dist/chrome-sandbox
     selftest "$log" "$electron" .
+    quiet_network
     ;;
 
   lab)
@@ -93,9 +115,23 @@ case "$mode" in
       || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
     # Seven tabs at once.
     selftest_mode=seven selftest "$log" "$pkg/ssh-app" --lab
+    # The same seven in the narrowest window the app allows, on a small screen (GitHub's Windows machine has
+    # 1024 x 768; a 1280-wide window at 125 % scaling is 1024 wide too): every tab must still be there to press.
+    selftest_mode=seven selftest_window=800x500 selftest_screen=1024x768 selftest "$log" "$pkg/ssh-app" --lab
+
+    # The lock across two starts on one profile: the first start makes the password, the second must ask for it.
+    prof="$work/two-starts"; mkdir -p "$prof"; chmod 777 "$prof"
+    code="$(start 150 "$log" SSHAPP_SELFTEST=all SSHAPP_BUDGET_FACTOR="$factor" SSHAPP_PROFILE="$prof" -- "$pkg/ssh-app" --lab)"
+    [ "$code" = 0 ] || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "the first start on a kept profile failed (exit $code)"; }
+    selftest_mode=gate-unlock selftest_profile="$prof" selftest "$log" "$pkg/ssh-app" --lab
+    # And from outside the app: nothing in that profile holds the lab's password.
+    ! grep -rqa 'berth-lab-canary' "$prof" || fail "a file in the profile holds the password: $(grep -rla 'berth-lab-canary' "$prof" | head -3)"
+    [ -s "$prof/profile/list.berth" ] && [ -s "$prof/backups/Berth list backup.berth" ] || fail "the list or its backup is missing after two starts"
+    say "nothing in the profile holds the password; the list and its backup are there"
 
     # Children end with their parent: main is ended by force, and its engines must be gone within five seconds.
     ( start 60 "$log" SSHAPP_SELFTEST=hold -- "$pkg/ssh-app" --lab >/dev/null ) &
+    holder=$!
     held=""
     for _ in $(seq 1 150); do held="$(grep -a '^HOLD ' "$log" 2>/dev/null | tail -1 || true)"; [ -n "$held" ] && break; sleep 0.2; done
     [[ "$held" == *"ok=true"* ]] || { tail -20 "$log" >&2; fail "the app did not come up with two engines"; }
@@ -112,8 +148,9 @@ case "$mode" in
       [ "$gone" = yes ] && break
       sleep 0.2
     done
-    wait || true
-    [ "$gone" = yes ] && say "main ended by force: its engines ended with it" || fail "engines outlived main"
+    wait "$holder" || true # that one only: the network canary is a child too, and runs until the end
+    [ "$gone" = yes ] && say "main ended by force: its engines and its key process ended with it" || fail "engines or the key process outlived main"
+    quiet_network
     echo "smoke: the lab package held"
     ;;
 
@@ -131,6 +168,8 @@ case "$mode" in
     say "the self-test switch does nothing in it"
     ! grep -aq '^MAINFAULT' "$log" || fail "the release package reported a fault"
     say "no fault in main"
+    grep -aq '^GATE \(create\|locked\)$' "$log" || fail "the release package did not come up at the lock: $(grep -a '^GATE' "$log" || echo 'no GATE line')"
+    say "it comes up at the lock ($(grep -a '^GATE ' "$log" | head -1 | cut -d' ' -f2)), and nowhere else"
 
     # 2. Any argument ends it at once: ours, Node's, Chromium's, and the lab's own word.
     for arg in --anything --inspect=0 --remote-debugging-port=9333 --lab "--lab --remote-debugging-port=9333" /tmp/some-file; do
@@ -166,6 +205,7 @@ case "$mode" in
       say "control: an archive with one harmless byte changed ($what) still starts on Linux"
       rm -rf "$work/changed-$what"
     done
+    quiet_network
     echo "smoke: the release package held"
     ;;
 

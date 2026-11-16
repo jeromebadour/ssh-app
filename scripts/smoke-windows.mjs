@@ -95,13 +95,13 @@ await selftest('the lab package, seven tabs', LAB, 'seven');
 
 {
   const r = await run(LAB, ['--lab'], { SSHAPP_SELFTEST: 'hold' }, { ms: 60_000, until: /^HOLD .*$/m });
-  const held = /^HOLD ok=(\w+) main=(\d+) engines=(\d+),(\d+)/m.exec(r.out);
+  const held = /^HOLD ok=(\w+) main=(\d+) engines=(\d+),(\d+),(\d+)/m.exec(r.out);
   if (!held || held[1] !== 'true') {
     fail('children end with their parent', `the app did not come up with two engines (${r.how}): ${r.out.slice(-400).trim()}`);
     if (r.how !== 'exited') await r.end();
   } else {
     const main = Number(held[2]);
-    const engines = [Number(held[3]), Number(held[4])];
+    const engines = [Number(held[3]), Number(held[4]), Number(held[5])]; // two engines and the key process
     if (![main, ...engines].every(alive)) fail('children end with their parent', 'a process was not running before the test');
     else {
       await endByForce(main);
@@ -110,7 +110,7 @@ await selftest('the lab package, seven tabs', LAB, 'seven');
         gone = !engines.some(alive);
         if (!gone) await sleep(200);
       }
-      if (gone) say('main ended by force: its engines ended with it');
+      if (gone) say('main ended by force: its engines and its key process ended with it');
       else {
         fail('children end with their parent', 'engines outlived main');
         for (const e of engines) await endByForce(e);

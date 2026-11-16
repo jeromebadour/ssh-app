@@ -5,13 +5,21 @@
 import { app, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import type { ShellState } from '../common/ipc';
+import type { Gate } from './gate';
+import type { KeyProc } from './keyproc';
 import type { Tab } from './main';
 import { memory } from './memory';
 import { BUDGET, type Meter } from './meter';
 import { takePicture } from './picture';
 
 interface Ctx {
+  gate: Gate;
+  keys: KeyProc;
+  listFile: string;
+  backups: string;
   shell: WebContentsView;
   shellLoaded: Promise<void>;
   kind: string;
@@ -100,6 +108,143 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     await ctx.shellLoaded;
     check('the shell view loads', true);
 
+    // ---- The lock. Every run begins here, as the app does: nothing works before the password. ----
+    // The lab's password carries a marker, so that every file the app wrote can be searched for it afterwards.
+    const PASSWORD = 'berth-lab-canary-7f3a91 password';
+    const phase = () => ctx.gate.state.phase;
+    const sh = ctx.shell.webContents;
+    const at = (sel: string) => js<{ x: number; y: number } | null>(ctx.shell, `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    const clickOn = async (sel: string) => {
+      const p = await at(sel);
+      if (!p) return false;
+      sh.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      sh.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      await sleep(60);
+      return true;
+    };
+    // Real keys, one character at a time, into whatever has the focus.
+    const typeKeys = async (text: string) => {
+      for (const ch of text) sh.sendInputEvent({ type: 'char', keyCode: ch });
+      await sleep(120);
+    };
+    const pressEnter = async () => {
+      sh.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      sh.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      await sleep(60);
+    };
+    const text = (sel: string) => js<string>(ctx.shell, `document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
+    const has = (sel: string) => js<boolean>(ctx.shell, `!!document.querySelector(${JSON.stringify(sel)})`);
+    // Every file under the lab's folders: none may hold the password.
+    const filesHolding = async (needle: string): Promise<string[]> => {
+      const found: string[] = [];
+      const walk = async (dir: string): Promise<void> => {
+        for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+          const p = path.join(dir, e.name);
+          if (e.isDirectory()) await walk(p);
+          else if (e.isFile() && (await stat(p)).size < 64 * 1024 * 1024 && (await readFile(p).catch(() => Buffer.alloc(0))).includes(needle)) found.push(p);
+        }
+      };
+      await walk(path.dirname(path.dirname(ctx.listFile)));
+      return found;
+    };
+    let refusedByTheLock = 0;
+    const lockHolds = async (what: string) => {
+      refusedByTheLock++;
+      const before = ctx.dropped();
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'new' })`);
+      await sleep(250);
+      check(`${what}: a tab cannot be opened`, ctx.tabs.size === 0 && ctx.dropped() === before + 1, [ctx.tabs.size, ctx.dropped() - before]);
+    };
+
+    if (ctx.mode !== 'direction' && ctx.mode !== 'engine-must-be-refused') {
+      stage = 'the lock';
+      await until(() => phase() !== 'starting', 20_000);
+    }
+
+    if (ctx.mode === 'all') {
+      // The first start, through the real screen with real keys.
+      check('first start: the lock asks to make a password', phase() === 'create' && (await until(() => has('#gate-create'), 5000)) && !(await has('#bar')), phase());
+      await lockHolds('before any password');
+      await clickOn('#pw-one');
+      await typeKeys('too short');
+      const shortSaid = await text('#pw-one-check');
+      await pressEnter();
+      await sleep(300);
+      check('a password of 9 characters is said to be short, and Enter does nothing', shortSaid.includes('9 of 12') && phase() === 'create', [shortSaid, phase()]);
+      await js(ctx.shell, `document.querySelector('#pw-one').select()`);
+      await typeKeys(PASSWORD);
+      await clickOn('#pw-two');
+      await typeKeys(PASSWORD.slice(0, -1));
+      const differs = await text('#pw-two-check');
+      await typeKeys(PASSWORD.slice(-1));
+      const same = await text('#pw-two-check');
+      check('typed twice: a difference is said, and so is a match', differs.includes('not the same') && same.includes('the same as above'), [differs, same]);
+      check('the backup folder is checked before it is used', (await text('#backup-check')).includes('writable') && (await text('#backup-dir')) === ctx.backups, await text('#backup-check'));
+      await pressEnter();
+      check('the password makes the list and unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
+      check('the window is the app now, and no password field is left', (await until(() => has('#bar'), 5000)) && !(await has('input')), '');
+      const list = await readFile(ctx.listFile).catch(() => Buffer.alloc(0));
+      const backup = await readFile(path.join(ctx.backups, 'Berth list backup.berth')).catch(() => Buffer.alloc(1));
+      check('the list is on disk, sealed, and its backup is the same file', list.subarray(0, 8).toString() === 'BERTHVLT' && list.equals(backup) && ctx.gate.backup === 'written', [list.length, backup.length, ctx.gate.backup]);
+      const holding = await filesHolding(PASSWORD);
+      check('no file the app wrote holds the password', holding.length === 0, holding);
+    } else if (ctx.mode === 'gate-unlock') {
+      // A later start, on a profile that already has a list: wrong password, the wait, then the right one.
+      check('a later start: the lock asks for the password and shows nothing else', phase() === 'locked' && (await until(() => has('#gate-unlock'), 5000)) && !(await has('#bar')) && !(await has('#gate-create')), phase());
+      await lockHolds('before the password');
+      await clickOn('#pw');
+      await typeKeys('not the password, sorry');
+      await pressEnter();
+      const wrong = await until(() => ctx.gate.state.wrong && phase() === 'locked', 30_000);
+      check('a wrong password is said plainly, and the next try must wait', wrong && (await until(async () => (await text('#gate-wrong')).includes('Wrong password') && (await text('#gate-submit')).includes('Wait'), 3000)) && ctx.gate.view().waitMs > 0, [phase(), await text('#gate-submit'), ctx.gate.view().waitMs]);
+      await lockHolds('after a wrong password');
+      await typeKeys(PASSWORD);
+      await pressEnter(); // during the wait: not sent, not looked at
+      await sleep(200);
+      check('the right password during the wait is not looked at', phase() === 'locked', phase());
+      await until(async () => (await text('#gate-submit')).trim() === 'Unlock', 5000);
+      await pressEnter();
+      check('after the wait the right password unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
+      check('the window is the app now', await until(() => has('#bar'), 5000), '');
+      const holding = await filesHolding(PASSWORD);
+      check('no file the app wrote holds the password, or the wrong one', holding.length === 0 && (await filesHolding('not the password, sorry')).length === 0, holding);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    } else if (ctx.mode === 'gate-shot') {
+      // A picture of the lock as it is, for comparing with the approved one. SSHAPP_GATE_TYPED fills its fields.
+      const typed = process.env['SSHAPP_GATE_TYPED'] ?? '';
+      await until(async () => (await has('#gate-create')) || (await has('#gate-unlock')) || (await has('#gate-notice')), 5000);
+      if (typed && phase() === 'create') {
+        await clickOn('#pw-one');
+        await typeKeys(typed);
+        await clickOn('#pw-two');
+        await typeKeys(typed);
+      } else if (typed) {
+        await clickOn('#pw');
+        await typeKeys(typed);
+        if (process.env['SSHAPP_GATE_ENTER']) {
+          await pressEnter();
+          await until(() => ctx.gate.state.wrong, 30_000);
+          await sleep(300);
+        }
+      }
+      await js<string>(ctx.shell, `document.fonts.ready.then(() => 'ok')`);
+      await sleep(400);
+      const file = process.env['SSHAPP_PICTURE'] ?? '';
+      const made = await takePicture({ win: ctx.win, views: [ctx.shell], file, strip: process.env['SSHAPP_PICTURE_STRIP'] ?? '', dist: ctx.dist, harden: ctx.harden });
+      check(`a picture of the lock (${phase()}): ${made.width} x ${made.height}`, file !== '', made);
+      canary.close();
+      clearTimeout(guard);
+      return finish(results.every((r) => r.ok) ? 0 : 1);
+    } else if (ctx.mode !== 'direction' && ctx.mode !== 'engine-must-be-refused') {
+      // The other modes are about what comes after the lock: they pass it the short way, with the same password.
+      if (phase() === 'create') await ctx.gate.create(Buffer.from(PASSWORD));
+      else await ctx.gate.unlock(Buffer.from(PASSWORD));
+      check('unlocked', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
+      await until(() => has('#bar'), 5000);
+    }
+
     // The short mode, for a package whose engine file was changed on purpose: one tab, and its engine must be
     // refused with the reason. Nothing else is probed, because nothing else can work without an engine.
     if (ctx.mode === 'engine-must-be-refused') {
@@ -107,6 +252,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await until(() => t.engine.state === 'gone', 10_000);
       check('the engine was not started', t.engine.state === 'gone' && t.engine.pid === 0, [t.engine.state, t.engine.pid]);
       check('and the tab says why', t.engine.cause === 'the engine file is not the one this app was built with', t.engine.cause);
+      // The key process is the same program file: it is refused the same way, and the lock says so.
+      await until(() => ctx.gate.state.phase === 'fault', 10_000);
+      check('the key process was not started either, and the lock says why', ctx.gate.state.phase === 'fault' && ctx.keys.pid === 0 && ctx.gate.state.detail.includes('not the one this app was built with'), [ctx.gate.state.phase, ctx.gate.state.detail]);
       canary.close();
       clearTimeout(guard);
       return finish(results.every((r) => r.ok) ? 0 : 1);
@@ -156,8 +304,8 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     if (ctx.mode === 'hold') {
       const one = ctx.openTab()!;
       const two = ctx.openTab()!;
-      const up = await until(() => one.engine.state === 'ready' && two.engine.state === 'ready', 15_000);
-      process.stdout.write(`HOLD ok=${up} main=${process.pid} engines=${one.engine.pid},${two.engine.pid}\n`);
+      const up = (await until(() => one.engine.state === 'ready' && two.engine.state === 'ready', 15_000)) && ctx.keys.pid > 1;
+      process.stdout.write(`HOLD ok=${up} main=${process.pid} engines=${one.engine.pid},${two.engine.pid},${ctx.keys.pid}\n`);
       canary.close();
       clearTimeout(guard);
       return;
@@ -181,6 +329,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
       }
       check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
+      // Every tab, and the button that opens one more, is in sight, whatever the window's width. A tab that has
+      // slid out of the bar cannot be pressed, and what cannot be seen is not there (found 2026-11-16 on a
+      // 1024-wide screen: tabs six and seven were past the window's edge).
+      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') ? 'tab ' + el.getAttribute('data-tab') : 'the new-tab button') + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); } return { width: w, out }; })()`);
+      check(`all seven tabs and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
       // The promises, measured under load: every tab floods its engine for four seconds while real clicks switch
       // tabs and real keys are typed. Budgets are the plan's (B8), times the stated factor for slow test machines.
       const factor = Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
@@ -192,6 +345,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       }
       const until4 = Date.now() + FLOOD_MS;
       let turn = 0;
+      let presses = 0;
       let switches = 0;
       while (Date.now() < until4) {
         const t = all[turn++ % all.length]!;
@@ -199,25 +353,31 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (at) {
           ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
           ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          switches++;
+          presses++;
         }
+        // The key follows the press at once, as a hand does, before the tab has been painted.
         t.view.webContents.focus();
         for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
-        await sleep(200);
+        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
+        const began = Date.now();
+        if (at && (await until(() => ctx.shellState().active === t.id, 1000))) switches++;
+        await sleep(Math.max(0, 200 - (Date.now() - began)));
       }
       await sleep(1500); // the views report twice a second
       let sent = 0;
       for (const t of all) sent += await js<number>(t.view, `window.__sent || 0`);
       const w = { ...ctx.meter.worst };
       const mbps = (sent / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
-      check(`under load: ${switches} tab switches, ${mbps} MB/s through seven engines`, switches >= 7 && sent > 0, { switches, sent });
+      check(`under load: ${switches} of ${presses} presses on a tab brought it to the front, ${mbps} MB/s through seven engines`, presses >= 7 && switches === presses && turn === presses && sent > 0, { turn, presses, switches, sent });
       const within = (key: keyof typeof BUDGET, what: string, mustMeasure: boolean) => {
         const limit = BUDGET[key] * factor;
         check(`${what}: ${w[key]} ms (budget ${BUDGET[key]} ms${factor > 1 ? `, times ${factor} on this machine` : ''})`, w[key] <= limit && (!mustMeasure || w[key] > 0), w);
       };
       within('mainDelayMs', 'main was never later than', true);
       within('viewTaskMs', 'no view was busy in one stretch longer than', false);
-      within('reactionMs', 'a real click or key was painted within', false);
+      // The slowest one also says where its time went: a slow reaction is explained, never guessed at.
+      const slow = ctx.meter.slowest;
+      within('reactionMs', `a real click or key was painted within (slowest: ${slow ? `${slow.kind} in ${slow.view === 0 ? 'the bar' : `tab ${slow.view}`}, ${slow.waitMs} ms before its handlers, ${slow.handlerMs} ms inside them, ${slow.paintMs} ms to the painted frame` : 'none over 16 ms'})`, false);
       within('tabSwitchMs', 'a tab switch was painted within', true);
       within('startMs', 'from process start to the first painted frame', true);
 
@@ -244,7 +404,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,meter,onState,sandboxed' : 'frame,meter,onOutput,onShown,onState,sandboxed,send'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gatePickBackup,gateUnlock,meter,onGate,onState,sandboxed' : 'frame,meter,onOutput,onShown,onState,sandboxed,send'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -330,7 +490,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     check('the shell is told each state', seen === '1:ready,2:gone', seen);
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
-    check('no message was dropped as forged', ctx.dropped() === 0, ctx.dropped());
+    check('no message was dropped, but the ones the lock refused on purpose', ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock]);
   } catch (err) {
     check('no probe threw', false, err instanceof Error ? (err.stack ?? err.message) : String(err));
   }

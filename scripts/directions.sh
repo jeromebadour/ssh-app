@@ -44,7 +44,7 @@ shoot() {
 
 if [ "${1:-}" = step2 ]; then
   # Step 2's screens, for Kami's yes or no (2026-11-16).
-  for scene in create unlock wrong addbox trust changed connecting fresh noanswer dropped; do
+  for scene in addbox trust changed connecting fresh noanswer dropped; do
     shoot a 1280x720 1.25 "$scene"
   done
   exit 0

@@ -17,7 +17,7 @@ const port: TabPort = {
     ipcRenderer.on(CH.tabShown, () => cb());
   },
   meter(n) {
-    ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs) });
+    ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs), reactionKind: Number(n.reactionKind), reactionWaitMs: Number(n.reactionWaitMs), reactionHandlerMs: Number(n.reactionHandlerMs) });
   },
   frame() {
     ipcRenderer.send(CH.meterFrame);

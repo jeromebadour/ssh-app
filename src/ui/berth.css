@@ -420,3 +420,34 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .places-head span:first-child { width: calc(11ch + 24px); }
 .row-check { padding-left: calc(11ch + 34px); }
 .kb-sep { width: 1px; height: 10px; margin: 0 6px; background: var(--line); }
+
+/* ---------- real fields: an input inside the drawn field ---------- */
+.input input { all: unset; flex: 1; min-width: 0; height: 100%; font: inherit; color: inherit; caret-color: var(--text); }
+.input input[type='password'] { letter-spacing: 2px; font-size: 15px; }
+.input input::placeholder { color: var(--text-3); letter-spacing: 0; font-size: 13px; }
+.input:focus-within { border-color: var(--main); box-shadow: 0 0 0 3px color-mix(in srgb, var(--main) 18%, transparent); }
+.input.wrong:focus-within { border-color: var(--problem); box-shadow: 0 0 0 3px color-mix(in srgb, var(--problem) 16%, transparent); }
+.pick:focus-visible, .gate .btn:focus-visible, .tab-close:focus-visible, .new-tab:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+.gate-go { display: flex; flex-direction: column; gap: 8px; }
+.gate-go .to-fix { margin: 0; }
+.gate-center { justify-content: center; }
+.gate-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
+.tab-close { display: grid; place-items: center; }
+.tabbar.scaffold { height: 44px; }
+/* Every tab stays in sight. Tabs are 168 wide while there is room; in a narrower window, or with more tabs, they
+   all narrow together and their words are cut with a mark, the place first. None ever slides past the edge, and
+   the button that opens one more stays where it can be pressed (found 2026-11-16: at 1024 wide, tabs six and
+   seven of seven were out of the window). The tab in front keeps enough width to say which box it is. */
+.scaffold .tab-groups { gap: 2px; }
+.scaffold .tab { flex: 1 1 0; max-width: 168px; min-width: 0; overflow: hidden; }
+.scaffold .tab.active { min-width: 88px; }
+.scaffold .tab-box { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scaffold .tab-place { flex: 0 20 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scaffold .tab-end { flex: none; padding-left: 2px; }
+.scaffold .new-tab { flex: none; margin-left: 6px; }
+/* Every press answers at once: whatever can be pressed shows the press itself, before anything it causes. */
+.new-tab:active, .tab-close:active, .pick:active, .tool:active, .ft-btn:active { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.btn:active { filter: brightness(1.12); }
+/* A tab too, the front one included: a press on the tab already in front changes nothing else, so the press
+   itself is what shows. */
+.tab:active { filter: brightness(1.12); }

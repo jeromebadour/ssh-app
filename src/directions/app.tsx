@@ -4,15 +4,14 @@
 //   ?scene=paths     the path bar's pinned and recent folders are open
 //   ?scene=boxes     the Boxes menu is open
 // Step 2's screens (screens.tsx), and a tab in each connection state:
-//   ?scene=create | unlock | wrong       the password, before anything else exists
 //   ?scene=addbox | trust | changed      Add box, the first-connection check, a changed identity
 //   ?scene=connecting | fresh            a new tab opening, then just signed in (the sign-in text folded)
 //   ?scene=noanswer | dropped            a silent link kept; a link that is gone, reconnecting
 import { render } from 'preact';
 import { blocks, files, groups, logCmd, logLines, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
-import { Glyph } from './glyphs';
-import { Mark } from './marks';
-import { AddBoxDialog, ChangedDialog, CreateScreen, TrustDialog, UnlockScreen } from './screens';
+import { Glyph } from '../ui/glyphs';
+import { Mark } from '../ui/marks';
+import { AddBoxDialog, ChangedDialog, TrustDialog } from './screens';
 
 const q = new URLSearchParams(location.search);
 const scene = q.get('scene') ?? '';
@@ -388,8 +387,6 @@ function CloseDialog() {
 }
 
 function Window() {
-  if (scene === 'create') return <CreateScreen />;
-  if (scene === 'unlock' || scene === 'wrong') return <UnlockScreen wrong={scene === 'wrong'} />;
   return (
     <div class="window">
       <TabBar />

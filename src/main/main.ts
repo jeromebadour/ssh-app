@@ -1,10 +1,13 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, dialog, ipcMain, protocol, session, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { readdir, readFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { CH, INPUT_MAX, TABS_MAX, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { Engine } from './engine';
+import { Gate } from './gate';
+import { KeyProc } from './keyproc';
 import { isLabPackageNow } from './lab-proof';
 import { Meter } from './meter';
 
@@ -19,6 +22,14 @@ import { Meter } from './meter';
 const refuse = (): never => process.exit(64);
 const LAB = app.isPackaged && process.argv.includes('--lab') && isLabPackageNow(process.resourcesPath, process.execPath);
 if (app.isPackaged && process.argv.length > 1 && !LAB) refuse();
+
+// The app's name decides where its own files live (the locked list, in the user's app-data folder).
+app.setName('Berth');
+// A lab or development run keeps its files apart from a real profile: in the folder it is given, or in a fresh
+// one. A release build never reads this.
+const LAB_RUN = !app.isPackaged || LAB;
+const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SSHAPP_SELFTEST'] ? path.join(os.tmpdir(), `berth-lab-${process.pid}`) : '')) : '';
+if (LAB_PROFILE) app.setPath('userData', path.join(LAB_PROFILE, 'profile'));
 
 const DIST = __dirname;
 const BAR = 44;
@@ -59,11 +70,8 @@ const FILES: Record<'shell' | 'tab' | 'easel' | 'directions', Record<string, [fi
     '/index.html': ['lab/index.html', 'text/html; charset=utf-8'],
     '/easel.js': ['lab/easel.js', 'text/javascript; charset=utf-8'],
   },
-  shell: {
-    '/index.html': ['shell/index.html', 'text/html; charset=utf-8'],
-    '/shell.js': ['shell/shell.js', 'text/javascript; charset=utf-8'],
-    '/shell.css': ['shell/shell.css', 'text/css; charset=utf-8'],
-  },
+  // The shell's page, script, stylesheet and typefaces: filled from dist/shell at start.
+  shell: {},
   tab: {
     '/index.html': ['tab/index.html', 'text/html; charset=utf-8'],
     '/tab.js': ['tab/tab.js', 'text/javascript; charset=utf-8'],
@@ -72,11 +80,12 @@ const FILES: Record<'shell' | 'tab' | 'easel' | 'directions', Record<string, [fi
 };
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
-async function listDirections(): Promise<void> {
-  const base = path.join(DIST, 'directions');
+// A kind's files are listed once, from its own folder inside the app: still no path is ever built from a request.
+async function listFiles(kind: 'shell' | 'directions'): Promise<void> {
+  const base = path.join(DIST, kind);
   for (const rel of await readdir(base, { recursive: true })) {
     const type = TYPES[path.extname(rel)];
-    if (type) FILES.directions[`/${rel.split(path.sep).join('/')}`] = [path.join('directions', rel), type];
+    if (type) FILES[kind][`/${rel.split(path.sep).join('/')}`] = [path.join(kind, rel), type];
   }
 }
 
@@ -107,7 +116,11 @@ function harden(ses: Session): void {
   ses.protocol.handle('app', serve);
   ses.setPermissionRequestHandler((_wc, _permission, done) => done(false));
   ses.setPermissionCheckHandler(() => false);
+  // No spell checking, and no dictionary for it: with a language set, Chromium fetches that language's dictionary
+  // from Google's servers the first time a text field is used, by a path that webRequest (below) does not see.
+  // Found by the lab's network canary on 2026-11-16, the day the first real text field (the password) was built.
   ses.setSpellCheckerEnabled(false);
+  if (process.platform !== 'darwin') ses.setSpellCheckerLanguages([]);
   // The app makes no web request at all. Only its own pages load.
   ses.webRequest.onBeforeRequest((details, done) => done({ cancel: !details.url.startsWith('app://') }));
 }
@@ -145,6 +158,12 @@ let win: BaseWindow | null = null;
 let shell: WebContentsView | null = null;
 let droppedMessages = 0;
 const meter = new Meter();
+let keys: KeyProc | null = null;
+let gate: Gate | null = null;
+
+function tellGate(): void {
+  if (gate) sendTo(shell, CH.gateState, gate.view());
+}
 
 function info(t: Tab): TabInfo {
   return { id: t.id, state: t.engine.state, cause: t.engine.cause };
@@ -242,6 +261,11 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     return;
   }
   const c = cmd as Partial<ShellCmd> | null;
+  // Without the password nothing opens: before unlock the shell's only messages are the gate's.
+  if (!gate?.unlocked) {
+    droppedMessages++;
+    return;
+  }
   if (c?.op === 'new') openTab();
   else if (c?.op === 'select' && typeof c.id === 'number' && tabs.has(c.id)) {
     active = c.id;
@@ -253,6 +277,28 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   else droppedMessages++;
 });
 
+// The gate's three messages: from the shell view's own main frame only.
+const fromShell = (e: IpcMainEvent): boolean => !!shell && e.sender.id === shell.webContents.id && fromMainFrameOf(e, 'app://shell');
+
+ipcMain.on(CH.gateCreate, (e, password: unknown) => {
+  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void droppedMessages++;
+  void gate.create(password);
+});
+
+ipcMain.on(CH.gateUnlock, (e, password: unknown) => {
+  if (!fromShell(e) || !gate || !(password instanceof Uint8Array)) return void droppedMessages++;
+  void gate.unlock(password);
+});
+
+ipcMain.on(CH.gatePickBackup, (e) => {
+  if (!fromShell(e) || !gate || !win || gate.state.phase !== 'create') return void droppedMessages++;
+  const g = gate;
+  void dialog.showOpenDialog(win, { title: 'Backup folder', defaultPath: g.state.backupDir, properties: ['openDirectory', 'createDirectory'] }).then((picked) => {
+    const dir = picked.filePaths[0];
+    if (!picked.canceled && dir) void g.setBackupDir(dir);
+  });
+});
+
 // The meter's two messages. They carry numbers only, and only from a known view's own main frame.
 function knownView(e: IpcMainEvent): { tab: Tab | null } | null {
   const tab = tabByContents.get(e.sender.id);
@@ -262,7 +308,8 @@ function knownView(e: IpcMainEvent): { tab: Tab | null } | null {
 }
 
 ipcMain.on(CH.meterReport, (e, numbers: unknown) => {
-  if (!knownView(e) || !meter.fromView(numbers)) droppedMessages++;
+  const from = knownView(e);
+  if (!from || !meter.fromView(numbers, from.tab ? from.tab.id : 0)) droppedMessages++;
 });
 
 ipcMain.on(CH.meterFrame, (e) => {
@@ -295,8 +342,9 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(async () => {
     const kind = !app.isPackaged ? 'dev' : LAB ? 'lab' : 'release';
     const asked = process.env['SSHAPP_SELFTEST'] ?? '';
-    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction'].includes(asked) ? asked : '';
-    if (SELFTEST === 'direction') await listDirections();
+    SELFTEST = kind !== 'release' && ['all', 'engine-must-be-refused', 'hold', 'seven', 'picture', 'direction', 'gate-unlock', 'gate-shot'].includes(asked) ? asked : '';
+    if (SELFTEST === 'direction') await listFiles('directions');
+    await listFiles('shell');
     // A lab or development run may ask for a window size (for pictures). A release build never reads this.
     const asksSize = kind !== 'release' ? /^(\d{3,4})x(\d{3,4})$/.exec(process.env['SSHAPP_WINDOW'] ?? '') : null;
     meter.start();
@@ -304,14 +352,26 @@ if (!app.requestSingleInstanceLock()) {
     const shellSession = session.fromPartition('shell', { cache: false });
     harden(shellSession);
 
-    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#0c0e10', title: 'SSH App', useContentSize: true });
+    win = new BaseWindow({ width: 1280, height: 800, minWidth: 800, minHeight: 500, backgroundColor: '#161e25', title: 'Berth', useContentSize: true });
     if (asksSize) win.setContentSize(Number(asksSize[1]), Number(asksSize[2]));
     win.setMenu(null);
     shell = new WebContentsView({ webPreferences: viewPrefs(shellSession, 'preload-shell.js', true) });
     win.contentView.addChildView(shell);
-    shell.webContents.once('did-finish-load', tellShell);
+    shell.webContents.once('did-finish-load', () => {
+      tellShell();
+      tellGate();
+    });
+    // The key process, and the lock in front of everything else.
+    const listFile = path.join(app.getPath('userData'), 'list.berth');
+    const backups = LAB_PROFILE ? path.join(LAB_PROFILE, 'backups') : path.join(app.getPath('documents'), 'Berth backups');
+    const k = new KeyProc(ENGINE_BIN, ENGINE_HASHES, listFile, () => void g.keysChanged());
+    const g = new Gate(k, tellGate, backups);
+    keys = k;
+    gate = g;
+    void k.start();
     win.on('resize', layout);
     win.on('closed', () => {
+      keys?.close();
       for (const t of tabs.values()) t.engine.close();
       win = null;
     });
@@ -319,10 +379,16 @@ if (!app.requestSingleInstanceLock()) {
     const shellLoaded = shell.webContents.loadURL('app://shell/index.html');
     // One line for whoever started the app from a terminal or a test: it is up, and what kind of build it is.
     void shellLoaded.then(() => process.stderr.write(`READY kind=${kind} ms=${Math.round(process.uptime() * 1000)}\n`));
+    // And one more once the lock knows where it stands: "create" on a first start, "locked" after that.
+    const said = setInterval(() => {
+      if (g.state.phase === 'starting') return;
+      clearInterval(said);
+      process.stderr.write(`GATE ${g.state.phase}\n`);
+    }, 50);
 
     if (SELFTEST) {
       const { runSelfTest } = await import('./selftest');
-      await runSelfTest({ shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
+      await runSelfTest({ gate: g, keys: k, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, kind, mode: SELFTEST, meter, win, dist: DIST, harden, newView: (partition: string) => {
         const ses = session.fromPartition(partition, { cache: false });
         harden(ses);
         return new WebContentsView({ webPreferences: viewPrefs(ses, 'preload-shell.js', false) });

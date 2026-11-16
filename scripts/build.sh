@@ -24,9 +24,12 @@ esb src/main/main.ts      --platform=node    --format=cjs  --target=node24    --
 esb src/tab/preload.ts    --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-tab.js
 esb src/shell/preload.ts  --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-shell.js
 esb src/tab/tab.ts        --platform=browser --format=iife --target=chrome156 --outfile=dist/tab/tab.js
-esb src/shell/shell.ts    --platform=browser --format=iife --target=chrome156 --outfile=dist/shell/shell.js
+esb src/shell/shell.tsx   --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/shell/shell.js
 cp src/tab/index.html src/tab/tab.css dist/tab/
-cp src/shell/index.html src/shell/shell.css dist/shell/
+cp src/shell/index.html dist/shell/
+# Berth's one stylesheet and its typefaces, beside every page that uses them.
+ui_into() { mkdir -p "$1/fonts"; cp src/ui/berth.css src/ui/fonts.css "$1/"; while read -r f; do [ -n "$f" ] && cp "node_modules/$f" "$1/fonts/"; done < src/ui/fonts.list; }
+ui_into dist/shell
 # The easel: a lab-only page that puts pictures of the window together. Served to no one in a release build.
 esb src/lab/preload.ts    --platform=node    --format=cjs  --target=node24    --external:electron --outfile=dist/preload-easel.js
 esb src/lab/easel.ts      --platform=browser --format=iife --target=chrome156 --outfile=dist/lab/easel.js
@@ -34,7 +37,7 @@ cp src/lab/index.html dist/lab/
 # The direction pictures: Berth's main window in its chosen direction, for approval. Lab only.
 mkdir -p dist/directions/fonts
 esb src/directions/app.tsx --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/directions/directions.js
-cp src/directions/index.html src/directions/directions.css src/directions/fonts.css dist/directions/
-while read -r f; do [ -n "$f" ] && cp "node_modules/$f" dist/directions/fonts/; done < src/directions/fonts.list
+cp src/directions/index.html dist/directions/
+ui_into dist/directions
 
 echo "build: done"
