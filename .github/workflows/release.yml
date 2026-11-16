@@ -1,0 +1,154 @@
+name: Release
+
+# Nothing here runs by itself and nothing here goes public. It is started by hand on main, with the version
+# asked for, and what comes out is a DRAFT release with the zip attached: GitHub makes no tag and shows
+# nothing to anyone until someone presses Publish on it. Deleting the draft undoes the whole run.
+#
+# Before it builds anything it checks that CI already passed on the commit it is standing on.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version, like 0.1.0"
+        required: true
+      confirm:
+        description: "The same version again"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Linux builds it first, so Windows has something to be compared with.
+  agree:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      win32: ${{ steps.report.outputs.win32 }}
+    steps:
+      - name: The two versions must be the same, and this must be main
+        env:
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+        run: |
+          [ "$VERSION" = "$CONFIRM" ] || { echo "::error::The two versions are not the same: '$VERSION' and '$CONFIRM'."; exit 1; }
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "::error::'$VERSION' is not a version like 0.1.0."; exit 1; }
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::A release is made from main, not from $REF."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: CI already passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs[] | "\(.name) \(.conclusion)"')
+          echo "$runs"
+          for job in checks lab vuln; do
+            printf '%s\n' "$runs" | grep -qx "$job success" || { echo "::error::CI's $job job did not pass on $SHA. Nothing is released from a commit CI has not approved."; exit 1; }
+          done
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the pinned packages (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: Electron's binary, checked against the checksums inside its package
+        run: node node_modules/electron/install.js
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: Build
+        run: bash scripts/build.sh
+      - name: The four packages, fuses and integrity read back
+        run: node scripts/package.mjs
+      - name: What was built, for the second builder to compare
+        id: report
+        run: |
+          echo "win32=$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')" >> "$GITHUB_OUTPUT"
+
+  # Windows builds the same commit again, must come out with the same bytes, proves the packages and the
+  # install, and leaves the zip on a draft release.
+  windows:
+    needs: agree
+    runs-on: windows-2025
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the pinned packages (no install scripts)
+        run: npm ci --ignore-scripts
+      - name: The pinned Go toolchain
+        run: bash scripts/get-go.sh
+      - name: The engine's tests on Windows
+        run: |
+          source scripts/env.sh
+          cd engine && go vet ./... && go test -count=1 ./...
+      - name: Build
+        run: bash scripts/build.sh
+      - name: The Windows packages, built here
+        run: node scripts/package.mjs win32
+      - name: A second builder agrees with the first
+        env:
+          LINUX_BUILT: ${{ needs.agree.outputs.win32 }}
+        run: |
+          here="$(node -e 'const r=require("./out/report.json");console.log(JSON.stringify({archive:r.archive.sha256,lab:r.packages["ssh-app-win32-x64-lab"].manifestSha256,release:r.packages["ssh-app-win32-x64-release"].manifestSha256}))')"
+          echo "built on Linux:   $LINUX_BUILT"
+          echo "built on Windows: $here"
+          [ -n "$LINUX_BUILT" ] && [ "$here" = "$LINUX_BUILT" ] || { echo "::error::The two builders made different Windows packages. Nothing is released."; exit 1; }
+      - name: The Windows packages, run
+        run: node scripts/smoke-windows.mjs
+      - name: The zip
+        run: node scripts/release.mjs "${{ inputs.version }}"
+      - name: The install proof, for real, on this machine
+        run: node scripts/smoke-install.mjs
+      - name: The draft release, with the zip on it
+        env:
+          GH_TOKEN: ${{ secrets.SSHAPP_MERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          zip="$(node -e 'const r=require("./out/release.json");console.log(r.zip)')"
+          sum="$(node -e 'const r=require("./out/release.json");console.log(r.sha256)')"
+          archive="$(node -e 'const r=require("./out/release.json");console.log(r.archiveSha256)')"
+          engine="$(node -e 'const r=require("./out/release.json");console.log(r.engineSha256)')"
+          files="$(node -e 'const r=require("./out/release.json");console.log(r.files)')"
+          if gh release view "v$VERSION" -R "$REPO" >/dev/null 2>&1; then
+            echo "::error::A release v$VERSION is already there. Delete it, or pick another version."
+            exit 1
+          fi
+          {
+            echo "Built twice, on Linux and on Windows, from $SHA. Both builders came out with the same bytes."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| zip | \`$sum\` |"
+            echo "| app archive | \`$archive\` |"
+            echo "| engine | \`$engine\` |"
+            echo "| files in app\\\\ | $files, each one named in app.manifest with its own sha256 |"
+            echo
+            echo "Unpack the zip, then, in a PowerShell started with Run as administrator, from inside the folder:"
+            echo
+            echo '```'
+            echo 'powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check'
+            echo 'powershell -ExecutionPolicy Bypass -File .\install.ps1'
+            echo '```'
+            echo
+            echo "The first one checks every file and writes nothing. Nothing here is signed, so Smart App Control"
+            echo "blocks it while it is on; the install script reads that setting and says what it found."
+          } > notes.md
+          gh release create "v$VERSION" "out/$zip" -R "$REPO" --draft --target "$SHA" --title "$VERSION" --notes-file notes.md
+          echo "A draft release v$VERSION is waiting. GitHub makes the tag only when it is published."

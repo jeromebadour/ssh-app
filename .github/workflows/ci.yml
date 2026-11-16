@@ -155,6 +155,11 @@ jobs:
       - name: The Windows packages, run
         run: node scripts/smoke-windows.mjs
 
+      - name: The release zip, and the install proof
+        run: |
+          node scripts/release.mjs 0.0.0-ci
+          node scripts/smoke-install.mjs
+
   # GitHub offers no ruleset for a private repo on the free plan, so nothing there blocks a direct push to main.
   # This job makes one loud: on main, the commit must be the merge of a pull request, or the run fails.
   from-a-pull-request:

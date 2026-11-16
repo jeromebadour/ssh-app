@@ -18,3 +18,4 @@
 2026-11-16: the paste path: the clipboard read by main for a key or click it saw, and the preview, on Windows.
 2026-11-16: addresses a box prints: a plain click opens nothing, Ctrl+click asks first, on Windows.
 2026-11-16: Edit box, Forget its identity and Delete box, driven by hand, on Windows.
+2026-11-16: the installer: the release zip unpacked, install.ps1 and uninstall.ps1 driven for real on Windows.
