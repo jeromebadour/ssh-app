@@ -157,29 +157,9 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 	a := &attempt{phase: Connecting, onPhase: opt.OnPhase}
 	a.tell(Connecting)
 
-	dialCtx, cancel := context.WithTimeout(ctx, d.Connect)
-	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", t.Addr)
-	timedOut := dialCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
-	cancel()
-	if err != nil {
-		switch {
-		case ctx.Err() != nil:
-			return nil, &Error{Cause: Cancelled, Phase: Connecting, Err: ctx.Err()}
-		case timedOut:
-			return nil, &Error{Cause: TimedOut, Phase: Connecting, Err: err}
-		case errors.Is(err, syscall.ECONNREFUSED) || isErrno(err, 10061):
-			return nil, &Error{Cause: Refused, Phase: Connecting, Err: err}
-		case errors.Is(err, syscall.ECONNRESET) || isErrno(err, 10054):
-			return nil, &Error{Cause: Reset, Phase: Connecting, Err: err}
-		default:
-			return nil, &Error{Cause: Unreachable, Phase: Connecting, Err: err}
-		}
-	}
-	tcp := raw.(*net.TCPConn)
-	// The operating system's own patience with a silent link: what ends a link that never comes back (B8).
-	if err := patience.Set(tcp, patience.Default); err != nil {
-		_ = tcp.Close()
-		return nil, &Error{Cause: Protocol, Phase: Connecting, Err: err}
+	tcp, oerr := openTCP(ctx, t.Addr, d.Connect)
+	if oerr != nil {
+		return nil, oerr
 	}
 	a.conn = tcp
 	if testHookConnected != nil {
@@ -251,6 +231,36 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 	return l, nil
 }
 
+// openTCP opens the raw connection within its deadline, with the operating system's patience set on it, or
+// says exactly why not.
+func openTCP(ctx context.Context, addr string, limit time.Duration) (*net.TCPConn, *Error) {
+	dialCtx, cancel := context.WithTimeout(ctx, limit)
+	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", addr)
+	timedOut := dialCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
+	cancel()
+	if err != nil {
+		switch {
+		case ctx.Err() != nil:
+			return nil, &Error{Cause: Cancelled, Phase: Connecting, Err: ctx.Err()}
+		case timedOut:
+			return nil, &Error{Cause: TimedOut, Phase: Connecting, Err: err}
+		case errors.Is(err, syscall.ECONNREFUSED) || isErrno(err, 10061):
+			return nil, &Error{Cause: Refused, Phase: Connecting, Err: err}
+		case errors.Is(err, syscall.ECONNRESET) || isErrno(err, 10054):
+			return nil, &Error{Cause: Reset, Phase: Connecting, Err: err}
+		default:
+			return nil, &Error{Cause: Unreachable, Phase: Connecting, Err: err}
+		}
+	}
+	tcp := raw.(*net.TCPConn)
+	// The operating system's own patience with a silent link: what ends a link that never comes back (B8).
+	if err := patience.Set(tcp, patience.Default); err != nil {
+		_ = tcp.Close()
+		return nil, &Error{Cause: Protocol, Phase: Connecting, Err: err}
+	}
+	return tcp, nil
+}
+
 // Details says what was agreed with the box.
 func (l *Link) Details() Details { return l.details }
 
@@ -283,6 +293,7 @@ type attempt struct {
 	ended   Cause // set by a timer or a cancel: why we closed the connection ourselves
 	endedIn Phase
 	got     ssh.PublicKey
+	seen    ssh.PublicKey // Identify: the key the box proved it holds
 	wire    *wire
 	signErr error // our signer failed: the cause is on our side, whatever the library then reports
 	onPhase func(Phase)
@@ -375,6 +386,15 @@ func (a *attempt) end(cause Cause) {
 	_ = a.conn.Close()
 }
 
+// stop ends the phase timer: the attempt is over and nothing more may close the connection for it.
+func (a *attempt) stop() {
+	a.mu.Lock()
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+	a.mu.Unlock()
+}
+
 // finish marks the link up and stops the timer. False if the attempt was already ended by us.
 func (a *attempt) finish() bool {
 	a.mu.Lock()
@@ -410,7 +430,8 @@ func (a *attempt) explain(err error) *Error {
 	case signErr != nil:
 		return &Error{Cause: NoSignature, Phase: phase, Err: signErr}
 	case errors.As(err, &neg):
-		return &Error{Cause: WeakOffer, Phase: phase, What: whatOf(neg.What), Ours: neg.RequestedAlgorithms, Box: neg.SupportedAlgorithms, Err: err}
+		// For a client the library calls our own list "supported" and the box's "requested".
+		return &Error{Cause: WeakOffer, Phase: phase, What: whatOf(neg.What), Ours: neg.SupportedAlgorithms, Box: neg.RequestedAlgorithms, Err: err}
 	case phase == SigningIn && strings.Contains(err.Error(), "unable to authenticate"):
 		return &Error{Cause: SignInFailed, Phase: phase, Err: err}
 	}
