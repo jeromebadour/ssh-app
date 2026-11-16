@@ -3,17 +3,37 @@
 //   ?scene=dialog    the "close a tab with a running command" dialog is open
 //   ?scene=paths     the path bar's pinned and recent folders are open
 //   ?scene=boxes     the Boxes menu is open
+// Step 2's screens (screens.tsx), and a tab in each connection state:
+//   ?scene=create | unlock | wrong       the password, before anything else exists
+//   ?scene=addbox | trust | changed      Add box, the first-connection check, a changed identity
+//   ?scene=connecting | fresh            a new tab opening, then just signed in (the sign-in text folded)
+//   ?scene=noanswer | dropped            a silent link kept; a link that is gone, reconnecting
 import { render } from 'preact';
 import { blocks, files, groups, logCmd, logLines, pins, prompt, recent, tabGroups, type Box, type FileRow } from './data';
 import { Glyph } from './glyphs';
 import { Mark } from './marks';
+import { AddBoxDialog, ChangedDialog, CreateScreen, TrustDialog, UnlockScreen } from './screens';
 
 const q = new URLSearchParams(location.search);
 const scene = q.get('scene') ?? '';
 // In the logs picture the logs tab is the one in front.
 if (scene === 'logs') for (const g of tabGroups) for (const t of g.tabs) t.active = g.box === 'relay-fra' && t.place === 'logs';
+// A new tab on relay-fra, its staging place, opening and then just opened. Then one tab in each link state.
+const tabOf = (box: string, place: string) => tabGroups.find((g) => g.box === box)?.tabs.find((t) => t.place === place);
+if (scene === 'connecting' || scene === 'fresh') {
+  for (const g of tabGroups) for (const t of g.tabs) t.active = false;
+  tabGroups.find((g) => g.box === 'relay-fra')?.tabs.push(scene === 'connecting' ? { place: 'staging', active: true, state: 'connecting' } : { place: 'staging', active: true });
+}
+const linkStates: Record<string, [string, string, 'silent' | 'gone' | 'stopped']> = { noanswer: ['relay-fra', 'deploy', 'silent'], dropped: ['relay-fra', 'deploy', 'gone'], changed: ['vault-ams', 'backups', 'stopped'] };
+const ls = linkStates[scene];
+if (ls) {
+  const t = tabOf(ls[0], ls[1]);
+  if (t) t.state = ls[2];
+}
+const activeTab = tabGroups.flatMap((g) => g.tabs).find((t) => t.active);
+const tabState = activeTab?.state;
 
-const stateWords: Record<Box['state'], string> = { connected: 'connected', reconnecting: 'reconnecting', idle: 'not open' };
+const stateWords: Record<string, string> = { connected: 'connected', reconnecting: 'reconnecting', idle: 'not open', connecting: 'connecting', silent: 'no answer', gone: 'gone', stopped: 'stopped' };
 
 // The Boxes menu: your saved boxes, one line each, like a sessions menu. A box with places shows an arrow; its
 // places open beside it on hover. Typing while the menu is open filters it (no field until you type).
@@ -49,11 +69,14 @@ function TabBar() {
           <div class={`tab-group st-${g.state}`} key={g.box} style={{ '--hue': g.hue }}>
             {g.tabs.map((t) => (
               <span class={`tab ${t.active ? 'active' : ''}`} key={t.place}>
-                <span class={`conn conn-${g.state}`} title={stateWords[g.state]} />
+                <span class={`conn conn-${t.state ?? g.state}`} title={stateWords[t.state ?? g.state]} />
                 <span class="tab-box">{g.box}</span>
                 <span class="tab-place">{t.place}</span>
                 <span class="tab-end">
-                  {t.signal === 'running' && <span class="sig sig-running">1:42</span>}
+                  {t.state === 'silent' && <span class="sig sig-silent">14 s</span>}
+                  {t.state === 'gone' && <span class="sig sig-silent">4 s</span>}
+                  {t.state === 'stopped' && <Glyph name="identityBroken" class="sig sig-stopped" label="identity changed" />}
+                  {!t.state && t.signal === 'running' && <span class="sig sig-running">1:42</span>}
                   {t.signal === 'output' && <span class="sig sig-output" title="new output" />}
                   {t.signal === 'done' && <Glyph name="check" class="sig sig-done" label="command finished" />}
                   <Glyph name="close" class="tab-x" label="Close tab" />
@@ -125,7 +148,9 @@ function FilePanel() {
         <span class="fh-size">Size</span>
         <span class="fh-date sorted">Modified</span>
       </div>
-      <div class="file-rows">
+      {scene === 'connecting' ? (
+        <div class="file-rows waiting-rows"><span class="op-spin" />Lists /srv/staging as soon as the sign-in is done</div>
+      ) : <div class="file-rows">
         {files.map((f) => (
           <div class={`file ${f.selected ? 'selected' : ''} ${f.fresh ? 'fresh' : ''} k-${f.kind}`} key={f.name}>
             <FileIcon row={f} />
@@ -134,8 +159,8 @@ function FilePanel() {
             <span class="f-date">{f.modified ?? ''}</span>
           </div>
         ))}
-      </div>
-      <div class="transfers">
+      </div>}
+      {!['connecting', 'fresh', 'dropped'].includes(scene) && <div class="transfers">
         <div class="xfer done">
           <Glyph name="upload" class="x-dir act-input" />
           <div class="x-main">
@@ -152,10 +177,10 @@ function FilePanel() {
             <div class="x-line small"><span>3.1 MB/s</span><span>under a second left</span><button class="x-stop" aria-label="Cancel"><Glyph name="stop" /></button></div>
           </div>
         </div>
-      </div>
+      </div>}
       <div class="file-foot">
-        <span>{files.length - 1} items, 1 selected, 48.6 MB</span>
-        <span class="free">61.2 GB free</span>
+        {scene === 'connecting' ? <span>waiting for the link</span> : scene === 'dropped' ? <span class="held">as it was at 19:44:07, read only until the new session</span> : <span>{files.length - 1} items, 1 selected, 48.6 MB</span>}
+        {scene !== 'connecting' && scene !== 'dropped' && <span class="free">61.2 GB free</span>}
       </div>
     </section>
   );
@@ -204,11 +229,92 @@ function paint(line: string) {
   return parts;
 }
 
+// What the tab says about its link, inside the terminal, above the output. The output itself stays as it was:
+// readable and copyable whatever the link does.
+function LinkBar() {
+  if (tabState === 'silent') {
+    return (
+      <div class="linkbar problem">
+        <Glyph name="silent" />
+        <span class="lb-main"><b>No answer for 14 s.</b> The link is kept: the shell and the deploy are still running on the box.</span>
+        <span class="lb-aside">ends by itself only after 10 min of silence</span>
+        <button class="lb-btn"><Glyph name="reconnect" />Reconnect<kbd>R</kbd></button>
+      </div>
+    );
+  }
+  if (tabState === 'gone') {
+    return (
+      <div class="linkbar problem">
+        <Glyph name="reconnect" />
+        <span class="lb-main"><b>The link is gone:</b> the connection was reset at 19:44:07. The deploy running in this tab ended with it. A new session opens in 4 s, in /srv/staging.</span>
+        <button class="lb-btn"><Glyph name="reconnect" />Now<kbd>R</kbd></button>
+        <button class="lb-btn quiet"><Glyph name="stop" />Cancel</button>
+      </div>
+    );
+  }
+  return null;
+}
+
+// A tab opening: each stage as it happens, with what was agreed; nothing typed, nothing guessed.
+function Opening() {
+  return (
+    <div class="opening">
+      <div class="op-title"><span class="box-dot" style={{ '--hue': 'var(--box-1)' }} />Opening relay-fra, staging</div>
+      <div class="op-row done"><Glyph name="check" /><span class="op-what">Connected to 203.0.113.24:22</span><span class="op-detail">38 ms</span></div>
+      <div class="op-row done"><Glyph name="check" /><span class="op-what">Identity matches the one pinned for relay-fra</span><span class="op-detail">ED25519</span></div>
+      <div class="op-row done"><Glyph name="check" /><span class="op-what">Keys agreed, post-quantum</span><span class="op-detail">mlkem768x25519, aes256-gcm</span></div>
+      <div class="op-row now"><span class="op-spin" /><span class="op-what">Signing in as root with Berth's key for relay-fra</span><span class="op-detail">0.2 s</span></div>
+      <div class="op-row later"><span class="op-dot" /><span class="op-what">Shell in /srv/staging</span></div>
+    </div>
+  );
+}
+
+// The sign-in text a box prints, folded into one quiet line: nothing a box says is lost, and a real notice in
+// it (a restart needed) is lifted out onto the line.
+function SaysLine() {
+  return (
+    <div class="says">
+      <Glyph name="says" />
+      <span class="says-main">relay-fra said 18 lines at sign-in</span>
+      <span class="says-flag">*** System restart required ***</span>
+      <Glyph name="chevron" class="says-open" />
+    </div>
+  );
+}
+
 function Terminal() {
+  if (scene === 'connecting') {
+    return (
+      <section class="term" aria-label="Terminal on relay-fra">
+        <div class="term-frame waiting"><Opening /></div>
+      </section>
+    );
+  }
+  if (scene === 'fresh') {
+    return (
+      <section class="term" aria-label="Terminal on relay-fra">
+        <div class="term-frame top">
+          <SaysLine />
+          <div class="block">
+            <div class="gutter"><span class="g-mark" /><span class="g-time">0.0 s</span></div>
+            <div class="block-body">
+              <div class="line cmd"><Prompt />ls</div>
+              <div class="line">current  deploy-4f2c1a9.log  ledger-4e91b07.tar.gz  ledger-4f2c1a9.tar.gz  releases  rollback</div>
+            </div>
+          </div>
+          <div class="block">
+            <div class="gutter"><span class="g-mark now" /></div>
+            <div class="block-body"><div class="line cmd"><Prompt /><span class="cursor" /></div></div>
+          </div>
+        </div>
+      </section>
+    );
+  }
   if (scene === 'logs') {
     return (
       <section class="term" aria-label="Terminal on relay-fra">
-        <div class="term-frame">
+        <div class={`term-frame ${tabState ? 'linked-' + tabState : ''}`}>
+          <LinkBar />
           <div class="scrolled-out">older output scrolled out</div>
           <div class="block running">
             <div class="gutter"><span class="g-mark" /><span class="g-time">6:10</span></div>
@@ -223,20 +329,21 @@ function Terminal() {
   }
   return (
     <section class="term" aria-label="Terminal on relay-fra">
-      <div class="term-frame">
+      <div class={`term-frame ${tabState ? 'linked-' + tabState : ''}`}>
+        <LinkBar />
         <div class="scrolled-out">older output scrolled out</div>
         {blocks.map((b, i) => (
-          <div class={`block ${b.running ? 'running' : ''}`} key={i}>
+          <div class={`block ${b.running ? (tabState === 'gone' ? 'ended' : 'running') : ''}`} key={i}>
             <div class="gutter">
               <span class="g-mark" />
-              <span class="g-time">{b.running ?? b.took}</span>
+              <span class="g-time">{b.running && tabState === 'gone' ? 'ended 4:09' : b.running ?? b.took}</span>
             </div>
             <div class="block-body">
               <div class="line cmd"><Prompt />{b.cmd}</div>
               {b.out.map(([cls, text], j) => (
                 <div class={`line ${cls}`} key={j}>{text}</div>
               ))}
-              {b.running && <div class="line"><span class="cursor" /></div>}
+              {b.running && tabState !== 'gone' && <div class="line"><span class="cursor" /></div>}
             </div>
           </div>
         ))}
@@ -246,12 +353,16 @@ function Terminal() {
 }
 
 function StatusBar() {
+  const place = activeTab?.place ?? 'deploy';
+  const conn = tabState === 'silent' ? 'silent' : tabState === 'gone' ? 'gone' : tabState === 'connecting' ? 'connecting' : 'connected';
+  const rtt = tabState === 'silent' ? 'no answer for 14 s' : tabState === 'gone' ? 'reset at 19:44:07' : tabState === 'connecting' ? 'signing in' : scene === 'fresh' ? 'round trip 251 ms, post-quantum' : 'round trip 248 ms';
+  const last = scene === 'fresh' ? 'Opened relay-fra, staging, in 0.9 s' : scene === 'dropped' ? 'relay-fra, deploy: the link was reset, new session in 4 s' : 'Uploaded ledger-4f2c1a9.tar.gz, sha-256 match, 4.2 s';
   return (
     <footer class="status">
-      <span class="s-conn"><span class="conn conn-connected" />relay-fra, deploy</span>
-      <span class="s-rtt">round trip 248 ms</span>
+      <span class={`s-conn st-${conn}`}><span class={`conn conn-${conn}`} />relay-fra, {place}</span>
+      <span class={`s-rtt ${tabState === 'silent' || tabState === 'gone' ? 'problem' : ''}`}>{rtt}</span>
       <span class="s-key"><Glyph name="key" />key made by Berth, ed25519</span>
-      <span class="s-last"><Glyph name="check" class="act-checked" />Uploaded ledger-4f2c1a9.tar.gz, sha-256 match, 4.2 s</span>
+      <span class="s-last">{scene !== 'dropped' && <Glyph name="check" class="act-checked" />}{last}</span>
       <span class="s-size">132 x 38</span>
     </footer>
   );
@@ -277,6 +388,8 @@ function CloseDialog() {
 }
 
 function Window() {
+  if (scene === 'create') return <CreateScreen />;
+  if (scene === 'unlock' || scene === 'wrong') return <UnlockScreen wrong={scene === 'wrong'} />;
   return (
     <div class="window">
       <TabBar />
@@ -287,6 +400,9 @@ function Window() {
       </div>
       <StatusBar />
       {scene === 'dialog' && <CloseDialog />}
+      {scene === 'addbox' && <AddBoxDialog />}
+      {scene === 'trust' && <TrustDialog />}
+      {scene === 'changed' && <ChangedDialog />}
     </div>
   );
 }

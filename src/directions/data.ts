@@ -34,7 +34,7 @@ export interface TabGroup {
   box: string;
   hue: string;
   state: BoxState;
-  tabs: { place: string; active?: boolean; signal?: 'output' | 'done' | 'waiting' | 'running' }[];
+  tabs: { place: string; active?: boolean; signal?: 'output' | 'done' | 'waiting' | 'running'; state?: 'connecting' | 'silent' | 'gone' | 'stopped' }[];
 }
 
 export const tabGroups: TabGroup[] = [

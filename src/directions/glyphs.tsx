@@ -41,6 +41,18 @@ const shapes: Record<string, JSX.Element> = {
   files: <><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /></>,
   reopen: <><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2" /><path d="M3.5 3v2.5H6" /></>,
   chevron: <path d="M6 4.5l3.5 3.5L6 11.5" />,
+  // Step 2's screens.
+  lock: <><rect x="3.5" y="7" width="9" height="6.5" rx="1.25" /><path d="M5.5 7V5.25a2.5 2.5 0 0 1 5 0V7" /><path d="M8 9.75v1.25" /></>,
+  identity: <><path d="M8 2.5l4.5 1.75v3.5c0 2.75-1.9 4.9-4.5 5.75-2.6-.85-4.5-3-4.5-5.75v-3.5z" /><path d="M6 8l1.5 1.5L10.25 6.75" /></>,
+  identityBroken: <><path d="M8 2.5l4.5 1.75v3.5c0 2.75-1.9 4.9-4.5 5.75-2.6-.85-4.5-3-4.5-5.75v-3.5z" /><path d="M8 5.75v3M8 10.75v.25" /></>,
+  paste: <><rect x="4" y="3.5" width="8" height="10" rx="1" /><path d="M6.25 3.5V2.75h3.5v.75M6 7.5h4M6 10h2.5" /></>,
+  folderPick: <><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z" /><path d="M8 8v3M6.5 9.5h3" /></>,
+  reconnect: <><path d="M12.5 8a4.5 4.5 0 0 1-7.7 3.2M3.5 8a4.5 4.5 0 0 1 7.7-3.2" /><path d="M11.5 2.5v2.5H9M4.5 13.5V11H7" /></>,
+  silent: <><path d="M2.5 11.5h2M6 11.5V9M9 11.5V6.5M12.5 11.5V4" /></>,
+  edit: <><path d="M3.5 12.5l.75-3 6.5-6.5 2.25 2.25-6.5 6.5z" /><path d="M9.5 4.25l2.25 2.25" /></>,
+  place: <><path d="M8 13.5s4-3.6 4-7a4 4 0 0 0-8 0c0 3.4 4 7 4 7z" /><circle cx="8" cy="6.5" r="1.5" /></>,
+  fileKey: <><path d="M4 2.5h6l2.5 2.5v8.5H4z" /><circle cx="7" cy="9.75" r="1.25" /><path d="M8.1 9.1l2.2-2.1M9.5 7.75l.75.75" /></>,
+  says: <><path d="M3 4h10v6.5H7l-3 2.5v-2.5H3z" /></>,
 };
 
 export function Glyph(props: { name: keyof typeof shapes | string; class?: string; label?: string }) {
