@@ -420,3 +420,17 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .places-head span:first-child { width: calc(11ch + 24px); }
 .row-check { padding-left: calc(11ch + 34px); }
 .kb-sep { width: 1px; height: 10px; margin: 0 6px; background: var(--line); }
+
+/* ---------- real fields: an input inside the drawn field ---------- */
+.input input { all: unset; flex: 1; min-width: 0; height: 100%; font: inherit; color: inherit; caret-color: var(--text); }
+.input input[type='password'] { letter-spacing: 2px; font-size: 15px; }
+.input input::placeholder { color: var(--text-3); letter-spacing: 0; font-size: 13px; }
+.input:focus-within { border-color: var(--main); box-shadow: 0 0 0 3px color-mix(in srgb, var(--main) 18%, transparent); }
+.input.wrong:focus-within { border-color: var(--problem); box-shadow: 0 0 0 3px color-mix(in srgb, var(--problem) 16%, transparent); }
+.pick:focus-visible, .gate .btn:focus-visible, .tab-close:focus-visible, .new-tab:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+.gate-go { display: flex; flex-direction: column; gap: 8px; }
+.gate-go .to-fix { margin: 0; }
+.gate-center { justify-content: center; }
+.gate-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
+.tab-close { display: grid; place-items: center; }
+.tabbar.scaffold { height: 44px; }

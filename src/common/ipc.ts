@@ -10,7 +10,35 @@ export const CH = {
   tabShown: 'tab:shown', // main to tab view: you were just brought to the front
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
+  // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
+  gateState: 'gate:state', // main to shell view: where the lock is
+  gateCreate: 'gate:create', // shell view to main: the first password (Uint8Array), to make the list
+  gateUnlock: 'gate:unlock', // shell view to main: the password (Uint8Array)
+  gatePickBackup: 'gate:pick-backup', // shell view to main: open the system's folder chooser for the backup folder
 } as const;
+
+// A password is at least this many characters (counted as the key process counts them) and at most this many bytes.
+export const PASSWORD_MIN = 12;
+export const PASSWORD_MAX_BYTES = 1024;
+
+export type GatePhase =
+  | 'starting' // the key process has not answered yet
+  | 'create' // no list yet: the first start
+  | 'locked' // a list is there: the password opens it
+  | 'working' // a password is being worked on (about a second, on purpose)
+  | 'unlocked'
+  | 'damaged' // the list cannot be read; detail says how
+  | 'fault'; // the key process is not there; detail says why
+
+export interface GateState {
+  phase: GatePhase;
+  wrong: boolean; // the last password was wrong
+  waitMs: number; // how long, from when this was sent, until the next password is looked at
+  backupDir: string; // create: where backups will be written
+  backupOk: boolean; // create: that folder can be written to
+  detail: string;
+  hasPrevious: boolean; // damaged: the copy saved before this one is there
+}
 
 export const INPUT_MAX = 64 * 1024;
 export const TABS_MAX = 12;
@@ -50,6 +78,10 @@ export interface ShellPort {
   readonly sandboxed: boolean;
   cmd(c: ShellCmd): void;
   onState(cb: (s: ShellState) => void): void;
+  onGate(cb: (g: GateState) => void): void;
+  gateCreate(password: Uint8Array): void;
+  gateUnlock(password: Uint8Array): void;
+  gatePickBackup(): void;
   meter(n: ViewNumbers): void;
   frame(): void;
 }

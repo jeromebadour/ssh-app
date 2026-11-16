@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { CH, type ShellCmd, type ShellPort, type ShellState } from '../common/ipc';
+import { CH, type GateState, type ShellCmd, type ShellPort, type ShellState } from '../common/ipc';
 
 const port: ShellPort = {
   sandboxed: process.sandboxed === true,
@@ -8,6 +8,18 @@ const port: ShellPort = {
   },
   onState(cb) {
     ipcRenderer.on(CH.shellState, (_e, s: ShellState) => cb(s));
+  },
+  onGate(cb) {
+    ipcRenderer.on(CH.gateState, (_e, g: GateState) => cb(g));
+  },
+  gateCreate(password) {
+    ipcRenderer.send(CH.gateCreate, password);
+  },
+  gateUnlock(password) {
+    ipcRenderer.send(CH.gateUnlock, password);
+  },
+  gatePickBackup() {
+    ipcRenderer.send(CH.gatePickBackup);
   },
   meter(n) {
     ipcRenderer.send(CH.meterReport, { longTaskMs: Number(n.longTaskMs), reactionMs: Number(n.reactionMs) });

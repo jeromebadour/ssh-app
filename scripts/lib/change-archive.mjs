@@ -3,7 +3,7 @@
 // (where Electron has no such check) as the control that still starts.
 //
 //   node scripts/lib/change-archive.mjs <app.asar> index   one hex digit of a recorded hash, inside the index
-//   node scripts/lib/change-archive.mjs <app.asar> file    one letter inside a comment of dist/shell/shell.css
+//   node scripts/lib/change-archive.mjs <app.asar> file    one letter inside a comment of dist/shell/berth.css
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -21,13 +21,14 @@ export async function changeArchive(file, what) {
     at = 16 + Buffer.byteLength(header.slice(0, hash + 8), 'utf8');
     bytes[at] = bytes[at] === 0x30 ? 0x31 : 0x30; // another hex digit
   } else if (what === 'file') {
-    const css = JSON.parse(header).files.dist.files.shell.files['shell.css'];
+    const css = JSON.parse(header).files.dist.files.shell.files['berth.css'];
+    if (!css) throw new Error('change-archive: dist/shell/berth.css is not in the archive');
     const start = 8 + blockLen + Number(css.offset);
     const text = bytes.subarray(start, start + css.size).toString('utf8');
-    const word = text.indexOf('Scaffolding');
-    if (word < 0) throw new Error('change-archive: the comment in shell.css was not found');
+    const word = text.indexOf("Berth's main window");
+    if (word < 0) throw new Error('change-archive: the comment in berth.css was not found');
     at = start + word;
-    bytes[at] = 0x73; // "scaffolding": a letter in a comment
+    bytes[at] = 0x62; // "berth's": a letter in a comment
   } else throw new Error('change-archive: say index or file');
   await writeFile(file, bytes);
   return at;

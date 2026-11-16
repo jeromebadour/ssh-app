@@ -1,66 +1,7 @@
-// Step 2's screens, in direction A, for Kami's yes or no: the password (first start and every start), Add box,
-// the first-connection check, and the stop when a box's identity changed. Built from the same components as the
+// Step 2's dialogs, in direction A, as approved 2026-11-16: Add box, the first-connection check, and the stop when
+// a box's identity changed. (The password screens are the real app's now: src/ui/gate.tsx.) Built from the same components as the
 // main window; invented data only (documentation addresses, made-up names).
-import { Glyph } from './glyphs';
-import { Mark } from './marks';
-
-// ---------------------------------------------------------------- the password: the only screen before unlock
-
-// First start: make the password. Typed twice; the rule shows as it is met; the backup folder is chosen here so
-// that backups exist from the first save. One fact is said, because it costs more than it seems: no recovery.
-export function CreateScreen() {
-  return (
-    <div class="gate">
-      <div class="gate-card">
-        <div class="gate-brand"><Mark /><span class="wordmark">Berth</span></div>
-        <h1 class="gate-title">Make your password</h1>
-        <p class="gate-lead">It locks your boxes and their keys. Berth asks for it at every start, and nowhere else.</p>
-        <label class="field">
-          <span class="field-label"><Glyph name="lock" />Password</span>
-          <span class="input filled"><span class="dots">{'\u2022'.repeat(18)}</span></span>
-          <span class="check check-ok"><Glyph name="ok" />18 characters: 12 or more</span>
-        </label>
-        <label class="field">
-          <span class="field-label"><Glyph name="lock" />Again</span>
-          <span class="input filled focus"><span class="dots">{'\u2022'.repeat(18)}</span><span class="caret-bar" /></span>
-          <span class="check check-ok"><Glyph name="ok" />the same as above</span>
-        </label>
-        <label class="field">
-          <span class="field-label"><Glyph name="folderPick" />Backup folder</span>
-          <span class="input picker"><span class="path">D:\Backups\Berth</span><button class="pick"><Glyph name="folder" />Choose</button></span>
-          <span class="check check-ok"><Glyph name="ok" />writable; a copy is written there at every change</span>
-        </label>
-        <p class="gate-fact">A forgotten password cannot be recovered. A backup opens only with the password it was saved under.</p>
-        <button class="btn primary wide"><Glyph name="lock" />Lock with this password</button>
-      </div>
-    </div>
-  );
-}
-
-// Every start: the mark and one field. No box name, no tab, no count.
-export function UnlockScreen(props: { wrong?: boolean }) {
-  return (
-    <div class="gate">
-      <div class="gate-card narrow">
-        <div class="gate-brand big"><Mark /><span class="wordmark">Berth</span></div>
-        <label class="field">
-          <span class="field-label"><Glyph name="lock" />Password</span>
-          <span class={`input filled ${props.wrong ? 'wrong focus-wrong' : 'focus'}`}>{props.wrong ? <><span class="caret-bar first" /><span class="example">Password</span></> : <><span class="dots">{'\u2022'.repeat(16)}</span><span class="caret-bar" /></>}</span>
-          <span class="check check-hint kb"><Glyph name="name" />typing in English (US)<span class="kb-sep" />Caps Lock off</span>
-        </label>
-        {props.wrong ? (
-          <>
-            <span class="check check-fix gate-check"><Glyph name="fix" />Wrong password.</span>
-            <button class="btn primary wide waiting"><span class="wait-ring" />Wait 2 s</button>
-          </>
-        ) : (
-          <button class="btn primary wide"><Glyph name="lock" />Unlock</button>
-        )}
-        <p class="gate-saved">{props.wrong ? 'Second wrong try. Each one doubles the wait, up to 30 s.' : ''}</p>
-      </div>
-    </div>
-  );
-}
+import { Glyph } from '../ui/glyphs';
 
 // ---------------------------------------------------------------- dialogs over the main window
 

@@ -8,3 +8,4 @@
 2026-11-16: the engine program for real (its tests start the built program on Windows).
 2026-11-16: the list on disk (replacing a file whole, as Windows does it).
 2026-11-16: the key process (its tests start the built program and write the list on a Windows disk).
+2026-11-16: the lock: the key process started by the app, the password screens, on Windows.
