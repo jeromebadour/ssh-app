@@ -291,3 +291,34 @@ func TestTheKeyProcessAnswersItsHeartbeatAndTakesNoOtherFrames(t *testing.T) {
 		t.Fatalf("a key process with no full path for the list: %#x %s", f.Type, f.Body)
 	}
 }
+
+// Main beats once a second, and a stalled main cannot report itself: this process is the one place that can
+// see main stop. It counts a silence longer than five seconds and keeps the longest.
+func TestItTimesMainsBeat(t *testing.T) {
+	k := startKeys(t, filepath.Join(t.TempDir(), "list.berth"))
+	if s := k.ask("status", nil); s["mainStalls"] != float64(0) || s["mainLongestStallMs"] != float64(0) {
+		t.Fatalf("before any silence: %v", s)
+	}
+	// Words close together are no silence, however many.
+	for i := 0; i < 5; i++ {
+		k.ask("status", nil)
+	}
+	if s := k.ask("status", nil); s["mainStalls"] != float64(0) {
+		t.Fatalf("words close together were counted as a silence: %v", s)
+	}
+	// A gap longer than five seconds is one, and its length is kept.
+	time.Sleep(mainQuietAfter + 300*time.Millisecond)
+	s := k.ask("status", nil)
+	if s["mainStalls"] != float64(1) {
+		t.Fatalf("a silence of more than five seconds was not counted: %v", s)
+	}
+	ms, _ := s["mainLongestStallMs"].(float64)
+	if ms < float64(mainQuietAfter/time.Millisecond) || ms > float64(mainQuietAfter/time.Millisecond)+3000 {
+		t.Fatalf("the silence was measured as %v ms", ms)
+	}
+	// A second, shorter silence is counted, and does not shorten the longest.
+	k.ask("status", nil)
+	if s := k.ask("status", nil); s["mainStalls"] != float64(1) || s["mainLongestStallMs"] != ms {
+		t.Fatalf("after a short gap: %v", s)
+	}
+}
