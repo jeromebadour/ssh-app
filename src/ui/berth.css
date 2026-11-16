@@ -437,3 +437,6 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 /* Every press answers at once: whatever can be pressed shows the press itself, before anything it causes. */
 .new-tab:active, .tab-close:active, .pick:active, .tool:active, .ft-btn:active { background: color-mix(in srgb, var(--text) 12%, transparent); }
 .btn:active { filter: brightness(1.12); }
+/* A tab too, the front one included: pressing the tab already in front changes nothing else, and a press that
+   shows nothing gave the meter a click with no frame to answer it (a second, on GitHub's Windows machine). */
+.tab:active { filter: brightness(1.12); }
