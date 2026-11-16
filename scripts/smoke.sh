@@ -37,7 +37,7 @@ start() {
   local code=0
   # The app's whole network stack is pointed at the canary: whatever it tries to reach by itself is written down.
   local net=(http_proxy="$canary" https_proxy="$canary" HTTP_PROXY="$canary" HTTPS_PROXY="$canary" ALL_PROXY="$canary" all_proxy="$canary" no_proxy= NO_PROXY=)
-  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args='-screen 0 1440x900x24' env -u NODE_OPTIONS "${net[@]}" "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
+  timeout "$secs" "${as_user[@]}" xvfb-run -a --server-args="-screen 0 ${selftest_screen:-1440x900}x24" env -u NODE_OPTIONS "${net[@]}" "${envs[@]}" "$@" >"$log" 2>&1 || code=$?
   echo "$code"
 }
 
@@ -47,6 +47,7 @@ selftest() {
   local code line
   local prof=()
   [ -n "${selftest_profile:-}" ] && prof=(SSHAPP_PROFILE="$selftest_profile")
+  [ -n "${selftest_window:-}" ] && prof+=(SSHAPP_WINDOW="$selftest_window")
   code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" "${prof[@]}" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
@@ -114,6 +115,9 @@ case "$mode" in
       || { grep -a '^SELFTEST ' "$log" >&2 || tail -20 "$log" >&2; fail "a swapped engine was not refused (exit $code)"; }
     # Seven tabs at once.
     selftest_mode=seven selftest "$log" "$pkg/ssh-app" --lab
+    # The same seven in the narrowest window the app allows, on a small screen (GitHub's Windows machine has
+    # 1024 x 768; a 1280-wide window at 125 % scaling is 1024 wide too): every tab must still be there to press.
+    selftest_mode=seven selftest_window=800x500 selftest_screen=1024x768 selftest "$log" "$pkg/ssh-app" --lab
 
     # The lock across two starts on one profile: the first start makes the password, the second must ask for it.
     prof="$work/two-starts"; mkdir -p "$prof"; chmod 777 "$prof"

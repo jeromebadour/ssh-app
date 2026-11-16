@@ -44,7 +44,7 @@ function Bar(props: { s: ShellState }) {
       <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
       <div class="tab-groups">
         {props.s.tabs.map((t) => (
-          <span class={`tab ${t.id === front ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={t.state} aria-selected={t.id === front} style={{ '--hue': 'var(--box-1)' }} onPointerDown={() => setPressed(t.id)} onClick={() => port.cmd({ op: 'select', id: t.id })}>
+          <span class={`tab ${t.id === front ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={t.state} aria-selected={t.id === front} title={`tab ${t.id} · ${t.state}`} style={{ '--hue': 'var(--box-1)' }} onPointerDown={() => setPressed(t.id)} onClick={() => port.cmd({ op: 'select', id: t.id })}>
             <span class={`conn conn-${t.state === 'ready' ? 'connected' : t.state === 'starting' ? 'connecting' : 'gone'}`} />
             <span class="tab-box">tab {t.id}</span>
             <span class="tab-place">{t.state}</span>

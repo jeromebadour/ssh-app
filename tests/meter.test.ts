@@ -41,6 +41,13 @@ test('a tab switch is timed only between its begin and its painted frame', () =>
   assert.equal(m.worst.tabSwitchMs, 0);
 });
 
+test('only a click or a key is a reaction: the pointer passing over a view is not in the list', () => {
+  for (const hover of ['pointerenter', 'pointerleave', 'pointerover', 'pointerout', 'mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'pointermove', 'mousemove']) {
+    assert.equal((REACTION_KINDS as readonly string[]).includes(hover), false, hover);
+  }
+  for (const press of ['pointerdown', 'click', 'keydown', 'keyup']) assert.equal((REACTION_KINDS as readonly string[]).includes(press), true, press);
+});
+
 test('the budgets are the plan\'s', () => {
   assert.deepEqual(BUDGET, { mainDelayMs: 50, viewTaskMs: 100, reactionMs: 100, tabSwitchMs: 100, startMs: 2000 });
 });

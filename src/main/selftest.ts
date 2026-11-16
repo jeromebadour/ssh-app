@@ -329,6 +329,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (all.some((_, j) => j !== i && text.includes(`seven-${j}-x`))) leaks++;
       }
       check('each of the seven hears its own engine only', arrived === 7 && leaks === 0, { arrived, leaks });
+      // Every tab, and the button that opens one more, is in sight, whatever the window's width. A tab that has
+      // slid out of the bar cannot be pressed, and what cannot be seen is not there (found 2026-11-16 on a
+      // 1024-wide screen: tabs six and seven were past the window's edge).
+      const inBar = await js<{ width: number; out: string[] }>(ctx.shell, `(() => { const w = window.innerWidth; const out = []; for (const el of document.querySelectorAll('[data-tab], #new')) { const r = el.getBoundingClientRect(); if (r.width < 1 || r.left < 0 || r.right > w + 0.5) out.push((el.getAttribute('data-tab') ? 'tab ' + el.getAttribute('data-tab') : 'the new-tab button') + ' ' + Math.round(r.left) + '..' + Math.round(r.right)); } return { width: w, out }; })()`);
+      check(`all seven tabs and the new-tab button are inside a bar ${inBar.width} wide`, inBar.out.length === 0, inBar);
       // The promises, measured under load: every tab floods its engine for four seconds while real clicks switch
       // tabs and real keys are typed. Budgets are the plan's (B8), times the stated factor for slow test machines.
       const factor = Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
@@ -340,6 +345,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       }
       const until4 = Date.now() + FLOOD_MS;
       let turn = 0;
+      let presses = 0;
       let switches = 0;
       while (Date.now() < until4) {
         const t = all[turn++ % all.length]!;
@@ -347,18 +353,22 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         if (at) {
           ctx.shell.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 });
           ctx.shell.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 });
-          switches++;
+          presses++;
         }
+        // The key follows the press at once, as a hand does, before the tab has been painted.
         t.view.webContents.focus();
         for (const type of ['keyDown', 'char', 'keyUp'] as const) t.view.webContents.sendInputEvent({ type, keyCode: 'k' });
-        await sleep(200);
+        // A press counts only if the tab really came to the front: a press that landed nowhere measures nothing.
+        const began = Date.now();
+        if (at && (await until(() => ctx.shellState().active === t.id, 1000))) switches++;
+        await sleep(Math.max(0, 200 - (Date.now() - began)));
       }
       await sleep(1500); // the views report twice a second
       let sent = 0;
       for (const t of all) sent += await js<number>(t.view, `window.__sent || 0`);
       const w = { ...ctx.meter.worst };
       const mbps = (sent / 1048576 / (FLOOD_MS / 1000)).toFixed(1);
-      check(`under load: ${switches} tab switches, ${mbps} MB/s through seven engines`, switches >= 7 && sent > 0, { switches, sent });
+      check(`under load: ${switches} of ${presses} presses on a tab brought it to the front, ${mbps} MB/s through seven engines`, presses >= 7 && switches === presses && turn === presses && sent > 0, { turn, presses, switches, sent });
       const within = (key: keyof typeof BUDGET, what: string, mustMeasure: boolean) => {
         const limit = BUDGET[key] * factor;
         check(`${what}: ${w[key]} ms (budget ${BUDGET[key]} ms${factor > 1 ? `, times ${factor} on this machine` : ''})`, w[key] <= limit && (!mustMeasure || w[key] > 0), w);

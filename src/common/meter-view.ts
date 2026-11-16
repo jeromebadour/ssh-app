@@ -2,7 +2,8 @@
 // nothing else. No text, no keys, no content ever goes through here.
 //   long task: the longest single stretch the page was busy (the engine's "longtask" record)
 //   reaction:  the longest time from a real click or key reaching the page to the next painted frame
-//              (the engine's "event" record; anything under 16 ms is not recorded and counts as 0)
+//              (the engine's "event" record; anything under 16 ms is not recorded and counts as 0).
+//              Only clicks and keys count (REACTION_KINDS): the pointer passing over a view is not a press.
 import { REACTION_KINDS, type ViewNumbers } from './ipc';
 
 export function watchView(port: { meter(n: ViewNumbers): void; frame(): void }): void {
@@ -30,10 +31,11 @@ export function watchView(port: { meter(n: ViewNumbers): void; frame(): void }):
   watch(
     'event',
     (ms, entry) => {
-      if (ms > reactionMs) {
-        const e = entry as PerformanceEventTiming;
+      const e = entry as PerformanceEventTiming;
+      const kind = (REACTION_KINDS as readonly string[]).indexOf(e.name);
+      if (kind >= 0 && ms > reactionMs) {
         reactionMs = ms;
-        reactionKind = Math.max(0, (REACTION_KINDS as readonly string[]).indexOf(e.name));
+        reactionKind = kind;
         reactionWaitMs = Math.max(0, e.processingStart - e.startTime);
         reactionHandlerMs = Math.max(0, e.processingEnd - e.processingStart);
         changed = true;

@@ -60,7 +60,7 @@ export type ShellCmd = { op: 'new' } | { op: 'select'; id: number } | { op: 'clo
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:
-//   reactionKind       which kind of event it was, as its place in REACTION_KINDS (0 = any other)
+//   reactionKind       which kind of event it was, as its place in REACTION_KINDS
 //   reactionWaitMs     from the event reaching the page to its handlers starting (the page was busy)
 //   reactionHandlerMs  inside the handlers
 //   the rest of reactionMs is the wait for the next painted frame
@@ -72,8 +72,11 @@ export interface ViewNumbers {
   reactionHandlerMs: number;
 }
 
-// A fixed list: a view names an event by its place here, never by a text of its own.
-export const REACTION_KINDS = ['other', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'keydown', 'keypress', 'keyup', 'input', 'beforeinput', 'pointerover', 'pointerenter', 'pointerout', 'pointerleave', 'mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'auxclick', 'contextmenu', 'dblclick', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
+// The events that are a click or a key, which is what the promise is about (plan A1, B8). A fixed list: a view
+// names an event by its place here, never by a text of its own. The pointer merely passing over a view (enter,
+// leave, over, out) is not in it: nobody pressed anything, and a view that has just been hidden gets one of those
+// with no frame left to answer it.
+export const REACTION_KINDS = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick', 'contextmenu', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend'] as const;
 
 export interface TabPort {
   readonly sandboxed: boolean;
