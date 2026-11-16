@@ -188,3 +188,33 @@ func (l *Link) Watch(interval, late time.Duration, report func(Pulse)) {
 		}
 	}()
 }
+
+// Files is a channel of its own for the file protocol. It is a second session on the same link, asked to run
+// the box's file subsystem: the terminal and the files never share a channel, so a listing that is slow or a
+// transfer that is large can never hold up what is typed (plan B1, B4.1).
+type Files struct {
+	ch ssh.Channel
+}
+
+// OpenFiles asks the box for its file subsystem. A box that does not offer one is said as that and is not a
+// fault of the link: the terminal goes on working either way.
+func (l *Link) OpenFiles() (*Files, error) {
+	ch, reqs, err := l.conn.OpenChannel("session", nil)
+	if err != nil {
+		return nil, err
+	}
+	// Whatever the box says about this channel is read and dropped, so the library is never blocked waiting
+	// for someone to take it.
+	go ssh.DiscardRequests(reqs)
+	ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(struct{ Name string }{"sftp"}))
+	if err != nil || !ok {
+		_ = ch.Close()
+		return nil, refusal("its file subsystem", err)
+	}
+	return &Files{ch: ch}, nil
+}
+
+// Read, Write and Close make the channel what the file protocol's client needs, and nothing more.
+func (f *Files) Read(p []byte) (int, error)  { return f.ch.Read(p) }
+func (f *Files) Write(p []byte) (int, error) { return f.ch.Write(p) }
+func (f *Files) Close() error                { return f.ch.Close() }
