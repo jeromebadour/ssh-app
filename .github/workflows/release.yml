@@ -22,8 +22,12 @@ on:
         type: boolean
         default: false
 
+# checks: read is what the gate below needs to ask whether CI passed on this commit. Without it the gate
+# cannot read its own repository's check runs and the run stops there, which is how this was found: the first
+# run of this file was a dry run, made for exactly that.
 permissions:
   contents: read
+  checks: read
 
 jobs:
   # Linux builds it first, so Windows has something to be compared with.
