@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 	exitNoAim    = 2
 	exitBadFrame = 3
 	exitWrite    = 4
+	exitTooLarge = 5 // a frame this program tried to send was over the protocol's limit: a fault of ours
 
 	aimWait = 10 * time.Second
 )
@@ -52,7 +54,14 @@ type out struct {
 func (o *out) send(typ byte, body []byte) {
 	buf, err := frame.Append(nil, typ, body)
 	if err != nil {
-		return
+		// A frame this program cannot send is a fault of this program, and the other end is waiting for an
+		// answer that will never come. It is said on the one frame that is always small enough, and then this
+		// program ends: a silent drop would leave the window waiting for ever with nothing to show.
+		said, _ := frame.Append(nil, frame.TypeFatal, []byte(`{"error":"a frame of `+strconv.Itoa(len(body))+` bytes could not be sent"}`))
+		o.mu.Lock()
+		_, _ = o.w.Write(said)
+		o.mu.Unlock()
+		os.Exit(exitTooLarge)
 	}
 	o.mu.Lock()
 	_, err = o.w.Write(buf)

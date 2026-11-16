@@ -30,6 +30,7 @@ var (
 	ErrKeyInUse    = errors.New("keys: a key with this name exists")
 	ErrBadName     = errors.New("keys: not a usable name")
 	ErrTooMuch     = errors.New("keys: more than a list may hold")
+	ErrTooBig      = errors.New("keys: more of the app's own part than one answer can carry")
 	errUnsupported = errors.New("keys: a key of a kind this app does not make")
 )
 
@@ -97,8 +98,18 @@ func (l *List) Contents() ([]byte, error) {
 // Public is the rest of the app's part of the list. It holds no key.
 func (l *List) Public() json.RawMessage { return l.public }
 
-// SetPublic replaces the rest of the app's part. It must be one JSON object.
+// MaxPublic is the most the app's own part of the list may be.
+//
+// The whole of it travels back in one answer when the list is opened, and one message between these programs
+// is at most 1 MiB, so a list bigger than this could be saved and never opened again. It is refused here, at
+// the moment it is set, where the app can still be told why, rather than at the next start.
+const MaxPublic = 512 * 1024
+
+// SetPublic replaces the rest of the app's part. It must be one JSON object, and it must fit in an answer.
 func (l *List) SetPublic(p json.RawMessage) error {
+	if len(p) > MaxPublic {
+		return ErrTooBig
+	}
 	var probe map[string]json.RawMessage
 	if json.Unmarshal(p, &probe) != nil {
 		return ErrBadList

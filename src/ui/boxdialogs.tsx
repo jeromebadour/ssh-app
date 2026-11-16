@@ -342,10 +342,10 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
                   </div>
                   <div class="fp now">
                     <div class="fp-label"><Glyph name="identityBroken" />Answered at {c.addr}</div>
-                    <div class="fp-val mono">{kindOf(c.shownType)}<br />{c.shownFingerprint}</div>
+                    <div class="fp-val mono">a different {kindOf(c.shownType)} key<br /><span class="fp-withheld">its fingerprint is not shown here</span></div>
                   </div>
                 </div>
-                <p class="dlg-fact indent">Nothing was trusted or saved, and no key was used. Check the address, or paste again from {c.name} itself.</p>
+                <p class="dlg-fact indent">Nothing was trusted or saved, and no key was used. Berth does not print what answered, so the only thing that can be pasted above is what {c.name} itself printed.</p>
               </>
             )}
 

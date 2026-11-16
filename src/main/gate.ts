@@ -67,7 +67,13 @@ export class Gate {
 
   // The first password. Checked here as well as in the view and in the key process: three places, one rule.
   async create(password: Uint8Array): Promise<void> {
-    if (this.state.phase !== 'create' || !usable(password) || !this.state.backupOk) return wipe(password);
+    // A refusal here is said. The screen holds the button back in these states, so a person should never
+    // reach it; if one does, the screen must not simply sit there as though nothing had been pressed.
+    if (this.state.phase !== 'create' || !usable(password) || !this.state.backupOk) {
+      wipe(password);
+      if (this.state.phase === 'create') this.set({ detail: !this.state.backupOk ? 'the backup folder cannot be written to, so no list is made' : 'that password is not one this app will take' });
+      return;
+    }
     this.set({ phase: 'working', wrong: false });
     const made = await this.keys.password(PW.create, password);
     wipe(password);
@@ -80,7 +86,13 @@ export class Gate {
   }
 
   async unlock(password: Uint8Array): Promise<void> {
-    if (this.state.phase !== 'locked' || !(password instanceof Uint8Array) || password.byteLength === 0 || password.byteLength > PASSWORD_MAX_BYTES || Date.now() < this.waitUntil) return wipe(password);
+    if (this.state.phase !== 'locked' || !(password instanceof Uint8Array) || password.byteLength === 0 || password.byteLength > PASSWORD_MAX_BYTES || Date.now() < this.waitUntil) {
+      wipe(password);
+      // Inside the wait after a wrong password the screen counts it down on the button; anything else that
+      // lands here is said rather than passed over in silence.
+      if (this.state.phase === 'locked' && Date.now() >= this.waitUntil) this.set({ detail: 'that password is not one this app will take' });
+      return;
+    }
     this.set({ phase: 'working', wrong: false });
     const opened = await this.keys.password(PW.unlock, password);
     wipe(password);

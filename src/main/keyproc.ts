@@ -83,7 +83,15 @@ export class KeyProc {
     const child = this.child;
     if (!child || this.state === 'gone' || !child.stdin.writable) return Promise.resolve({ ok: false, error: 'gone', detail: this.cause });
     const id = this.nextId++;
-    const frame = make(id);
+    // Making the frame can refuse it: the protocol carries 1 MiB at most. That is this program's fault, not
+    // the key process's, and the answer is said here as a failure of this request. Letting it throw would
+    // leave whoever asked waiting for an answer that was never sent.
+    let frame: Uint8Array;
+    try {
+      frame = make(id);
+    } catch (e) {
+      return Promise.resolve({ ok: false, error: 'refused', detail: `too much to send in one message: ${e instanceof Error ? e.message : String(e)}` });
+    }
     return new Promise<KeyReply>((resolve) => {
       this.waiting.set(id, resolve);
       child.stdin.write(frame, () => {

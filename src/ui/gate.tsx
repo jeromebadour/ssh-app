@@ -1,6 +1,10 @@
 // The password: the one screen that exists before unlock (plan B2.4), as approved in pictures on 2026-11-16.
 // First start: make the password and choose the backup folder. Every start: the mark and one field.
-// The password is held here only while it is being typed; it leaves as bytes and the fields are emptied.
+// The password leaves as bytes and the fields are emptied. Said plainly, because it matters: a page cannot
+// wipe what it has held. The text typed into a field, and every string made from it, stay in the page's
+// memory until the browser engine collects them, and nothing here can reach them. Main's side and the key
+// process do wipe: this page is the one place in that chain that cannot, and the window's own sandbox is
+// what stands in its place.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PASSWORD_MAX_BYTES, PASSWORD_MIN, type GateState } from '../common/ipc';
 import { Glyph } from './glyphs';

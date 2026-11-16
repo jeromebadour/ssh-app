@@ -430,7 +430,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
 
         await clickOn('#check-paste');
         await typeKeys('256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)');
-        check('a paste from another box: the dialog turns to a mismatch, both shown, no Trust', (await until(async () => (await step()) === 'mismatch', 3000)) && (await has('#check-mismatch')) && !(await has('#check-trust')), await step());
+        const onScreen = await text('#check');
+        check('a paste from another box: the dialog turns to a mismatch, what was pasted is shown, no Trust', (await until(async () => (await step()) === 'mismatch', 3000)) && (await has('#check-mismatch')) && !(await has('#check-trust')) && onScreen.includes('nB4yE8wQ'), await step());
+        check('and the screen never prints what answered: the kind, and that its fingerprint is withheld', !printed.split(/\s+/).some((w) => w.startsWith('SHA256:') && onScreen.includes(w)) && onScreen.includes('its fingerprint is not shown here'), onScreen.slice(0, 200));
         await shot('check-mismatch', 'the first-connection check, another box answered');
         await clickOn('#check-paste');
         await selectAll();
@@ -1030,14 +1032,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     check('a view cannot navigate away', a.view.webContents.getURL() === 'app://tab-1/index.html', a.view.webContents.getURL());
     const opened = await js<string>(a.view, `[window.open('${web}/open'), window.open('app://shell/index.html')].map(String).join()`);
     check('a view cannot open a window', opened === 'null,null', opened);
-    const net = await js<string>(a.view, `Promise.all([
+    const reached = await js<string>(a.view, `Promise.all([
       fetch('${web}/fetch').then(() => 'reached', () => 'blocked'),
       new Promise((r) => { const i = new Image(); i.onload = () => r('reached'); i.onerror = () => r('blocked'); i.src = '${web}/x.png'; }),
       fetch('app://tab-2/index.html').then(() => 'reached', () => 'blocked'),
       fetch('app://shell/index.html').then(() => 'reached', () => 'blocked'),
       fetch('file:///etc/hostname').then(() => 'reached', () => 'blocked'),
     ]).then((x) => x.join())`);
-    check('a view reaches no network, no other view, no file', net === 'blocked,blocked,blocked,blocked,blocked', net);
+    check('a view reaches no network, no other view, no file', reached === 'blocked,blocked,blocked,blocked,blocked', reached);
     const script = await js<string>(a.view, `(() => {
       const s = document.createElement('script'); s.textContent = 'window.__inline = 1'; document.body.append(s);
       let ev = 'ran'; try { eval('1 + 1'); } catch { ev = 'blocked'; }
@@ -1118,7 +1120,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       B.paste(id, '256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)\n');
       const mis = view(id);
       const tried = await B.trust(id);
-      check('a paste from another box is a mismatch: both are shown, nothing is pinned', mis.step === 'mismatch' && printed.includes(mis.shownFingerprint) && mis.pasted.length === 1 && !tried.ok && box().pin === '' && ctx.openTab(id) === null, [mis, tried]);
+      // The one value the check exists to withhold must not come back on a mismatch either: with it on screen,
+      // the field above is one copy away from a match, for a person in a hurry and for a window that has been
+      // taken over alike. What was pasted is shown; what answered is named by kind and no more.
+      const answered = (printed.match(/SHA256:[A-Za-z0-9+/]{43}/g) ?? []).filter((f) => f.length > 0);
+      check('a paste from another box is a mismatch: what was pasted is shown, nothing is pinned', mis.step === 'mismatch' && mis.pasted.length === 1 && !tried.ok && box().pin === '' && ctx.openTab(id) === null, [mis, tried]);
+      check('and what the box answered is not in anything a view is told: its kind, never its fingerprint', mis.shownFingerprint === '' && mis.shownType === 'ssh-ed25519' && answered.length > 0 && !answered.some((f) => JSON.stringify(mis).includes(f)), [mis.shownType, mis.shownFingerprint, answered.length]);
+      B.paste(id, '256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)\n');
+      check('pasting the same wrong thing again changes nothing and still pins nothing', view(id).step === 'mismatch' && view(id).shownFingerprint === '' && box().pin === '', view(id));
       B.paste(id, `3072 SHA256:p1Rt7Cz5Hm2Ve8Yq4Lb0Wn6Ks3Df9Gj1Ax7Ue5Io2Tc root@lab (RSA)\n${printed}`);
       check('the box\'s own lines are a match', view(id).step === 'match' && printed.includes(view(id).shownFingerprint), view(id));
       const trusted = await B.trust(id);

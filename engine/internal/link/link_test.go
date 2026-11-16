@@ -558,3 +558,49 @@ type failingSigner struct{ ssh.Signer }
 func (failingSigner) Sign(io.Reader, []byte) (*ssh.Signature, error) {
 	return nil, errors.New("the key is locked")
 }
+
+// A box may send sign-in text as many times as it likes. The budget is for the whole link: however many
+// messages arrive, no more than BannerMax bytes are ever passed on, and after that nothing at all is.
+func TestSignInTextIsBudgetedForTheWholeLink(t *testing.T) {
+	t.Run("one message is cut to what is left", func(t *testing.T) {
+		b := &bannerBudget{left: BannerMax}
+		if got := b.take(strings.Repeat("A", 20*1024)); len(got) != BannerMax {
+			t.Fatalf("took %d bytes, wanted %d", len(got), BannerMax)
+		}
+		if got := b.take("more"); got != "" {
+			t.Fatalf("took %q after the budget was spent", got)
+		}
+	})
+
+	t.Run("a box that never stops is still held to the budget", func(t *testing.T) {
+		b := &bannerBudget{left: BannerMax}
+		total := 0
+		for i := 0; i < 100_000; i++ {
+			total += len(b.take("sign-in text that keeps coming\n"))
+		}
+		if total != BannerMax {
+			t.Fatalf("passed on %d bytes over 100,000 messages, wanted %d", total, BannerMax)
+		}
+	})
+
+	t.Run("what fits is passed on whole, and nothing is invented", func(t *testing.T) {
+		b := &bannerBudget{left: 10}
+		if got := b.take("12345"); got != "12345" {
+			t.Fatalf("took %q", got)
+		}
+		if got := b.take("1234567890"); got != "12345" {
+			t.Fatalf("took %q, wanted the five bytes that were left", got)
+		}
+		if got := b.take("x"); got != "" {
+			t.Fatalf("took %q with nothing left", got)
+		}
+	})
+
+	t.Run("an empty message spends nothing", func(t *testing.T) {
+		b := &bannerBudget{left: 4}
+		b.take("")
+		if b.left != 4 {
+			t.Fatalf("an empty message spent %d bytes", 4-b.left)
+		}
+	})
+}
