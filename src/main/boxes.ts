@@ -7,7 +7,7 @@
 // The check, in order, with nothing skipped:
 //   1. reach(): one engine asks the box who it is. What it answers is kept here and shown to no one.
 //   2. paste(): what the box itself printed, in a trusted place, is pasted. Only now are the two compared.
-//      A match may be shown; a mismatch shows both, and nothing is stored.
+//      A match may be shown; a mismatch says they differ without printing what answered, and nothing is stored.
 //   3. trust(): only after a match, and only for the very identity that matched, the box is pinned.
 // A box that is not pinned cannot be connected to: there is no other way to a first sign-in.
 import { createHash, randomBytes } from 'node:crypto';
@@ -112,8 +112,12 @@ export class Boxes {
       const box: Box = { id, name: d.name, colour: d.colour, host: d.host, port: portOf(d.port), user: d.user, folder: d.folder, places: placesOf(d), publicKey, pin: '', pinFingerprint: '', pinnedAt: '', created: this.stamp() };
       const saved = await this.save([...this.list, box]);
       if (!saved.ok) {
-        await this.keys.request('deleteKey', { key: id }); // no box was saved: its key must not be left behind
-        return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}` };
+        // No box was saved: its key must not be left behind. If that cannot be done either, the key process
+        // holds a key no box knows about, and that is said here and now, not found out later.
+        const undone = await this.keys.request('deleteKey', { key: id });
+        const also = undone.ok ? '' : `. Its key could not be taken out again (${String(undone.detail ?? undone.error ?? '')}): a key with no box is in the list`;
+        if (!undone.ok) this.fault = `a key was made for "${d.name}" and the box could not be saved, and the key could not be taken out again`;
+        return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}${also}` };
       }
       return { ok: true, id };
     });
@@ -147,8 +151,17 @@ export class Boxes {
       const saved = await this.save(this.list.map((b) => (b.id === id ? next : b)));
       if (!saved.ok) {
         // The list was not written: put the key's user back, so what the key process holds matches the list.
-        if (d.user !== was.user) await this.keys.request('rebind', { key: id, box: id, user: was.user });
-        return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}` };
+        // If that fails too, the two no longer agree, and the next start would empty the whole list without
+        // ever saying why. It is said now instead, while the person is still here.
+        let also = '';
+        if (d.user !== was.user) {
+          const back = await this.keys.request('rebind', { key: id, box: id, user: was.user });
+          if (!back.ok) {
+            this.fault = `the key for "${was.name}" is bound to ${d.user} and the saved box still says ${was.user}`;
+            also = `. Its key could not be bound back to ${was.user} (${String(back.detail ?? back.error ?? '')}): the key and the saved box no longer agree`;
+          }
+        }
+        return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}${also}` };
       }
       if (moved || d.user !== was.user) this.dropCheck(id);
       return { ok: true, id };
@@ -230,7 +243,13 @@ export class Boxes {
     else if (found.includes(c.reached.fingerprint)) {
       c.matched = c.reached.key;
       c.view = { ...blank(id), step: 'match', shownType: c.reached.type, shownFingerprint: c.reached.fingerprint };
-    } else c.view = { ...blank(id), step: 'mismatch', shownType: c.reached.type, shownFingerprint: c.reached.fingerprint, pasted: found.slice(0, 8) };
+    } else {
+      // A mismatch says that they differ. It does not print what answered: that value is the one thing the
+      // check exists to withhold, and printing it puts it one copy away from the field above, for a person in
+      // a hurry and for anything that has taken over the window alike. Its kind is said; its fingerprint is
+      // not, here or anywhere a view can reach.
+      c.view = { ...blank(id), step: 'mismatch', shownType: c.reached.type, shownFingerprint: '', pasted: found.slice(0, 8) };
+    }
     this.changed();
   }
 
@@ -332,7 +351,10 @@ export function readBoxes(publicPart: unknown): Box[] | null {
     const draft: BoxDraft = { name: b.name, colour: b.colour, host: b.host, port: String(b.port), user: b.user, folder: b.folder, places: places as { name: string; folder: string }[] };
     if (Object.keys(draftFaults(draft, names)).length > 0 || placesOf(draft).length !== places.length) return null;
     if (!KEY_LINE.test(b.publicKey)) return null;
-    if (b.pin === '' ? b.pinFingerprint !== '' || b.pinnedAt !== '' : !KEY_LINE.test(b.pin) || !FINGERPRINT.test(b.pinFingerprint) || b.pinnedAt === '') return null;
+    // The pinned key is what is enforced on every later connection; the fingerprint beside it is what the
+    // person is shown. A saved box whose two do not belong together would show one identity and enforce
+    // another, so it is not read at all.
+    if (b.pin === '' ? b.pinFingerprint !== '' || b.pinnedAt !== '' : !KEY_LINE.test(b.pin) || !FINGERPRINT.test(b.pinFingerprint) || b.pinnedAt === '' || fingerprintOf(b.pin) !== b.pinFingerprint) return null;
     if (b.folder !== '' && folderFault(b.folder)) return null;
     ids.add(b.id);
     names.push(b.name);

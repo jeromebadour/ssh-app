@@ -165,13 +165,16 @@ test('the check: the box\'s answer is kept back until a paste is compared; only 
   assert.equal(JSON.stringify(reached).includes(shown.line.slice(12)), false);
   assert.equal((await w.boxes.trust(id)).ok, false);
 
-  // A paste with no identity line; then one from another box: both are shown side by side, nothing is stored.
+  // A paste with no identity line; then one from another box: what was pasted is shown, nothing is stored,
+  // and what answered is still kept back. Printing it would put the one value this check exists to withhold
+  // one copy away from the field it is compared against.
   w.boxes.paste(id, 'bash: ssh-keygen: command not found');
   assert.deepEqual([w.boxes.check(id).step, w.boxes.check(id).detail], ['reached', 'no identity line in what was pasted']);
   const other = keyLine().fingerprint;
   w.boxes.paste(id, `256 ${other} root@elsewhere (ED25519)`);
   const mismatch = w.boxes.check(id);
-  assert.deepEqual([mismatch.step, mismatch.shownFingerprint, mismatch.pasted], ['mismatch', shown.fingerprint, [other]]);
+  assert.deepEqual([mismatch.step, mismatch.shownType, mismatch.shownFingerprint, mismatch.pasted], ['mismatch', 'ssh-ed25519', '', [other]]);
+  assert.equal(JSON.stringify(mismatch).includes(shown.fingerprint.slice(7)), false);
   assert.equal((await w.boxes.trust(id)).ok, false);
   assert.equal(w.boxes.get(id)!.pin, '');
 
@@ -264,6 +267,13 @@ test('what was saved is read back whole or not at all, and a box must be with it
     ['a key that is no key line', (s) => void (s.boxes[0]!['publicKey'] = 'ssh-ed25519 x')],
     ['a pin with no fingerprint', (s) => void (s.boxes[0]!['pin'] = s.boxes[0]!['publicKey'])],
     ['a fingerprint with no pin', (s) => void (s.boxes[0]!['pinFingerprint'] = keyLine().fingerprint)],
+    // What is enforced is the pinned key; what is shown is the fingerprint beside it. A saved box whose two
+    // do not belong together would show one identity and enforce another.
+    ['a fingerprint that is not the pinned key\'s', (s) => {
+      s.boxes[0]!['pin'] = s.boxes[0]!['publicKey'];
+      s.boxes[0]!['pinnedAt'] = '2026-11-16T03:00:00Z';
+      s.boxes[0]!['pinFingerprint'] = keyLine().fingerprint;
+    }],
     ['a missing field', (s) => void delete s.boxes[0]!['user']],
     ['places that are no list', (s) => void (s.boxes[0]!['places'] = 'x')],
     ['a half-filled place', (s) => void (s.boxes[0]!['places'] = [{ name: 'db', folder: '' }])],

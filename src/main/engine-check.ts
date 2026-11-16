@@ -15,6 +15,11 @@ export function hashFile(file: string): Promise<string> {
 }
 
 // Returns '' when the engine is the one this app was built with, or the reason it is not.
+//
+// This is a check of the file, then a start of the file: anything that could write into the app's own folder
+// between the two could put another program there. That is not the layer that stops it. The layers that do
+// are the machine-wide install (a program running as the person cannot write to Program Files) and the app
+// archive's own integrity check; this one catches a damaged or stale engine, and says so.
 export async function engineFault(engineFile: string, hashesFile: string, platformKey: string): Promise<string> {
   let expected: unknown;
   try {

@@ -1,6 +1,7 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { appendFileSync, statSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,15 +49,27 @@ const ENGINE_HASHES = path.join(DIST, 'engine-hashes.json');
 let SELFTEST = ''; // the self-test to run, or '' for none; decided once it is known what kind of build this is
 
 // A fault in main must never open a blocking error box (Electron's default) and must never pass unseen.
-// For now it is written to stderr; the local log with an id per failure replaces this in step 2.
-process.on('uncaughtException', (err) => {
-  process.stderr.write(`MAINFAULT ${err.stack ?? String(err)}\n`);
+// A packaged app has no console, so stderr alone would be nowhere: each fault is also written to a file
+// beside the list, with the moment it happened. The local log with an id per failure replaces this file.
+const FAULT_FILE = 'faults.txt';
+const FAULT_MAX = 256 * 1024;
+let faultsWritten = 0;
+function faultHappened(what: string, detail: string): void {
+  process.stderr.write(`MAINFAULT ${what} ${detail}\n`);
+  faultsWritten++;
+  try {
+    // Appending is the one blocking call here on purpose: a fault may be the last thing this process does,
+    // and a written fault is worth more than the microseconds. It is capped so it can never fill a disk.
+    const file = path.join(app.getPath('userData'), FAULT_FILE);
+    const already = statSync(file, { throwIfNoEntry: false });
+    if (!already || already.size < FAULT_MAX) appendFileSync(file, `${new Date().toISOString()} ${what} ${detail}\n`);
+  } catch {
+    // Nowhere to write it: stderr above is what there is, and the count is told to the self-test.
+  }
   if (SELFTEST) app.exit(70);
-});
-process.on('unhandledRejection', (reason) => {
-  process.stderr.write(`MAINFAULT (rejection) ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}\n`);
-  if (SELFTEST) app.exit(70);
-});
+}
+process.on('uncaughtException', (err) => faultHappened('fault', err.stack ?? String(err)));
+process.on('unhandledRejection', (reason) => faultHappened('rejection', reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)));
 
 const CSP = [
   "default-src 'none'",

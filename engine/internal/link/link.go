@@ -115,8 +115,29 @@ type Options struct {
 	OnBanner  func(msg string) // the box's sign-in text, cut to BannerMax. Text from the box: terminal only
 }
 
-// BannerMax is the most sign-in text taken from a box.
+// BannerMax is the most sign-in text taken from a box over the whole of one link, however many messages
+// it arrives in.
+//
+// A box may send sign-in text as many times as it likes: the protocol sets no limit and the library hands
+// every message to the callback. So this is a budget for the whole link. A box that is already in someone
+// else's hands would otherwise send sign-in text without end, and every byte of it would be carried to the
+// window and kept there.
 const BannerMax = 8 * 1024
+
+// bannerBudget hands out what is left of that budget, message by message. A message that does not fit is cut
+// to what is left; once nothing is left, every message is dropped. Used from one goroutine only.
+type bannerBudget struct{ left int }
+
+func (b *bannerBudget) take(msg string) string {
+	if b.left <= 0 {
+		return ""
+	}
+	if len(msg) > b.left {
+		msg = msg[:b.left]
+	}
+	b.left -= len(msg)
+	return msg
+}
 
 // Details are what was agreed, for the tab's details.
 type Details struct {
@@ -171,6 +192,10 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 	stopWatch := context.AfterFunc(ctx, func() { a.end(Cancelled) })
 	defer stopWatch()
 
+	// What is left of the sign-in text this link will take. The callback below is called from the library's
+	// own sign-in goroutine, one message at a time, before this function returns, so it needs no lock.
+	banner := &bannerBudget{left: BannerMax}
+
 	cfg := &ssh.ClientConfig{
 		Config: ssh.Config{KeyExchanges: keyExchanges, Ciphers: ciphers, MACs: macs},
 		User:   t.User,
@@ -186,12 +211,16 @@ func Dial(ctx context.Context, t Target, signer ssh.Signer, opt Options) (*Link,
 			return nil
 		},
 		HostKeyAlgorithms: identityAlgos,
+		// A box may send sign-in text as many times as it likes: the protocol sets no limit and the library
+		// takes every message. So BannerMax is a budget for the whole link, not for one message, and once it
+		// is spent nothing more is passed on. Without the budget a box that is already in someone else's
+		// hands could send sign-in text without end and leave the window with it.
 		BannerCallback: func(msg string) error {
-			if opt.OnBanner != nil {
-				if len(msg) > BannerMax {
-					msg = msg[:BannerMax]
-				}
-				opt.OnBanner(msg)
+			if opt.OnBanner == nil {
+				return nil
+			}
+			if take := banner.take(msg); take != "" {
+				opt.OnBanner(take)
 			}
 			return nil
 		},

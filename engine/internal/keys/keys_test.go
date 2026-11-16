@@ -400,6 +400,31 @@ func TestListsThatAreNotOursAreRefused(t *testing.T) {
 	}
 }
 
+// The app's own part of the list must fit in one answer: the whole of it is sent back when the list opens,
+// and a message between these programs carries 1 MiB at most. A list that could be saved and never opened
+// again is refused at the moment it is set, not at the next start.
+func TestThePublicPartMustFitInOneAnswer(t *testing.T) {
+	l := New()
+	fits := append(append([]byte(`{"filler":"`), bytes.Repeat([]byte("x"), MaxPublic-13)...), []byte(`"}`)...)
+	if len(fits) != MaxPublic {
+		t.Fatalf("the test's own value is %d bytes, not %d", len(fits), MaxPublic)
+	}
+	if err := l.SetPublic(fits); err != nil {
+		t.Fatalf("the largest that fits was refused: %v", err)
+	}
+	tooMuch := append(append([]byte(`{"filler":"`), bytes.Repeat([]byte("x"), MaxPublic-12)...), []byte(`"}`)...)
+	if err := l.SetPublic(tooMuch); !errors.Is(err, ErrTooBig) {
+		t.Fatalf("one byte more was taken: %v", err)
+	}
+	if string(l.Public()) != string(fits) {
+		t.Fatal("a refused set changed what was there")
+	}
+	// It must stay under what the protocol carries, with room for the rest of the answer.
+	if MaxPublic >= 1024*1024 {
+		t.Fatalf("MaxPublic is %d: that is not under one message", MaxPublic)
+	}
+}
+
 // Whatever bytes it is asked to sign, Sign never panics, and signs only the one exact request.
 func FuzzSign(f *testing.F) {
 	seed := bytes.Repeat([]byte{9}, ed25519.SeedSize)
