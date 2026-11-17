@@ -349,7 +349,16 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			return fxpStatus, status(fxFailure, "no such handle")
 		}
 		if flags&0x4 != 0 {
-			if err := f.Chmod(os.FileMode(r.u32() & 0o7777)); err != nil {
+			// Through the handle where that works, which is what a box does and what keeps this honest when
+			// the name is about to change under it. Windows cannot set permissions through a handle at all,
+			// so there it is done by the name the handle was opened with: that is as far as the machine
+			// running the lab can go, and it is still really done rather than merely answered.
+			mode := os.FileMode(r.u32() & 0o7777)
+			err := f.Chmod(mode)
+			if err != nil {
+				err = os.Chmod(f.Name(), mode)
+			}
+			if err != nil {
 				return fxpStatus, status(codeOf(err), err.Error())
 			}
 		}
