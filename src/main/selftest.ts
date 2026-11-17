@@ -1866,15 +1866,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await sleep(400);
 
       // Select to copy: only the tab in front of the window in use may leave text on the clipboard.
+      // The window has to be in use before any of this is asked, or every refusal below would be the window
+      // being out of use and not the rule each probe is here to prove. Asking for focus is not getting it, so
+      // this waits for the window to say it has focus rather than guessing at a length of time.
+      const frontTab = ctx.tabs.get(ctx.shellState().active)!;
+      ctx.win.focus();
+      const inUse = await until(() => ctx.win.isFocused(), 4000);
       clipboard.writeText('untouched');
       await js(a.view, `window.tabPort.copy('from a tab that is not in front')`);
       await sleep(150);
-      check('a tab that is not in front cannot put text on the clipboard', (await clipboard.readText()) === 'untouched', await clipboard.readText());
+      check('a tab that is not in front cannot put text on the clipboard', inUse && (await clipboard.readText()) === 'untouched', [await clipboard.readText(), inUse]);
       // The tab in front can, and the window says what was copied; not while a dialog or menu is over it; and
       // never more than the limit.
-      const frontTab = ctx.tabs.get(ctx.shellState().active)!;
-      ctx.win.focus();
-      await sleep(150);
       await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
       await js(frontTab.view, `window.tabPort.copy('from under a dialog')`);
       await sleep(150);
@@ -1885,10 +1888,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await sleep(400);
       const tooMuch = await clipboard.readText();
       refusedByTheLock++;
-      check('a tab under a dialog cannot either; and more than the limit at once is refused whole', underDialog === 'untouched' && tooMuch === 'untouched' && ctx.dropped() === droppedBeforeCopy + 1, [underDialog.slice(0, 40), tooMuch.length, ctx.dropped() - droppedBeforeCopy]);
+      check('a tab under a dialog cannot either; and more than the limit at once is refused whole', inUse && underDialog === 'untouched' && tooMuch === 'untouched' && ctx.dropped() === droppedBeforeCopy + 1, [underDialog.slice(0, 40), tooMuch.length, ctx.dropped() - droppedBeforeCopy, inUse]);
+      ctx.win.focus();
+      const stillInUse = await until(() => ctx.win.isFocused(), 4000);
       await js(frontTab.view, `window.tabPort.copy('one\\ntwo')`);
       await sleep(250);
-      check('the tab in front of the window in use can: the text is on the clipboard, and the window says what was copied', (await clipboard.readText()) === 'one\ntwo' && (await text('#status')).includes('Copied 2 lines'), [await clipboard.readText(), await text('#status'), ctx.win.isFocused()]);
+      check('the tab in front of the window in use can: the text is on the clipboard, and the window says what was copied', stillInUse && (await clipboard.readText()) === 'one\ntwo' && (await text('#status')).includes('Copied 2 lines'), [await clipboard.readText(), await text('#status'), stillInUse]);
       // A size that is none (no cells, absurdly many, not a number) is refused and never reaches the box.
       const droppedBeforeSize = ctx.dropped();
       const askedBefore = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
