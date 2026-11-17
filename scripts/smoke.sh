@@ -51,7 +51,10 @@ selftest() {
   [ -n "${selftest_profile:-}" ] && prof=(SSHAPP_PROFILE="$selftest_profile")
   [ -n "${selftest_window:-}" ] && prof+=(SSHAPP_WINDOW="$selftest_window")
   [ -n "${selftest_pictures:-}" ] && prof+=(SSHAPP_PICTURES="$selftest_pictures" SSHAPP_PICTURE_COMMIT=smoke)
-  code="$(start 150 "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" "${prof[@]}" -- "$@")"
+  # How long one run of the self-test may take before it is cut off from outside. It is the app's own ceiling
+  # (five minutes times the machine factor) with a minute on top, so the app always reaches its own limit first
+  # and says which probe it was on: a run cut off from out here says nothing at all about why.
+  code="$(start "$(( 360 * factor ))" "$log" SSHAPP_SELFTEST="${selftest_mode:-all}" SSHAPP_BUDGET_FACTOR="$factor" "${prof[@]}" -- "$@")"
   line="$(grep -a '^SELFTEST ' "$log" | tail -1 || true)"
   if [ -z "$line" ]; then
     echo "smoke: the app gave no result (exit code $code)." >&2

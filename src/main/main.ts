@@ -9,13 +9,14 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes, fingerprintOf } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
 import { identifyWith } from './identify';
+import { firstVisitWith, type Visited } from './firstvisit';
 import { KeyProc } from './keyproc';
 import { isLabPackageNow } from './lab-proof';
 import { Meter } from './meter';
@@ -276,7 +277,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto() };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -969,6 +970,111 @@ const downloadsInto = (): string => {
 };
 // The settings are on screen. Opening them changes nothing: it is a screen, not an action.
 let settingsOpen = false;
+
+// ---- The first visit (decision O2) ----
+// The one screen in this app that ever asks for a box's own password, and the only place a password for a box
+// exists at all. It opens from the first-connection check and from nowhere else, and only for a box that is
+// already pinned: the identity is settled before the field is drawn, which is the whole of the argument. The
+// password is never kept: it arrives on one message, is handed to one short-lived process, and is gone.
+let firstVisitShown: FirstVisitShown | null = null;
+// The way a visit is really made, set when the engine's path is known. The lab puts its own in its place.
+let firstVisit: ReturnType<typeof firstVisitWith> = () => Promise.resolve({ ok: false, cause: 'protocol', detail: 'the app is not ready' });
+// The lab has no box that takes a password: what a real one does with a real password is proved against real
+// OpenSSH in the engine's own tests. What is proved here is everything on this side of the wire, so the lab
+// stands in for the visit itself and records exactly what main handed over. Nothing but the self-test sets it.
+let labWatchesVisits: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null = null;
+// Boxes this app has already visited this way. A box is visited once, whatever happens afterwards: starting
+// over means deleting the box and adding it again (decision O2, point 6).
+const visited = new Set<string>();
+
+function openFirstVisit(id: string): void {
+  const box = boxes?.get(id);
+  if (!box || !gate?.unlocked) return;
+  // Only a pinned box, and only one that has not been visited before.
+  if (box.pin === '' || visited.has(id)) {
+    done = box && box.pin === '' ? 'That box has not been checked yet' : 'That box has already been visited once';
+    return tellShell();
+  }
+  firstVisitShown = { box: id, name: box.name, user: box.user, addr: addrOf(box), phase: 'asking', said: '', error: '', detail: '' };
+  overlay = true;
+  stack();
+  tellShell();
+}
+
+function closeFirstVisit(): void {
+  firstVisitShown = null;
+  overlay = openCheck !== '' || settingsOpen || replaceAsked !== null;
+  stack();
+  tellShell();
+}
+
+async function runFirstVisit(id: string, password: string): Promise<void> {
+  const shown = firstVisitShown;
+  const box = boxes?.get(id);
+  if (!shown || shown.box !== id || shown.phase !== 'asking' || !box || box.pin === '' || visited.has(id)) return;
+  if (password === '' || password.length > INPUT_MAX) {
+    firstVisitShown = { ...shown, error: 'no-password', detail: 'A password has to be typed' };
+    return tellShell();
+  }
+  // Once, whatever happens: a second try would be a second password sent to the same box, and the decision
+  // says one. From here the box is key only, even if this fails.
+  visited.add(id);
+  firstVisitShown = { ...shown, phase: 'visiting', error: '', detail: '' };
+  tellShell();
+  const aimedAtBox = { addr: addrOf(box), user: box.user, hostKey: box.pin };
+  const command = boxes!.block(id);
+  const r = labWatchesVisits ? labWatchesVisits({ ...aimedAtBox, password, command }) : await firstVisit(aimedAtBox, password, command, (p: string) => {
+    if (firstVisitShown?.box === id && firstVisitShown.phase === 'visiting') {
+      firstVisitShown = { ...firstVisitShown, detail: p };
+      tellShell();
+    }
+  });
+  if (firstVisitShown?.box !== id) return; // the screen was closed while it ran
+  if (!r.ok) {
+    firstVisitShown = { ...firstVisitShown, phase: 'failed', error: r.cause, detail: r.detail };
+    return tellShell();
+  }
+  // It says it worked only if the key really works. What proves that is a sign-in with the key and nothing
+  // else, which is the thing he will use from now on: a tab on the box, opened the ordinary way.
+  firstVisitShown = { ...firstVisitShown, phase: 'proving', said: r.said, error: '', detail: '' };
+  tellShell();
+  const tab = openTab(id, '');
+  if (!tab) {
+    firstVisitShown = { ...firstVisitShown, phase: 'failed', error: 'no-tab', detail: 'the key is on the box, but no tab could be opened to prove it' };
+    return tellShell();
+  }
+  watchFirstVisit(id, tab);
+}
+
+// Watching that one tab until its link says whether the key worked. Nothing else about the tab is touched.
+function watchFirstVisit(id: string, tab: Tab): void {
+  const until = Date.now() + 60_000;
+  const look = setInterval(() => {
+    if (firstVisitShown?.box !== id || firstVisitShown.phase !== 'proving') return clearInterval(look);
+    const t = tabs.get(tab.id);
+    if (!t) {
+      clearInterval(look);
+      firstVisitShown = { ...firstVisitShown, phase: 'failed', error: 'no-tab', detail: 'the tab was closed before the key could be proved' };
+      return tellShell();
+    }
+    if (t.engine.link.phase === 'up') {
+      clearInterval(look);
+      firstVisitShown = { ...firstVisitShown, phase: 'done', error: '', detail: '' };
+      return tellShell();
+    }
+    if (t.engine.link.cause !== '' && t.engine.link.phase === 'ended') {
+      clearInterval(look);
+      firstVisitShown = { ...firstVisitShown, phase: 'failed', error: 'key-did-not-work', detail: t.engine.link.cause };
+      return tellShell();
+    }
+    if (Date.now() > until) {
+      clearInterval(look);
+      firstVisitShown = { ...firstVisitShown, phase: 'failed', error: 'key-did-not-work', detail: 'the sign-in with the key did not finish' };
+      return tellShell();
+    }
+  }, 250);
+  look.unref();
+}
 // Space to leave on the disk beyond the file itself, so a download cannot be the thing that fills it.
 const spareOnDisk = 64 * 1024 * 1024;
 type Coming = { tab: number; into: string; name: string; why: string };
@@ -1493,16 +1599,21 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     boxes!.reach(c.box);
   } else if (c?.op === 'paste' && isBox(c.box) && c.box === openCheck && typeof c.text === 'string' && c.text.length <= 64 * 1024) {
     boxes!.paste(c.box, c.text);
-  } else if (c?.op === 'trust' && isBox(c.box) && c.box === openCheck) {
+  } else if ((c?.op === 'trust' || c?.op === 'trustThenVisit') && isBox(c.box) && c.box === openCheck) {
     const b = boxes!;
     const id = c.box;
+    const thenVisit = c.op === 'trustThenVisit';
     void b.trust(id).then((r) => {
       if (r.ok) {
         openCheck = '';
         overlay = false;
         const box = b.get(id)!;
         done = `Trusted ${box.name}: ${box.pinFingerprint}`;
-        openTab(id, '');
+        // Pinned first, always. Only now, with the box's identity settled, may the one screen that asks for a
+        // password open (decision O2, point 1). The other way round, this would be a way to hand a password to
+        // a machine pretending to be his.
+        if (thenVisit) openFirstVisit(id);
+        else openTab(id, '');
         stack();
       } else done = `Not trusted: ${r.error}`;
       tellShell();
@@ -1541,6 +1652,14 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     closingAsked = null;
     closingForReal = true;
     win?.close();
+  } else if (c?.op === 'firstVisit') {
+    openFirstVisit(String(c.box));
+  } else if (c?.op === 'firstVisitGo') {
+    // The password arrives here and goes no further than one short-lived process. It is not written to the
+    // list, not to the log, not to the window's state, and not to this variable for longer than this call.
+    void runFirstVisit(String(c.box), typeof c.password === 'string' ? c.password : '');
+  } else if (c?.op === 'firstVisitClose') {
+    closeFirstVisit();
   } else if (c?.op === 'settings') {
     // A screen, not an action: opening it changes nothing and closing it changes nothing back.
     settingsOpen = c.show === true;
@@ -1731,6 +1850,7 @@ if (!app.requestSingleInstanceLock()) {
     listOnDisk = listFile;
     const backups = LAB_PROFILE ? path.join(LAB_PROFILE, 'backups') : path.join(app.getPath('documents'), 'Berth backups');
     const k = new KeyProc(ENGINE_BIN, ENGINE_HASHES, listFile, () => void g.keysChanged());
+    firstVisit = firstVisitWith(ENGINE_BIN, ENGINE_HASHES);
     const b = new Boxes(k, identifyWith(ENGINE_BIN, ENGINE_HASHES), firstConnection.block, tellShell);
     const g = new Gate(k, tellGate, backups, (publicPart, keyInfos) => b.load(publicPart, keyInfos));
     keys = k;
@@ -1773,7 +1893,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

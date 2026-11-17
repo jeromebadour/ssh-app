@@ -37,13 +37,17 @@ const (
 
 type aim struct {
 	V     int      `json:"v"`
-	Role  string   `json:"role"` // "keys" for the key process, "identify" for a first-connection check; otherwise a tab's engine
+	Role  string   `json:"role"` // "keys" for the key process, "identify" for a first-connection check, "firstvisit" for decision O2's one sign-in; otherwise a tab's engine
 	File  string   `json:"file"` // the key process: where the list is
 	Cost  *costAim `json:"cost"` // the key process: the cost a new list is sealed with, when it was tuned
 	Tab   string   `json:"tab"`
 	Stub  bool     `json:"stub"`  // the skeleton's echo, for the app's own self-test: no box, no network
 	Box   boxAim   `json:"box"`   // not a stub: the one box
 	Shell shellAim `json:"shell"` // and how its shell starts
+	// The first visit only (decision O2): the password a person has just typed, and the one command it is for.
+	// Both live only as long as this process, which is a few seconds, and neither is ever written down here.
+	Password string `json:"password"`
+	Command  string `json:"command"`
 }
 
 type out struct {
@@ -98,7 +102,14 @@ func main() {
 		if f.Type != frame.TypeAim {
 			o.fatal(exitNoAim, "the first frame was not Aim")
 		}
-		if err := json.Unmarshal(f.Body, &target); err != nil || target.V != 1 || (target.Tab == "" && target.Role != "keys" && target.Role != "identify") || (target.Role != "" && target.Role != "keys" && target.Role != "identify") {
+		if err := json.Unmarshal(f.Body, &target); err != nil {
+			o.fatal(exitNoAim, "Aim could not be read")
+		}
+		// The roles are written out here and nowhere else, so a run of this program is one of exactly four
+		// things and can never be talked into being another. Read after the Aim is parsed and not before it,
+		// or every role would pass: the field is still empty until the line above has run.
+		known := target.Role == "" || target.Role == "keys" || target.Role == "identify" || target.Role == "firstvisit"
+		if target.V != 1 || !known || (target.Tab == "" && target.Role == "") {
 			o.fatal(exitNoAim, "Aim could not be read")
 		}
 	case err := <-firstErr:
@@ -115,6 +126,9 @@ func main() {
 	}
 	if target.Role == "identify" {
 		os.Exit(runIdentify(o, target.Box.Addr))
+	}
+	if target.Role == "firstvisit" {
+		os.Exit(runFirstVisit(o, target))
 	}
 
 	hello, _ := json.Marshal(map[string]any{"v": 1, "role": "engine", "stub": target.Stub, "tab": target.Tab})

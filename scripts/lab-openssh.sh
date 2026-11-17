@@ -27,6 +27,13 @@ install_cmd() {
 
 down
 rm -rf "$dir" && mkdir -p "$dir/mount"
+# The password for this lab's one password server. It is made fresh for every run and written only into the
+# run's own folder, never into the repository: a password committed anywhere is a password, whatever it guards.
+# It is handed to the container in a file rather than on a command line, so it is not in what docker reports.
+first_visit_password="$(head -c 18 /dev/urandom | base64 | tr -d '=+/' | head -c 20)"
+printf 'firstvisit:%s\n' "$first_visit_password" > "$dir/mount/firstvisit-password"
+printf '%s' "$first_visit_password" > "$dir/firstvisit-password"
+chmod 600 "$dir/mount/firstvisit-password"
 ssh-keygen -q -t ed25519 -N '' -C lab-host -f "$dir/mount/host_ed"
 ssh-keygen -q -t rsa -b 3072 -N '' -C lab-host -f "$dir/mount/host_rsa"
 ssh-keygen -q -t ed25519 -N '' -C lab-user -f "$dir/user"
@@ -53,21 +60,29 @@ while read -r name image tool kex; do
   [ "$name" = survey ] && continue
   port=$((port + 10))
   common="-f /dev/null -e -o PidFile=none -o AuthorizedKeysFile=/lab/authorized_keys -o StrictModes=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PermitRootLogin=no"
+  # A fourth server, and the only one in this lab that takes a password: the first visit of decision O2 is the
+  # one place Berth ever offers one, so it is proved against a real OpenSSH rather than against our own box.
+  # Its account is made inside the container with a known password, and its authorized_keys is writable, which
+  # is the whole point: the visit has to put a key in it.
+  withpw="-f /dev/null -e -o PidFile=none -o StrictModes=no -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PermitRootLogin=no"
   docker run -d --label berth-lab --name "berth-lab-$name" -v "$dir/mount:/lab:ro" \
-    -p "127.0.0.1:$((port + 1)):2201" -p "127.0.0.1:$((port + 2)):2202" -p "127.0.0.1:$((port + 3)):2203" \
+    -p "127.0.0.1:$((port + 1)):2201" -p "127.0.0.1:$((port + 2)):2202" -p "127.0.0.1:$((port + 3)):2203" -p "127.0.0.1:$((port + 4)):2204" \
     "$image" sh -c "$(install_cmd "$tool") && mkdir -p /run/sshd /etc/lab && cp /lab/host_ed /lab/host_rsa /etc/lab/ && chmod 600 /etc/lab/* \
       && (sshd -V 2>&1 | grep -o 'OpenSSH_[^ ,]*' | head -1) > /version; \
+      (useradd -m -s /bin/sh firstvisit 2>/dev/null || adduser -D -s /bin/sh firstvisit 2>/dev/null || true); \
+      chpasswd < /lab/firstvisit-password; \
       /usr/sbin/sshd -D -p 2201 -o HostKey=/etc/lab/host_ed $common & \
       /usr/sbin/sshd -D -p 2202 -o HostKey=/etc/lab/host_rsa $common & \
       /usr/sbin/sshd -D -p 2203 -o HostKey=/etc/lab/host_ed -o Ciphers=chacha20-poly1305@openssh.com $common & \
+      /usr/sbin/sshd -D -p 2204 -o HostKey=/etc/lab/host_ed $withpw & \
       wait" >/dev/null </dev/null
-  echo "$name 127.0.0.1:$((port + 1)) 127.0.0.1:$((port + 2)) 127.0.0.1:$((port + 3)) $kex" >> "$dir/boxes.pending"
+  echo "$name 127.0.0.1:$((port + 1)) 127.0.0.1:$((port + 2)) 127.0.0.1:$((port + 3)) $kex 127.0.0.1:$((port + 4))" >> "$dir/boxes.pending"
 done < toolchain/lab-images
 [ "$unpinned" = 0 ] || { echo "lab-openssh: pin the lines above in toolchain/lab-images" >&2; down; exit 1; }
 
 # Wait until every server says its first line, then note which OpenSSH it is.
-while read -r name a b c kex; do
-  for addr in "$a" "$b" "$c"; do
+while read -r name a b c kex pw; do
+  for addr in "$a" "$b" "$c" "$pw"; do
     ok=0
     for _ in $(seq 1 120); do
       if (exec 3<>"/dev/tcp/${addr%:*}/${addr#*:}" && head -c 4 <&3 | grep -q SSH-) 2>/dev/null; then ok=1; break; fi
@@ -76,7 +91,7 @@ while read -r name a b c kex; do
     [ "$ok" = 1 ] || { echo "lab-openssh: $name at $addr never answered" >&2; docker logs "berth-lab-$name" 2>&1 | tail -20 >&2; exit 1; }
   done
   version="$(docker exec "berth-lab-$name" cat /version | tr -d '\r' | tr ' ' '_')"
-  echo "$name $a $b $c $kex $version" >> "$dir/boxes"
+  echo "$name $a $b $c $kex $version $pw" >> "$dir/boxes"
   echo "lab-openssh: $name is up: $version"
 done < "$dir/boxes.pending"
 rm -f "$dir/boxes.pending"
