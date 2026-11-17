@@ -26,7 +26,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [] };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -43,6 +43,8 @@ const noBar = {
   select: () => undefined,
   close: () => undefined,
   open: () => undefined,
+  reopen: () => undefined,
+  dropReopen: () => undefined,
   addBox: () => undefined,
   editBox: () => undefined,
   removeBox: () => undefined,
@@ -66,6 +68,41 @@ const act = {
 type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number };
 
 let nextReq = 1;
+
+// The morning: what was open when he last used the app, each with a tick, so he picks rather than being
+// given back a window he then has to tidy. It is here only while nothing is open at all, and once he has
+// answered it is gone for this start, whichever way he answered.
+function Reopen(props: { s: ShellState; act: BarActions }) {
+  const [out, setOut] = useState<Set<number>>(new Set());
+  const picked = props.s.reopen.map((_, i) => i).filter((i) => !out.has(i));
+  const flip = (i: number) =>
+    setOut((was) => {
+      const next = new Set(was);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  return (
+    <div class="reopen" id="reopen">
+      <div class="ro-head"><Glyph name="reopen" />Open again</div>
+      <div class="ro-list">
+        {props.s.reopen.map((one, i) => (
+          <label class="ro-one" key={`${one.box}:${one.place}:${i}`} data-reopen={i} style={{ '--hue': `var(--box-${one.colour})` }}>
+            <input type="checkbox" checked={!out.has(i)} onChange={() => flip(i)} />
+            <span class="ro-tick"><Glyph name="check" /></span>
+            <span class="box-dot" />
+            <span class="ro-name">{one.name}</span>
+            <span class="ro-place">{one.place === '' ? 'its starting folder' : one.place}</span>
+          </label>
+        ))}
+      </div>
+      <div class="ro-acts">
+        <button type="button" class="btn quiet" id="reopen-not-now" onClick={() => props.act.dropReopen()}><Glyph name="close" />Not now</button>
+        <button type="button" class="btn primary" id="reopen-go" disabled={picked.length === 0} onClick={() => props.act.reopen(picked)}><Glyph name="reopen" />Open {picked.length === props.s.reopen.length ? 'all' : picked.length}</button>
+      </div>
+    </div>
+  );
+}
 
 function Unlocked(props: { s: ShellState }) {
   const s = props.s;
@@ -106,6 +143,8 @@ function Unlocked(props: { s: ShellState }) {
     removeBox: (box) => setDialog({ kind: 'remove', box }),
     menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
     window: (what) => port.cmd({ op: 'window', do: what }),
+    reopen: (which) => port.cmd({ op: 'reopen', which }),
+    dropReopen: () => port.cmd({ op: 'dropReopen' }),
   };
   const front = s.tabs.find((t) => t.id === s.active);
   const adding = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req !== dialog.req;
@@ -122,6 +161,7 @@ function Unlocked(props: { s: ShellState }) {
         {s.tabs.length === 0 && (
           <div class="first-use" id="first-use">
             <Mark />
+            {s.reopen.length > 0 && <Reopen s={s} act={act} />}
             {s.boxes.length > 0 && (
               <div class="fu-boxes">
                 {s.boxes.map((b) => (

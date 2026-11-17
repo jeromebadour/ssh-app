@@ -13,7 +13,7 @@ import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { FaultLog } from './faultlog';
-import { Boxes, fingerprintOf } from './boxes';
+import { Boxes, fingerprintOf, TABS_REMEMBERED } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
 import { identifyWith } from './identify';
@@ -283,6 +283,49 @@ function info(t: Tab): TabInfo {
   return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
 }
 
+// The morning (B3, his own words 2026-11-15): the app starts with nothing open, and one offer to open again
+// what was open last time. It is there only while no tab is open and only until he has answered it once: an
+// offer that comes back after he has started working is in the way, not a help.
+let reopenPut = false;
+// What the offer holds: the tabs of the last session that still point at a box he has, pinned, in the order
+// they were in. A box he has since removed or forgotten simply is not offered, with nothing said about it.
+function reopenOffer(): { box: string; name: string; colour: number; place: string }[] {
+  if (reopenPut || tabs.size > 0 || !gate?.unlocked || !boxes) return [];
+  const out: { box: string; name: string; colour: number; place: string }[] = [];
+  for (const one of boxes.lastTabs) {
+    const box = boxes.get(one.box);
+    if (!box || box.pin === '') continue;
+    if (one.place !== '' && !box.places.some((p) => p.name === one.place)) continue;
+    out.push({ box: box.id, name: box.name, colour: box.colour, place: one.place });
+  }
+  return out;
+}
+
+// What is open now, written down so the morning can offer it. It is saved as tabs come and go, at most once
+// every few seconds, because every save writes the whole locked list and its backup; the one on the way out
+// is written straight away, because there is no later.
+let lastTabsAt = 0;
+let lastTabsSoon: ReturnType<typeof setTimeout> | null = null;
+function rememberTabs(now = false): void {
+  if (!gate?.unlocked || !boxes) return;
+  const open = [...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place }));
+  if (now) {
+    if (lastTabsSoon) clearTimeout(lastTabsSoon);
+    lastTabsSoon = null;
+    void boxes.setLastTabs(open);
+    lastTabsAt = Date.now();
+    return;
+  }
+  if (lastTabsSoon) return;
+  const wait = Math.max(0, 4000 - (Date.now() - lastTabsAt));
+  lastTabsSoon = setTimeout(() => {
+    lastTabsSoon = null;
+    lastTabsAt = Date.now();
+    if (gate?.unlocked && boxes) void boxes.setLastTabs([...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place })));
+  }, wait);
+  lastTabsSoon.unref();
+}
+
 // What each tab's terminal is doing, as that tab reads its own box's prompt, and what it has to say about it:
 // something finished while it was behind, or it printed while nobody was looking. The words on the tab and in
 // any notification are main's own; what a view sends is one of three states and a number of milliseconds
@@ -330,7 +373,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -834,6 +877,7 @@ function openTab(boxId = '', place = ''): Tab | null {
   if (box) setTimeout(() => begin(120, 40), 2000).unref();
   else begin(0, 0);
   active = id;
+  rememberTabs();
   layout();
   tellShell();
   return tab;
@@ -924,9 +968,14 @@ function closeTab(id: number): void {
   if (waitingLink?.tab === id) closeLink(false);
   tab.stopReopen();
   if (active === id) active = [...tabs.keys()].pop() ?? 0;
+  // What is open is written down as it changes, so the morning has something to offer. The one tab closing
+  // on the way out is not the moment to write: the way out writes everything at once.
+  if (!closingForGood) rememberTabs();
   layout();
   tellShell();
 }
+// The app is on its way out: what is open is written down once, now, and every later change is left alone.
+let closingForGood = false;
 
 // Routing is by sender: which process sent a message decides what it may reach. Nothing in the message does.
 function fromMainFrameOf(e: IpcMainEvent, origin: string): boolean {
@@ -1831,6 +1880,28 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
       done = saved?.ok === false ? `The list could not be written: ${saved.error}` : `A new tab's list starts at ${Math.round(size * 100)}%`;
       tellShell();
     })();
+  } else if (c?.op === 'reopen') {
+    // The morning: the tabs he picked out of what was open last time. Which ones is his, one by one, and
+    // only a box still in the list and still pinned can be opened at all, as from anywhere else.
+    if (!gate?.unlocked || !boxes) return;
+    const want = Array.isArray(c.which) ? c.which : [];
+    const offered = reopenOffer();
+    let opened = 0;
+    for (const i of want.slice(0, TABS_REMEMBERED)) {
+      const one = typeof i === 'number' && Number.isInteger(i) ? offered[i] : undefined;
+      if (!one) continue;
+      if (tabs.size >= TABS_MAX) break;
+      if (openTab(one.box, one.place)) opened++;
+    }
+    reopenPut = true; // offered once: a person who opened two of five is not asked about the other three
+    done = opened === 0 ? 'Nothing was opened' : `${opened} ${opened === 1 ? 'tab' : 'tabs'} opened again`;
+    tellShell();
+  } else if (c?.op === 'dropReopen') {
+    // Put away, and what was open is forgotten: the offer is for the morning after, not for ever.
+    reopenPut = true;
+    void boxes?.setLastTabs([]);
+    done = 'What was open last time is forgotten';
+    tellShell();
   } else if (c?.op === 'pickKeyFile') {
     // Which file it is stays main's own, from the system's chooser: a view may type a passphrase, never name a
     // file (the same rule the way back from a damaged list follows).
@@ -2015,9 +2086,19 @@ if (!app.requestSingleInstanceLock()) {
     // Closing the window ends every session in it, so it asks first and names what would go. Every way of
     // closing comes through here: Berth's own close button (which calls win.close()), Alt+F4, and the taskbar.
     win.on('close', (e: Electron.Event) => {
-      if (closingForReal) return;
+      if (closingForReal) {
+        // On the way out, what was open is written down at once: there is no later, and the morning's offer
+        // is the whole point of having written it.
+        closingForGood = true;
+        rememberTabs(true);
+        return;
+      }
       const would = whatWouldEnd();
-      if (would.live.length === 0) return; // nothing to lose: it closes as it always did
+      if (would.live.length === 0) {
+        closingForGood = true;
+        rememberTabs(true);
+        return; // nothing to lose: it closes as it always did
+      }
       e.preventDefault();
       closingAsked = would;
       tellShell();

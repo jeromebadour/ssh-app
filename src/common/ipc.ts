@@ -193,6 +193,9 @@ export interface ShellState {
   settings: AppSettings; // what the app remembers about itself; the defaults until the list is open
   settingsOpen: boolean; // the settings are on screen
   downloadsNow: string; // where downloads land as things stand, default or chosen: the folder, written out
+  // The morning: what was open when he last used the app, offered to open again. It is there only while no
+  // tab is open at all, because once he has opened one the morning is over and the offer is in the way.
+  reopen: { box: string; name: string; colour: number; place: string }[];
 }
 
 // Sending a file where a file of that name already is. Replacing one on a box cannot be undone from here, so
@@ -285,7 +288,9 @@ export type ShellCmd =
   | { op: 'pickKeyFile' } // open the system's file chooser for a key file to bring in (plan O1)
   | { op: 'dropKeyFile' } // the chosen key file is put aside; the box gets a key Berth makes
   | { op: 'replaceFile' } // the file being sent may go in over the one on the box
-  | { op: 'keepFile' }; // the file on the box is left exactly as it is, and nothing is sent
+  | { op: 'keepFile' } // the file on the box is left exactly as it is, and nothing is sent
+  | { op: 'reopen'; which: number[] } // the morning: open these of the last session's tabs again
+  | { op: 'dropReopen' }; // the morning's offer is put away; what was open is forgotten
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:

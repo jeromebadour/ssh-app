@@ -1978,6 +1978,25 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('Keep Berth open: the window and its session are still here, and the footer says so', (await until(async () => !(await has('#closing')), 2000)) && !ctx.win.isDestroyed() && ctx.tabs.has(live.id) && (await text('#status-done')).includes('kept open'), await text('#status-done'));
         }
 
+        // The morning (his own words 2026-11-15): the app starts with nothing open and offers what was open
+        // last time, to pick from. What is written down is proved on the real path; the offer itself is
+        // proved by putting the window in the state a fresh start would be in.
+        {
+          const open = [...ctx.tabs.values()].filter((t) => t.box);
+          const wrote = await until(() => ctx.boxes.lastTabs.length === open.length && ctx.boxes.lastTabs.every((l, i) => l.box === open[i]?.box?.id && l.place === open[i]?.place), 15_000);
+          check('what is open is written down inside the locked list, as the tabs stand', wrote, [ctx.boxes.lastTabs, open.map((t) => [t.box?.id, t.place])]);
+          // Where it is kept: inside the locked list, and nowhere else in the clear. A box's id may also be
+          // in the local log, which is what that log names a box by and is meaningless without the list;
+          // what must not be anywhere outside the list is the place, which is a word he chose and says what
+          // he works on.
+          const id = ctx.boxes.lastTabs[0]?.box ?? 'nothing-of-the-sort';
+          const place = ctx.boxes.lastTabs.map((l) => l.place).find((p) => p !== '') ?? '';
+          const holdingId = await filesHolding(id);
+          const allowed = (f: string) => f === ctx.listFile || f.includes('backup') || f.endsWith('.bak') || f.endsWith('faults.log');
+          const holdingPlace = place === '' ? [] : (await filesHolding(`"place":"${place}"`));
+          check('what was open is kept inside the locked list: the box only by an id, and the place nowhere else at all', holdingId.every(allowed) && holdingPlace.every((f) => f === ctx.listFile || f.includes('backup')), [holdingId, holdingPlace, place]);
+        }
+
         // Reading this box's prompt, and what that is for: the mark on a tab he is not looking at, and the
         // one notification when something long ends behind his back. The lab's box is made to behave like a
         // shell that prompts for this: the app's own reading of a prompt has its own tests (tests/blocks),
@@ -2184,6 +2203,27 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('Close: no dialog, the box is kept, never checked', (await until(async () => !(await has('#check')), 2000)) && ctx.boxes.list.find((b) => b.name === 'quiet-box')?.pin === '', '');
         check('no tab open, boxes saved: the window offers each of them, and Add box', await until(async () => (await has('[data-open="lab-box"]')) && (await has('[data-open="quiet-box"]')) && (await has('#first-add')), 2000), await text('#first-use'));
         await shot('no-tab', 'no tab open, two boxes saved');
+        // The morning, in a picture: what was open last time, each with a tick. It is put back the way the
+        // app's own close writes it, because one run of the lab is one start of the app.
+        {
+          const box = ctx.boxes.list.find((b) => b.name === 'lab-box');
+          const never = ctx.boxes.list.find((b) => b.name === 'quiet-box');
+          if (box && never) {
+            // A box that was never checked is in the list but has no identity pinned, so it cannot be
+            // connected to from anywhere: it is left out of the offer rather than offered and refused.
+            await ctx.boxes.setLastTabs([{ box: box.id, place: box.places[0]?.name ?? '' }, { box: never.id, place: '' }, { box: box.id, place: '' }]);
+            await until(async () => (await has('#reopen')), 5000);
+            const rows = await js<string>(ctx.shell, `[...document.querySelectorAll('#reopen [data-reopen]')].map((e) => e.textContent).join(' | ')`);
+            check('a box that was never checked is not offered: it could not be opened from anywhere else either', rows.includes('lab-box') && !rows.includes('quiet-box') && ctx.shellState().reopen.length === 2, [rows, ctx.shellState().reopen.length]);
+            // A tick that does not draw is a tick he cannot read. The page's own content policy allows no
+            // picture but the app's own files, so this is drawn with the app's glyph and held to it here.
+            const tick = await js<string>(ctx.shell, `(() => { const t = document.querySelector('#reopen .ro-one input:checked + .ro-tick svg'); return t ? getComputedStyle(t).opacity : 'no tick'; })()`);
+            check('a ticked line really draws its tick', tick === '1', tick);
+            await shot('reopen', 'the morning: what was open last time, to pick from');
+            await clickOn('#reopen-not-now');
+            await until(async () => !(await has('#reopen')), 3000);
+          }
+        }
         await clickOn('#boxes');
         await until(() => has('#box-menu'), 2000);
         await shot('boxes-unchecked', 'the Boxes menu, a box not checked yet');
@@ -3189,6 +3229,59 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('and after all of that the box is left as a box should be: named, keyed and pinned', pinnedLast.ok && box().name === 'lab-box' && box().publicKey !== '' && box().pin !== '', [pinnedLast, box().name, box().pin !== '']);
 
       ctx.closeTab(t.id);
+
+      // The morning itself. With nothing open and a box pinned, the window is in the state a fresh start
+      // leaves it in; what was open last time is put back the way the app's own close writes it, because a
+      // run of the lab is one start of the app and there is no second morning inside it.
+      {
+        // While anything is open at all there is no offer, whatever was written down: the morning is over
+        // the moment he has a tab in front of him, and an offer then would be in the way.
+        {
+          // A tab is opened for this on purpose: a probe that only runs when something happens to be open
+          // is a probe that can quietly never run at all.
+          const one = [...ctx.tabs.values()].find((t) => t.box) ?? ctx.openTab(id, '');
+          await until(() => ctx.tabs.size > 0, 10_000);
+          await ctx.boxes.setLastTabs([{ box: id, place: '' }]);
+          await sleep(250);
+          check('with something open there is no offer, whatever was written down', !!one && ctx.shellState().reopen.length === 0 && !(await has('#reopen')), [ctx.shellState().reopen, ctx.boxes.lastTabs, ctx.tabs.size]);
+        }
+        // Nothing open at all: that is the state a fresh start is in, and the offer exists only in it.
+        // Closing every tab also empties what the morning would offer, which is right: he closed them.
+        for (const open of [...ctx.tabs.values()]) ctx.closeTab(open.id);
+        await until(() => ctx.tabs.size === 0, 5000);
+        const emptied = await until(() => ctx.boxes.lastTabs.length === 0, 15_000);
+        check('closing every tab leaves the morning nothing to offer, because he closed them', emptied && ctx.shellState().reopen.length === 0, [ctx.boxes.lastTabs, ctx.shellState().reopen]);
+        // The place is taken from the box as it now stands: the probes before this one have edited it, and a
+        // place this box no longer has is one the offer is right to leave out.
+        const place = box().places[0]?.name ?? '';
+        const wrote = await B.setLastTabs([{ box: id, place }, { box: id, place: '' }]);
+        await until(async () => (await has('#reopen')), 5000);
+        const rows = await js<string>(ctx.shell, `[...document.querySelectorAll('#reopen [data-reopen]')].map((e) => e.textContent).join(' | ')`);
+        const drawn = await js<string>(ctx.shell, `(document.getElementById('first-use')?.outerHTML ?? 'no first-use').slice(0, 200)`);
+        check('with nothing open, the window offers what was open last time, each with a tick', (await has('#reopen')) && rows.includes('lab-box') && (place === '' || rows.includes(place)) && rows.includes('its starting folder'), [rows, drawn, place, ctx.tabs.size]);
+        // One tick taken off, and only the rest open.
+        await js(ctx.shell, `document.querySelector('#reopen [data-reopen="1"] input')?.click()`);
+        await sleep(120);
+        const says = await js<string>(ctx.shell, `document.getElementById('reopen-go')?.textContent ?? ''`);
+        await clickOn('#reopen-go');
+        const opened = await until(() => ctx.tabs.size === 1, 20_000);
+        const only = [...ctx.tabs.values()][0];
+        check('only the ones he left ticked are opened, each on its own box and place', opened && says.includes('Open 1') && only?.box?.id === id && only?.place === place, [ctx.tabs.size, says, only?.place, place]);
+        check('and the offer is gone once it has been answered', !(await has('#reopen')), '');
+        if (only) ctx.closeTab(only.id);
+        // Put away instead: nothing opens, and what was open is forgotten rather than offered again.
+        await B.setLastTabs([{ box: id, place }]);
+        await until(async () => (await has('#reopen')), 5000);
+        await clickOn('#reopen-not-now');
+        await sleep(400);
+        check('Not now opens nothing, and what was open is forgotten', ctx.tabs.size === 0 && !(await has('#reopen')) && ctx.boxes.lastTabs.length === 0, [ctx.tabs.size, ctx.boxes.lastTabs]);
+        // A made-up number is not a tab: nothing opens and nothing is drawn from it.
+        await B.setLastTabs([{ box: id, place }]);
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'reopen', which: [5, -1, 0.5, 'x'] })`);
+        await sleep(500);
+        check('a number that is not one of the lines offered opens nothing', ctx.tabs.size === 0, ctx.tabs.size);
+        await B.setLastTabs([]);
+      }
       lab.end();
       // With the app closed the PC holds one locked file: no box's name is readable in anything the app wrote.
       const named = [...(await filesHolding('lab-box')), ...(await filesHolding('second-box')), ...(await filesHolding('/var/log/it'))];
