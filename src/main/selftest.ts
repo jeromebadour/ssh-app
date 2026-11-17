@@ -1054,6 +1054,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await shot('replace-asks', 'a file already on the box, asked about before anything is replaced', front);
             const bothShown = await text('#replacing-both');
             const titleShown = await text('#replacing-title');
+            // The way out takes the focus as the dialog is drawn, which is a moment after it is there: it is
+            // waited for rather than sampled, or this probe is about how fast the machine is.
+            await until(async () => (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'replacing-keep', 5000);
             const focused = await js<string>(ctx.shell, `document.activeElement?.id ?? ''`);
             const untouchedWhileAsking = await lab.tell('read var/log/from-the-pc.conf');
             // While the question is open the pane says the send is waiting on it, and does not say it was
@@ -1094,6 +1097,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-bye')?.click()`);
             const asked = await until(() => has('#fb-ask-delete', front), 5000);
             const saidWhat = await js<string>(front.view, `document.getElementById('fb-ask-said')?.textContent ?? ''`);
+            await until(async () => (await js<string>(front.view, `document.activeElement?.id ?? ''`)) === 'fb-ask-keep', 5000);
             const focused = await js<string>(front.view, `document.activeElement?.id ?? ''`);
             const stillThere = await lab.tell('read var/log/syslog');
             check('a delete asks first, says where it would go and what it is holding, and nothing has moved', asked && saidWhat.includes('trash') && saidWhat.includes('28 B') && focused === 'fb-ask-keep' && typeof stillThere['text'] === 'string', [saidWhat, focused, stillThere]);
