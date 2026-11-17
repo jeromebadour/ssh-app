@@ -1043,6 +1043,62 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the next try takes it up where it stopped, and the whole file is what the box has', done && said.includes('taken up where it broke') && said.includes('checked against the box') && !after.includes('.berth-broken.log.part') && itsHash === onTheBox['sha256'], [said, after, itsHash === onTheBox['sha256']]);
             await lab.tell('forget var/log/broken.log');
           }
+          // How big the list's own text is. His words about MobaXterm: the terminal zooms and the file browser
+          // does not. It is this pane's own size, apart from the terminal's.
+          {
+            const rowHeight = (): Promise<number> => js<number>(front.view, `Math.round(document.querySelector('#fb-list .fb-row')?.getBoundingClientRect().height ?? 0)`);
+            const termSize = (): Promise<string> => js<string>(front.view, `getComputedStyle(document.getElementById('term') ?? document.body).fontSize`);
+            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const was = await rowHeight();
+            const termWas = await termSize();
+            const at = (): Promise<string> => js<string>(front.view, `document.getElementById('files')?.dataset.size ?? ''`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row')?.focus()`);
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
+            const bigger = await until(async () => (await rowHeight()) > was, 4000);
+            const saidBigger = (await foot()).includes('%');
+            check('the list has a size of its own: Ctrl and plus makes it bigger, and says so', bigger && saidBigger && (await at()) !== '100', [was, await rowHeight(), await at()]);
+            // The terminal beside it is untouched: two things read for different reasons, each with its own
+            // size, and a press meant for one must never move the other.
+            check('and the terminal beside it does not move', (await termSize()) === termWas, [termWas, await termSize()]);
+            // The wheel reaches it too, which is what a hand already pointing at the list goes for.
+            const atBigger = await rowHeight();
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, ctrlKey: true, bubbles: true, cancelable: true }))`);
+            const smallerByWheel = await until(async () => (await rowHeight()) < atBigger, 4000);
+            check('Ctrl and the wheel reaches it as well', smallerByWheel, [atBigger, await rowHeight()]);
+            // The press is taken by the pane and not left to the browser underneath it. Without that, Chromium
+            // zooms the whole view on the same key and the terminal goes with it, which is the one thing this
+            // is here to keep apart. What is asked is whether the event was really consumed, because a lab
+            // window with no menu does not apply that zoom and so could never show the difference.
+            const eaten = await js<boolean[]>(
+              front.view,
+              `(() => { const f = document.getElementById('files'); const k = new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true, cancelable: true }); const w = new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true }); const a = !f.dispatchEvent(k); const b = !f.dispatchEvent(w); return [a, b]; })()`,
+            );
+            // And a press that is not this pane's is left alone: Ctrl with a letter belongs to the box or to
+            // the window, and a pane that ate those would take the copy key out of the terminal beside it.
+            const letThrough = await js<boolean>(front.view, `document.getElementById('files').dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, cancelable: true }))`);
+            check('the press is taken by the pane, not left to the browser to zoom the whole view; and a press that is not its own is left alone', eaten[0] === true && eaten[1] === true && letThrough === true, [eaten, letThrough]);
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            await until(async () => (await rowHeight()) === was, 4000);
+            // Ctrl and nought puts it back exactly, not approximately. It is made bigger again first, so that
+            // this probe is about the key and not about where the wheel happened to leave it.
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
+            await until(async () => (await rowHeight()) > was, 4000);
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            const back = await until(async () => (await rowHeight()) === was, 4000);
+            check('Ctrl and nought puts it back to its own size exactly', back && (await at()) === '100' && (await foot()).includes('back to its own size'), [was, await rowHeight(), await at()]);
+            // At either end a press still answers, or a person presses into silence wondering whether the key
+            // reached the window at all.
+            for (let i = 0; i < 9; i++) await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '-', ctrlKey: true, bubbles: true }))`);
+            const saidEnd = await until(async () => (await foot()).includes('as small as the list goes'), 4000);
+            check('a press at the smallest it goes still answers', saidEnd, await foot());
+            // And the same key at the size it started from says that, rather than naming an end it is not at.
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            await until(async () => (await rowHeight()) === was, 4000);
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            check('and at its own size it says that, not that it is at an end', await until(async () => (await foot()).includes('already at its own size'), 4000), await foot());
+            await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            await until(async () => (await rowHeight()) === was, 4000);
+          }
           // The order of the list, and narrowing it. Both are the window's own: no ask leaves it for either,
           // because the folder it already has is the whole folder (plan B4.1).
           {
