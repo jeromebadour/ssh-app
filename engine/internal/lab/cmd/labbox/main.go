@@ -20,6 +20,8 @@
 //	                                OpenSSH writes, and say its public half and fingerprint
 //	rekey                           become another box at the same address: a new identity, nothing else changed
 //	nofiles <n>                     say no to the next n asks for the file subsystem, as a busy box does
+//	pretendsize <name> <bytes>      the box says that file is that big, whatever it really is
+//	oddnames <folder>               make files whose names a PC cannot hold as they are
 //	quiet on|off                    the shells stop (or start again) sending back what they are given
 //	print <hex>                     print these bytes in every open session, as a program on the box would
 //	received                        {"hex":"..."}: every byte the shells were given since this was last asked
@@ -230,6 +232,29 @@ func main() {
 		case "seen":
 			tries, users := box.SignInTries()
 			say(map[string]any{"tries": tries, "users": users, "sessions": box.Sessions()})
+		case "pretendsize":
+			// <name> <bytes>: the box says that file is that big, whatever it really is.
+			bits := strings.Fields(rest)
+			if len(bits) != 2 {
+				say(map[string]any{"error": "a name and a count"})
+				continue
+			}
+			n, err := strconv.ParseUint(bits[1], 10, 64)
+			if err != nil {
+				say(map[string]any{"error": "a count"})
+				continue
+			}
+			hostile.PretendSize(bits[0], n)
+			say(map[string]any{"pretending": bits[0], "size": n})
+		case "oddnames":
+			// Files whose names a PC cannot hold as they are, under the box's own files.
+			made := 0
+			for _, name := range []string{"a:b.txt", "con.txt", "trailing. ", "shortcut.lnk", "two|pipes.log"} {
+				if os.WriteFile(filepath.Join(files, filepath.FromSlash(rest), name), []byte("a file whose name a PC cannot hold\n"), 0o644) == nil {
+					made++
+				}
+			}
+			say(map[string]any{"made": made})
 		case "nofiles":
 			n, err := strconv.Atoi(rest)
 			if err != nil || n < 0 {

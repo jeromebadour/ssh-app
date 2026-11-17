@@ -45,10 +45,11 @@ type filePage struct {
 	Space *spaceShown `json:"space,omitempty"`
 	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
 	// "get": how it is going and how it ended.
-	Got    uint64 `json:"got,omitempty"`    // bytes written to the PC so far
-	Of     uint64 `json:"of,omitempty"`     // how big the box said the file is
-	Landed string `json:"landed,omitempty"` // the name it was given on the PC, once it is really there
-	Mark   string `json:"mark,omitempty"`   // "checked", "changed" or "not-checked": what its hash proved
+	Got     uint64 `json:"got,omitempty"`     // bytes written to the PC so far
+	Of      uint64 `json:"of,omitempty"`      // how big the box said the file is
+	Landed  string `json:"landed,omitempty"`  // the name it was given on the PC, once it is really there
+	Mark    string `json:"mark,omitempty"`    // "checked", "changed" or "not-checked": what its hash proved
+	MarkWhy string `json:"markWhy,omitempty"` // why it could not be checked, where it could not
 }
 
 type fileRow struct {

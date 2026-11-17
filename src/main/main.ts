@@ -3,11 +3,12 @@
 import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
+import { freeName, safeName } from '../common/landing';
 import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type KeyFileChosen, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
@@ -601,9 +602,34 @@ function openTab(boxId = '', place = ''): Tab | null {
       if (tabs.get(id) === tab) sendTo(view, CH.tabBanner, bytes);
     },
     sign: (req: SignRequest) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
-    // A page of an answer about the box's files goes to the tab that asked, and nowhere else.
+    // A page of an answer about the box's files goes to the tab that asked, and nowhere else. A download's
+    // pages pass through what main knows about it: where it is going, why its name is not the box's, and
+    // whether the disk can hold it at all.
     filePage: (page: Record<string, unknown>) => {
-      if (tabs.get(id) === tab) sendTo(view, CH.tabFilePage, page);
+      if (tabs.get(id) !== tab) return;
+      const ask = typeof page['id'] === 'number' ? page['id'] : 0;
+      const mine = coming.get(comingKey(id, ask));
+      if (mine) {
+        const size = page['of'];
+        if (!mine.checked && typeof size === 'number') {
+          // The first page of a download says how big the file is, before any of it is written. That is the
+          // moment to ask the disk, and to stop before a half-written file exists at all.
+          mine.checked = true;
+          void roomFor(mine.into, size).then((room) => {
+            if (room || !coming.has(comingKey(id, ask))) return;
+            mine.short = true;
+            tab.engine.askFiles({ id: ask, do: 'cancel', path: '' });
+          });
+        }
+        if (page['done'] === true) {
+          coming.delete(comingKey(id, ask));
+          // The engine says a download that was stopped is finished, because from where it stands it was
+          // given up on. Main knows why it was given up on, and says that instead.
+          if (mine.short) page = { ...page, error: 'pc-full' };
+        }
+        page = { ...page, into: mine.into, ...(mine.why === '' ? {} : { renamed: mine.why }) };
+      }
+      sendTo(view, CH.tabFilePage, page);
     },
   };
   let engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, aim);
@@ -808,12 +834,67 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'cancel';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
+  // Bringing a file over is the one ask that touches the PC, so the view's part of it ends here: it names a
+  // file on its own box and nothing else. Where the file lands, and what it is called when it gets there, are
+  // main's to decide (plan B2.7).
+  if (what === 'get') return void bringOver(tab, id, where);
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
 });
+
+// ---- Downloads: what main decides (plan B4.2, B4.3) ----
+// One folder holds everything brought over from a box, so a download can never land anywhere else and a person
+// has one place to look. The name is worked out from the box's name for the file (common/landing.ts) and then
+// made free of whatever is already in the folder: a download never writes over a file that is already there.
+const downloadsInto = (): string => (LAB_PROFILE ? path.join(LAB_PROFILE, 'downloads') : path.join(app.getPath('downloads'), 'Berth'));
+// Space to leave on the disk beyond the file itself, so a download cannot be the thing that fills it.
+const spareOnDisk = 64 * 1024 * 1024;
+type Coming = { tab: number; into: string; name: string; why: string; checked: boolean; short: boolean };
+const coming = new Map<string, Coming>(); // per tab and ask: what main knows that the engine does not
+const comingKey = (tab: number, id: number): string => `${tab}:${id}`;
+
+async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
+  const into = downloadsInto();
+  const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
+  try {
+    await mkdir(into, { recursive: true });
+  } catch {
+    return say('pc-denied');
+  }
+  // The box's own name for the file, which is everything after the last separator, turned into one name this
+  // PC can hold, and then into one nothing in the folder is already using.
+  const asked = remote.split('/').pop() ?? '';
+  const landed = safeName(asked);
+  let taken: string[] = [];
+  try {
+    taken = await readdir(into);
+  } catch {
+    return say('pc-denied');
+  }
+  const name = freeName(landed.name, taken);
+  const why = [landed.changed ? landed.why : '', name !== landed.name ? 'a file of that name was already here' : ''].filter((x) => x !== '').join(', ');
+  if (tabs.get(tab.id) !== tab) return;
+  coming.set(comingKey(tab.id, id), { tab: tab.id, into, name, why, checked: false, short: false });
+  if (!tab.engine.askFiles({ id, do: 'get', path: remote, into, name })) {
+    coming.delete(comingKey(tab.id, id));
+    say('no-link');
+  }
+}
+
+// How much room the disk has left for one more file. The file being replaced, if there is one, is still there
+// while the new one is written, so what must fit is the whole of the new file beside everything already on the
+// disk, and not the difference between them.
+async function roomFor(into: string, bytes: number): Promise<boolean> {
+  try {
+    const d = await statfs(into);
+    return Number(d.bsize) * Number(d.bavail) >= bytes + spareOnDisk;
+  } catch {
+    return true; // a disk that will not say is not a reason to refuse: the write itself will say
+  }
+}
 
 // Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window
 // that is in use: a tab nobody is looking at cannot change what the next paste holds (plan B2.7).
@@ -1187,7 +1268,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, chooseKeyFile, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), chooseKeyFile, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

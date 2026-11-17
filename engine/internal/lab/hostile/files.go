@@ -69,6 +69,24 @@ func Pages() int64 { return pages.Load() }
 // Pace sets that wait, in milliseconds. Zero is no wait at all.
 func Pace(ms int64) { pace.Store(ms) }
 
+// pretend is one file the box lies about the size of, for the lab.
+type pretendSize struct {
+	name string
+	size uint64
+}
+
+var pretend atomic.Pointer[pretendSize]
+
+// PretendSize makes the box say a file of this name is this big, whatever it really is. An empty name puts
+// every file back to its real size.
+func PretendSize(name string, size uint64) {
+	if name == "" {
+		pretend.Store(nil)
+		return
+	}
+	pretend.Store(&pretendSize{name: name, size: size})
+}
+
 type fileServer struct {
 	root string // every path is taken as being under this folder
 
@@ -392,7 +410,13 @@ func (w *pkt) bytes(v []byte) { w.u32(uint32(len(v))); w.b = append(w.b, v...) }
 func (w *pkt) str(v string)   { w.bytes([]byte(v)) }
 func (w *pkt) attrs(fi os.FileInfo) {
 	w.u32(0x1 | 0x4 | 0x8) // size, permissions, times
-	w.u64(uint64(fi.Size()))
+	// A box that says a file is bigger than it is. Real boxes do: a file that is being written, a filesystem
+	// that reports a size it cannot hold. The app must answer on what the box says before it writes anything.
+	size := uint64(fi.Size())
+	if p := pretend.Load(); p != nil && p.name == fi.Name() {
+		size = p.size
+	}
+	w.u64(size)
 	w.u32(modeOf(fi))
 	w.u32(uint32(fi.ModTime().Unix()))
 	w.u32(uint32(fi.ModTime().Unix()))

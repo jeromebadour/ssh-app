@@ -250,7 +250,13 @@ func hashOfItsOwn(cmd, files string) string {
 	if files == "" {
 		return "sh: " + which + ": not found\n"
 	}
-	b, err := os.ReadFile(filepath.Join(files, filepath.FromSlash(path)))
+	// The box's own file subsystem answers with real paths on this machine, so a path may already be the whole
+	// of one; anything else is taken as being under the box's files, as the file subsystem takes it.
+	whole := filepath.Join(files, filepath.FromSlash(path))
+	if strings.HasPrefix(path, files+"/") {
+		whole = filepath.FromSlash(path)
+	}
+	b, err := os.ReadFile(whole)
 	if err != nil {
 		return "sh: " + which + ": no such file or directory\n"
 	}

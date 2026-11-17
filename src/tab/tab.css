@@ -35,6 +35,12 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-row:focus { outline: none; background: color-mix(in srgb, var(--hue) 16%, transparent); }
 .fb-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 .fb-can-enter { cursor: pointer; }
+/* Bringing a file over, by hand. It keeps its room on every file row whether it shows or not, so a row never
+   grows or shifts under the hand when it is pointed at (BUILD-RULES 2.4). */
+.fb-get { flex: none; display: grid; place-items: center; width: 20px; height: 18px; margin-left: 2px; padding: 0; border: 0; border-radius: 3px; background: none; color: #96a3ae; opacity: 0; cursor: pointer; }
+.fb-row:hover .fb-get, .fb-row:focus-visible .fb-get, .fb-get:focus-visible { opacity: 1; }
+.fb-get:hover { background: color-mix(in srgb, #c3ccd3 12%, transparent); color: #d7dee4; }
+.fb-get:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 .fb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fb-size { flex: none; color: #808d99; font-family: 'Plex Mono', monospace; font-size: 11px; }
 /* A folder is the thing you go into, so it carries the weight; anything that is neither a file nor a folder

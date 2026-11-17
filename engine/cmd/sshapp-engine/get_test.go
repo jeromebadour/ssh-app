@@ -23,7 +23,7 @@ import (
 func withFiles(t *testing.T) (*rig, string) {
 	t.Helper()
 	box := t.TempDir()
-	r := newRig(t, rigOpt{box: func(c *hostile.Config) { c.FilesUnder = box }})
+	r := newRig(t, rigOpt{folder: "/var/log", box: func(c *hostile.Config) { c.FilesUnder = box }})
 	r.wait("the link to be up", isUp)
 	// The tab's files ride the same link but are only there once the shell session is open, a moment after the
 	// link says it is up. Asked before that, the engine answers "no-link", which is true and is not what any of
@@ -100,14 +100,14 @@ func last(ps []map[string]any, key string) any {
 // the name it was given, and nothing of the app's is left in the folder.
 func TestAFileComesOverWholeAndIsCheckedAgainstTheBoxsOwnHash(t *testing.T) {
 	r, box := withFiles(t)
-	want := writeOnTheBox(t, box, "notes.txt", 600_000)
+	want := writeOnTheBox(t, box, "var/log/notes.txt", 600_000)
 	onto := t.TempDir()
 	// The box answers each piece slowly, so the download has a middle: without one it is over before there is
 	// anything to say about how far it has got, and this would prove nothing.
 	hostile.Pace(30)
 	t.Cleanup(func() { hostile.Pace(0) })
 
-	ask(t, r, map[string]any{"id": 7, "do": "get", "path": "/notes.txt", "into": onto, "name": "notes.txt"})
+	ask(t, r, map[string]any{"id": 7, "do": "get", "path": "/var/log/notes.txt", "into": onto, "name": "notes.txt"})
 	ps := pages(r.wait("the download to end", ended(7)), 7)
 	if e := last(ps, "error"); e != nil {
 		t.Fatalf("it failed: %v", e)

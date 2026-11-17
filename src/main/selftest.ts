@@ -50,6 +50,7 @@ interface Ctx {
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
   keysRefused(): number;
+  downloads: string;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -845,6 +846,74 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               await until(() => ctx.shellState().active === front.id, 3000);
               check('Ctrl+Tab works with the focus on a file in the list, and the place in the list does not move', onAFile && switched && stayedPut, [onAFile, switched, stayedPut]);
             }
+          }
+          // Bringing a file over to the PC. The view says which file on its own box and nothing else: where it
+          // lands and what it is called there are main's (plan B2.7). What arrives must be the box's own bytes,
+          // and the window must say so only when the box itself agrees.
+          {
+            const tap = async (keyCode: string, modifiers: ('control' | 'shift' | 'alt')[] = []): Promise<void> => {
+              front.view.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+              front.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+              await sleep(120);
+            };
+            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const standOn = async (name: string): Promise<boolean> => {
+              const there = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row[data-name="${name}"]').length`)) === 1, 8000);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${name}"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+              await sleep(80);
+              return there;
+            };
+            // Ctrl+S on a file brings it over. Nothing else a person did names a place on this PC.
+            await standOn('syslog');
+            await tap('S', ['control']);
+            const arrived = await until(async () => (await foot()).includes('is in the download folder'), 25_000);
+            const said = await foot();
+            const landed = path.join(ctx.downloads, 'syslog');
+            const bytes = await readFile(landed).catch(() => Buffer.alloc(0));
+            // The box was asked for its own hash of that file, on a channel of its own, and nothing else ran.
+            const ranOnTheBox = ((await lab.tell('seen'))['sessions'] as { Command?: string }[]).map((x) => x.Command ?? '').filter((c) => c !== '');
+            check('Ctrl+S on a file brings it over, and the window says where it went and that the box agrees', arrived && said.includes('checked against the box') && bytes.toString() === "a line of the box's own log\n", [said, bytes.length, ranOnTheBox]);
+            // The same file again: it lands beside the first one under a free name, and the first is untouched.
+            await tap('S', ['control']);
+            const again = await until(async () => (await foot()).includes('syslog (2)'), 25_000);
+            const first = await readFile(landed).catch(() => Buffer.alloc(0));
+            const second = await readFile(path.join(ctx.downloads, 'syslog (2)')).catch(() => Buffer.alloc(0));
+            check('the same file again lands beside the first under a free name, and the first is untouched', again && first.toString() === second.toString() && first.length > 0, [await foot(), first.length, second.length]);
+            // A name this PC cannot hold as it is: it lands under one it can, and the window says why.
+            const odd = await lab.tell('oddnames var/log');
+            check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('a:b.txt'), 10_000);
+            await standOn('a:b.txt');
+            await tap('S', ['control']);
+            const renamed = await until(async () => (await foot()).includes('is in the download folder'), 25_000);
+            const renamedSaid = await foot();
+            const here = await readdir(ctx.downloads).catch(() => [] as string[]);
+            check('a name this PC cannot hold lands under one it can, and the window says why', renamed && renamedSaid.includes('renamed') && here.includes('a_b.txt') && !here.some((n) => n.includes(':')), [renamedSaid, here]);
+            // A box that says a file is bigger than this disk can hold: nothing is written at all, and the
+            // window says why. The check is made on what the box said, before a single byte is kept.
+            const lying = await lab.tell('pretendsize shortcut.lnk 900000000000000');
+            check('the lab box is set to say a file is bigger than any disk', lying['size'] === 900000000000000, lying);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('shortcut.lnk'), 10_000);
+            const before = await readdir(ctx.downloads).catch(() => [] as string[]);
+            await standOn('shortcut.lnk');
+            await tap('S', ['control']);
+            const refused = await until(async () => (await foot()).includes('not enough room'), 25_000);
+            await sleep(400);
+            const after = await readdir(ctx.downloads).catch(() => [] as string[]);
+            await lab.tell('pretendsize - 0');
+            check('a file bigger than the disk is refused before anything is written, and the window says why', refused && after.length === before.length, [await foot(), before.length, after.length]);
+            // Back to the folder the probes after this one expect.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('syslog'), 10_000);
           }
           // A box that says no to the file subsystem the first time it is asked. A real box does, when it is
           // busy or when the link is barely up. One refusal used to leave that tab's browser dead for as long

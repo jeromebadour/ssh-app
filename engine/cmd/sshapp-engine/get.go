@@ -141,17 +141,19 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	}
 
 	// What the box says the file is, by its own hash, against the hash of what was written here.
-	mark := "checked"
+	mark, why := "checked", ""
 	here := hex.EncodeToString(sum.Sum(nil))
 	there, err := f.l.Hash(ctx, link.SHA256, a.Path)
 	switch {
-	case errors.Is(err, link.ErrNameNotSafe), errors.Is(err, link.ErrNoHash):
-		mark = "not-checked"
+	case errors.Is(err, link.ErrNameNotSafe):
+		mark, why = "not-checked", "its name cannot be put in a command on a box"
+	case errors.Is(err, link.ErrNoHash):
+		mark, why = "not-checked", "the box answered with no hash"
 	case err != nil:
 		if ctx.Err() != nil {
 			return err
 		}
-		mark = "not-checked"
+		mark, why = "not-checked", say(err)
 	case there != here:
 		// Not the same. A file that changed on the box while it was read cannot match, and that is the file
 		// moving, not the link lying: it is said as changed. Anything else is a real mismatch.
@@ -167,6 +169,6 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		return err
 	}
 	landed = true
-	f.page(filePage{ID: a.ID, Got: got, Of: was.Size, Landed: a.Name, Mark: mark})
+	f.page(filePage{ID: a.ID, Got: got, Of: was.Size, Landed: a.Name, Mark: mark, MarkWhy: why})
 	return nil
 }

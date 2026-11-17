@@ -146,7 +146,7 @@ export class Engine {
   // Ask the box's files for something: a listing, what one path is, or how much of a disk is left. The answer
   // comes back as pages, through the hook, each saying which ask it belongs to. Nothing here waits: a listing
   // of a folder with thousands of files arrives a page at a time while the tab goes on working.
-  askFiles(ask: { id: number; do: string; path: string }): boolean {
+  askFiles(ask: { id: number; do: string; path: string; into?: string; name?: string }): boolean {
     if (this.aim.stub || this.state === 'gone') return false;
     this.write(T.FileAsk, Buffer.from(JSON.stringify(ask)));
     return true;
