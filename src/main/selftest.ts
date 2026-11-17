@@ -153,6 +153,36 @@ const dress = (t: Tab) => js<Dress>(t.view, `document.fonts.ready.then(() => ({
   field: (() => { const f = document.querySelector('.xterm-helper-textarea'); return f ? getComputedStyle(f).opacity + ' ' + getComputedStyle(f).position : 'none'; })(),
 }))`);
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
+// A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
+// permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
+// into it with the system's own tool. Anything less is a folder Windows will happily write to, and a probe
+// that proves nothing on the one machine where downloads land.
+const cannotBeWrittenTo = async (dir: string): Promise<void> => {
+  if (process.platform !== 'win32') {
+    await chmod(dir, 0o500);
+    return;
+  }
+  await new Promise<void>((done) => {
+    const who = process.env['USERNAME'] ?? '';
+    const p = spawn('icacls', [dir, '/deny', `${who}:(WD,AD,WA)`], { windowsHide: true });
+    p.on('close', () => done());
+    p.on('error', () => done());
+  });
+};
+
+const canBeWrittenToAgain = async (dir: string): Promise<void> => {
+  if (process.platform !== 'win32') {
+    await chmod(dir, 0o700).catch(() => undefined);
+    return;
+  }
+  await new Promise<void>((done) => {
+    const who = process.env['USERNAME'] ?? '';
+    const p = spawn('icacls', [dir, '/remove:d', who], { windowsHide: true });
+    p.on('close', () => done());
+    p.on('error', () => done());
+  });
+};
+
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
 // Signals go to one real process only. A pid of 0 would mean "every process in our group", main included:
 // an engine that never started has no pid, and must never be signalled.
@@ -1003,6 +1033,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const second = await readFile(path.join(ctx.downloads, 'syslog (2)')).catch(() => Buffer.alloc(0));
             check('the same file again lands beside the first under a free name, and the first is untouched', again && first.toString() === second.toString() && first.length > 0, [await foot(), first.length, second.length]);
             // A name this PC cannot hold as it is: it lands under one it can, and the window says why.
+            // This one needs a box whose filesystem is not this PC's, because the name has to be one the box
+            // can hold and the PC cannot. On Windows the lab's box is a folder on this very machine, so no
+            // such name can be made at all: there the rule is held by tests/landing.test.ts, name by name,
+            // and by this probe on Linux.
+            if (process.platform === 'win32') {
+              check('a name this PC cannot hold: not provable here, because the lab\u2019s box is this PC', true, 'skipped on Windows: see tests/landing.test.ts');
+            } else {
             const odd = await lab.tell('oddnames var/log');
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -1015,6 +1052,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const renamedSaid = await foot();
             const here = await readdir(ctx.downloads).catch(() => [] as string[]);
             check('a name this PC cannot hold lands under one it can, and the window says why', renamed && renamedSaid.includes('renamed') && here.includes('a_b.txt') && !here.some((n) => n.includes(':')), [renamedSaid, here]);
+            }
             // A box that says a file is bigger than this disk can hold: nothing is written at all, and the
             // window says why. The check is made on what the box said, before a single byte is kept.
             // A file big enough that, were the room asked about while it was already arriving, it would still
@@ -1173,12 +1211,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // A folder that cannot be written to is refused here, where he can still be told, and not at the
             // first download with a file already half across the network.
             const readOnly = await mkdtemp(path.join(os.tmpdir(), 'berth-readonly-'));
-            await chmod(readOnly, 0o500);
+            await cannotBeWrittenTo(readOnly);
             ctx.chooseFolder(() => readOnly);
             await clickOn('#settings-downloads-pick');
             const refused = await until(async () => (await said()).includes('cannot be written to'), 10_000);
             check('a folder that cannot be written to is refused, and downloads land where they did', refused && (await text('#settings-downloads')) === mine, [refused, await text('#settings-downloads')]);
-            await chmod(readOnly, 0o700).catch(() => undefined);
+            await canBeWrittenToAgain(readOnly);
             // Put it back: Berth's own folder again.
             ctx.chooseFolder(null);
             await clickOn('#settings-downloads-default');
@@ -3037,9 +3075,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const refusedBefore = ctx.opened().refused;
       await type(t, 'echo file:///etc/shadow javascript:void(0) ftp://x.test/y\n');
       await until(async () => (await shown(t)).includes('javascript:void'), 5000);
-      await sleep(300);
       // What the app itself treats as an address to open, asked of the app, row by row.
       const onRow = async (words: string): Promise<string[]> => {
+        // Waited for, not slept at: the line is drawn when the view next paints, and how long that takes is
+        // the machine's business. A flat wait here passed on one machine and lost the race on a slower one.
+        await until(async () => (await js<unknown>(t.view, `window.berthTerm.spot(${JSON.stringify(words)})`)) !== null, 10_000);
         const where = await js<{ x: number; y: number } | null>(t.view, `window.berthTerm.spot(${JSON.stringify(words)})`);
         if (!where) return ['(not drawn)'];
         const row = await js<number>(t.view, `(() => { const s = document.querySelector('.xterm-screen').getBoundingClientRect(); const t = window.berthTerm.size(); return Math.floor((${where.y} - s.top) / (s.height / t.rows)) + 1; })()`);
