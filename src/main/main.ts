@@ -1,6 +1,6 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, Notification, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
@@ -279,8 +279,20 @@ function info(t: Tab): TabInfo {
   const place = box?.places.find((p) => p.name === t.place);
   // The id of the log line for the failure that ended this link, if one ended it, is main's to add: the
   // engine knows the cause, main is what wrote it down, and the window needs the id to say it.
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link };
+  const said = doingNow.get(t.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
 }
+
+// What each tab's terminal is doing, as that tab reads its own box's prompt, and what it has to say about it:
+// something finished while it was behind, or it printed while nobody was looking. The words on the tab and in
+// any notification are main's own; what a view sends is one of three states and a number of milliseconds
+// (plan B2.7). A view that lies about it gains a wrong mark on its own tab.
+const doingNow = new Map<number, { doing: 'unknown' | 'idle' | 'running'; finishedMs: number; unseen: boolean }>();
+// How long a command must have taken for it to be worth a notification. Something that took a moment is not
+// news; what he asked for is to be told when a long job in a tab behind has ended.
+const WORTH_TELLING_MS = 20_000;
+// The longest a command can be said to have taken: a day. A view that says a year is not believed.
+const LONGEST_MS = 24 * 60 * 60 * 1000;
 
 // Per tab: the id of the log line for the failure that ended its link. One line per ending, not one per
 // time the window is told about it, and it goes when the tab opens again.
@@ -842,6 +854,10 @@ let keysRefused = 0; // a window key pressed where the window is not the person'
 function goToTab(id: number): void {
   if (!tabs.has(id)) return;
   active = id;
+  // A mark says "something happened here while you were elsewhere". Looking at the tab is the answer to it,
+  // so it goes the moment the tab is in front, and never needs a press of its own.
+  const said = doingNow.get(id);
+  if (said && (said.finishedMs > 0 || said.unseen)) doingNow.set(id, { ...said, finishedMs: 0, unseen: false });
   meter.tabSwitchBegins(id);
   frontTold.delete(id); // told again even if it was in front already: its frame ends the switch
   layout();
@@ -931,6 +947,60 @@ ipcMain.on(CH.tabTaken, (e, total: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof total !== 'number' || !tab.engine.taken(total)) drop('tab:taken', e);
 });
+
+// A tab says what its terminal is doing. Three states and a number: nothing a view sends here is drawn as
+// its own words, and nothing it says reaches another tab or a box. A tab in front has nothing to say, because
+// he is looking at it (plan B2.7).
+ipcMain.on(CH.tabDoing, (e, doing: unknown, finishedMs: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:doing', e);
+  if (doing !== 'unknown' && doing !== 'idle' && doing !== 'running') return drop('tab:doing', e);
+  if (typeof finishedMs !== 'number' || !Number.isFinite(finishedMs) || finishedMs < 0 || finishedMs > LONGEST_MS) return drop('tab:doing', e);
+  const was = doingNow.get(tab.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
+  const behind = active !== tab.id;
+  const took = Math.round(finishedMs);
+  const said: { doing: 'unknown' | 'idle' | 'running'; finishedMs: number; unseen: boolean } = { doing, finishedMs: behind && took > 0 ? took : 0, unseen: behind ? was.unseen || took > 0 : false };
+  doingNow.set(tab.id, said);
+  // The one notification he asked for: something that took a while has ended in a tab he is not looking at,
+  // and the window itself is not in front. Every word of it is main's own, from the box list and a clock.
+  if (behind && took >= WORTH_TELLING_MS && !(win?.isFocused() ?? false)) tellHim(tab, took);
+  tellShell();
+  if (tabs.get(tab.id) === tab) sendTo(tab.view, CH.tabState, info(tab));
+});
+
+// Windows' own way of saying something happened while he was elsewhere. It names the box and the place from
+// main's own list and says how long the command took; it never carries anything a box or a view wrote, and
+// pressing it brings that tab to the front.
+function tellHim(tab: Tab, took: number): void {
+  // The decision is counted before anything is drawn: whether this machine can show a notification at all is
+  // the machine's business, and what the lab holds main to is deciding to tell him and nothing more.
+  wouldTell++;
+  if (!Notification.isSupported()) return;
+  const box = tab.box ? (boxes?.get(tab.box.id) ?? tab.box) : null;
+  const where = box ? `${box.name}${tab.place ? ` \u00b7 ${tab.place}` : ''}` : 'a tab';
+  const note = new Notification({ title: `${where}: a command finished`, body: `It took ${howLong(took)}.`, silent: true });
+  note.on('click', () => {
+    if (!tabs.has(tab.id)) return;
+    win?.show();
+    goToTab(tab.id);
+  });
+  note.show();
+  notified++;
+}
+let wouldTell = 0; // how many times main decided he should be told, for the lab
+let notified = 0; // how many times one was really shown on this machine
+
+// How long something took, in the words a person uses for it: seconds under a minute, then minutes, then
+// hours and minutes. Main's own words, always.
+export function howLong(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} second${s === 1 ? '' : 's'}`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'}`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return `${h} hour${h === 1 ? '' : 's'}${rest > 0 ? ` and ${rest} minute${rest === 1 ? '' : 's'}` : ''}`;
+}
 
 ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
   const tab = tabByContents.get(e.sender.id);
@@ -1973,7 +2043,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

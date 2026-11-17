@@ -40,6 +40,9 @@ const shapes: Record<string, JSX.Element> = {
   settings: <><circle cx="8" cy="8" r="2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" /></>,
   key: <><circle cx="5.5" cy="10.5" r="2.5" /><path d="M7.3 8.7l5.2-5.2M10.5 5.5l1.5 1.5M9 7l1 1" /></>,
   check: <path d="M3.5 8.5l3 3 6-6.5" />,
+  // Something is running in a tab he is not looking at: a clock, because what it says is that it is taking
+  // time. It never moves: nothing in this window moves unless something changed (BUILD-RULES 2.27).
+  running: <><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></>,
   stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
   home: <><path d="M3 7.5L8 3.5l5 4" /><path d="M4.5 6.5v6h7v-6" /></>,
   search: <><circle cx="7" cy="7" r="3.75" /><path d="M10 10l3.5 3.5" /></>,

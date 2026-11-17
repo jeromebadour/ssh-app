@@ -55,6 +55,7 @@ interface Ctx {
   downloads: string;
   filesAsked(): Record<string, number>;
   faults(): Promise<{ written: number; lost: number; waiting: number; lately: { id: string; what: string }[]; file: string }>;
+  told(): { decided: number; shown: number };
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
@@ -1977,6 +1978,94 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('Keep Berth open: the window and its session are still here, and the footer says so', (await until(async () => !(await has('#closing')), 2000)) && !ctx.win.isDestroyed() && ctx.tabs.has(live.id) && (await text('#status-done')).includes('kept open'), await text('#status-done'));
         }
 
+        // Reading this box's prompt, and what that is for: the mark on a tab he is not looking at, and the
+        // one notification when something long ends behind his back. The lab's box is made to behave like a
+        // shell that prompts for this: the app's own reading of a prompt has its own tests (tests/blocks),
+        // and what is proved here is the whole way through, from a box's bytes to a mark on the bar.
+        {
+          // What the window has been told about one tab: the shell's own state, which is the same object the
+          // bar draws from, so a probe never reads anything the window does not.
+          const infoOf = (id: number) => ctx.shellState().tabs.find((t) => t.id === id);
+          const prompt = 'demo@lab-box:/srv/ledger$ ';
+          await lab.tell(`prompting ${prompt}`);
+          // A second tab on the same box, so one can be behind while the other is in front.
+          const behind = ctx.openTab(open1.box!.id, '')!;
+          await until(() => behind.engine.link.phase === 'up', 30_000);
+          // Its shell prints the prompt; the app learns it from that one line and says it is waiting.
+          await type(behind, '\n');
+          const learned = await until(() => ctx.tabs.get(behind.id) !== undefined && infoOf(behind.id)?.doing === 'idle', 15_000);
+          check('a tab reads its own box’s prompt and says it is waiting at it', learned && infoOf(behind.id)?.doing === 'idle', [learned, infoOf(behind.id)?.doing]);
+          // Something that takes a moment: the tab says it is running, and the bar draws that on it. The
+          // tab in front is the other one, so this is a tab he is not looking at.
+          await js(ctx.shell, `document.querySelector('[data-tab="${open1.id}"]')?.click()`);
+          await until(() => ctx.shellState().active === open1.id, 5000);
+          await type(behind, 'slow-one\n');
+          const ran = await until(() => infoOf(behind.id)?.doing === 'running', 10_000);
+          const clock = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${behind.id}"] .sig-running') ? 'yes' : 'no'`)) === 'yes', 10_000);
+          check('something running in a tab he is not looking at: the tab says so, and the bar marks it with a clock', ran && clock, [infoOf(behind.id)?.doing, clock]);
+          await shot('tab-running', 'a tab behind with something running in it', open1);
+          // And when it finishes, the mark becomes how long it took, which is what he asked to be told.
+          const done = await until(() => (infoOf(behind.id)?.finishedMs ?? 0) > 0, 15_000);
+          const said = await js<string>(ctx.shell, `document.querySelector('[data-tab="${behind.id}"] .sig-done')?.textContent ?? ''`);
+          check('a command that finished in a tab behind: the tab says how long it took, and the bar says it too', done && /^\d+s$/.test(said.trim()) && (infoOf(behind.id)?.doing === 'idle'), [infoOf(behind.id)?.finishedMs, said, infoOf(behind.id)?.doing]);
+          await shot('tab-marks', 'a tab behind: something ran in it and how long it took', open1);
+          // Looking at the tab is the answer to its mark: it goes, with no press of its own.
+          await js(ctx.shell, `document.querySelector('[data-tab="${behind.id}"]')?.click()`);
+          const cleared = await until(() => (infoOf(behind.id)?.finishedMs ?? 0) === 0 && infoOf(behind.id)?.unseen === false, 5000);
+          check('looking at the tab clears what it had to say, with no press of its own', cleared, [infoOf(behind.id)?.finishedMs, infoOf(behind.id)?.unseen]);
+          // The one notification he asked for: something that took a while ended in a tab he is not looking
+          // at, while the window itself was not in front. Whether this machine can draw one is the
+          // machine's business; what is held here is main's decision to tell him, and when it does not.
+          {
+            const behindTab = behind.id;
+            // The other tab is brought to the front first: this one has to be a tab he is not looking at,
+            // and the probe before this one left it in front to see its mark cleared.
+            await js(ctx.shell, `document.querySelector('[data-tab="${open1.id}"]')?.click()`);
+            await until(() => ctx.shellState().active === open1.id, 5000);
+            ctx.win.blur();
+            await sleep(150);
+            const before = ctx.told().decided;
+            await js(behind.view, `window.tabPort.doing('idle', 95000)`);
+            await sleep(300);
+            const toldHim = ctx.told().decided;
+            // The window in front: he is at the machine, so the tab's own mark is the whole of it.
+            ctx.win.focus();
+            await sleep(250);
+            await js(behind.view, `window.tabPort.doing('idle', 95000)`);
+            await sleep(300);
+            const afterFocus = ctx.told().decided;
+            // Short, and in a tab behind: a command that took a moment is not news.
+            ctx.win.blur();
+            await sleep(150);
+            await js(behind.view, `window.tabPort.doing('idle', 1500)`);
+            await sleep(300);
+            const afterShort = ctx.told().decided;
+            // And the tab he is looking at never raises one, however long it took.
+            await js(ctx.shell, `document.querySelector('[data-tab="${behindTab}"]')?.click()`);
+            await until(() => ctx.shellState().active === behindTab, 5000);
+            await js(behind.view, `window.tabPort.doing('idle', 95000)`);
+            await sleep(300);
+            const afterFront = ctx.told().decided;
+            ctx.win.focus();
+            check(
+              'something long that ended in a tab behind, with the window not in front, is worth telling him; a short one, a window he is looking at, and the tab in front are not',
+              toldHim === before + 1 && afterFocus === toldHim && afterShort === afterFocus && afterFront === afterShort,
+              [before, toldHim, afterFocus, afterShort, afterFront],
+            );
+            await js(ctx.shell, `document.querySelector('[data-tab="${open1.id}"]')?.click()`);
+            await until(() => ctx.shellState().active === open1.id, 5000);
+          }
+          // A view may say one of three things and a length that could be true; anything else is dropped.
+          const droppedBefore = ctx.dropped();
+          await js(behind.view, `(window.tabPort.doing('busy', 0), window.tabPort.doing('idle', -5), window.tabPort.doing('idle', 1e12), window.tabPort.doing('running', Number.NaN))`);
+          await sleep(300);
+          check('a view saying something else about what it is doing, or a length that cannot be true, is dropped', ctx.dropped() === droppedBefore + 4, ctx.dropped() - droppedBefore);
+          ctx.closeTab(behind.id);
+          await lab.tell('prompting');
+          await js(ctx.shell, `document.querySelector('[data-tab="${open1.id}"]')?.click()`);
+          await until(() => ctx.shellState().active === open1.id, 5000);
+        }
+
         // A link that is gone: the box's connection is reset. The bar says the cause and the time, a new
         // session is counted down, and Cancel stops it.
         const engineBefore = open1.engine.pid;
@@ -2487,7 +2576,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

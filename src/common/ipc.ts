@@ -23,6 +23,7 @@ export const CH = {
   // The tab's own file browser, on the box's files. Its asks and the pages that answer them: a listing arrives
   // a page at a time, so a folder of thousands of files is drawn as it is read.
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
+  tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
@@ -116,6 +117,14 @@ export interface TabInfo {
   cause: string; // why it is gone, in plain words; empty otherwise
   box: TabBox | null;
   link: LinkInfo;
+  // What this tab's terminal is doing, as the tab itself reads this box's prompt: 'idle' waiting at a
+  // prompt, 'running' with something in it, 'unknown' when the prompt could not be learned. A reading aid,
+  // never a proof (plan A5), and what the mark on a background tab is drawn from.
+  doing: 'unknown' | 'idle' | 'running';
+  // A tab that is not in front and has something to say: something finished in it (with how long it took),
+  // or it printed while nobody was looking. Both are cleared the moment the tab is looked at.
+  finishedMs: number; // 0 when nothing finished unseen
+  unseen: boolean; // it printed while this tab was not in front
 }
 
 // A box as the shell may draw it: no key, nothing secret. The identity is told only once it is pinned.
@@ -311,6 +320,11 @@ export interface TabPort {
   reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   files(ask: FileAsk): void; // ask the box's files for something
+  // What this tab's terminal is doing, as its own reading of this box's prompt sees it, and how long the
+  // command that just finished took. It is used for the mark on a tab that is not in front and for the one
+  // notification when something long ends; main writes every word of both (plan B2.7). A view that lies here
+  // gains a wrong mark and nothing else.
+  doing(doing: string, finishedMs: number): void;
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
   onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts

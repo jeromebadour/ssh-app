@@ -56,6 +56,7 @@ type Box struct {
 	accept         ssh.PublicKey // set by Accept: the key let in from then on
 	live           []*out        // the sessions that are open now: each one's way out
 	quiet          bool          // Quiet: the shells send nothing back by themselves
+	prompt         string        // Prompting: the prompt the shells print, or empty for a shell that only echoes
 	stall          bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
 	got            []byte        // every byte the shells were given since the last Received
 	files          string        // the folder its file subsystem answers under; empty means it has none
@@ -118,6 +119,19 @@ func (b *Box) Reset() int {
 func (b *Box) Stall(on bool) {
 	b.mu.Lock()
 	b.stall = on
+	b.mu.Unlock()
+}
+
+// Prompting makes the shells behave like a shell that prints a prompt: the prompt first, then the line it was
+// given echoed back, then the prompt again. A command whose first word is "slow" takes a moment before the
+// prompt comes back, which is how a test sees a tab with something running in it. Called with an empty prompt
+// the shells only echo, as they did before.
+//
+// The app's own prompt reading is a reading aid and is proven in its own tests; what this is for is the path
+// through a real link: bytes from a box, into the terminal, into the marks on the tab bar.
+func (b *Box) Prompting(prompt string) {
+	b.mu.Lock()
+	b.prompt = prompt
 	b.mu.Unlock()
 }
 
@@ -388,11 +402,21 @@ func (b *Box) session(nc ssh.NewChannel) {
 	}()
 	buf := make([]byte, 32*1024)
 	var tail []byte
+	var line []byte // what has been typed since the last newline, for a shell that prompts
+	b.mu.Lock()
+	prompt := b.prompt
+	b.mu.Unlock()
+	if prompt != "" {
+		if _, werr := way.Write([]byte(prompt)); werr != nil {
+			return
+		}
+	}
 	for {
 		n, err := ch.Read(buf)
 		if n > 0 {
 			b.mu.Lock()
 			quiet := b.quiet
+			prompt = b.prompt
 			if len(b.got) < 4<<20 {
 				b.got = append(b.got, buf[:n]...)
 			}
@@ -400,6 +424,39 @@ func (b *Box) session(nc ssh.NewChannel) {
 			if !quiet {
 				if _, werr := way.Write(buf[:n]); werr != nil {
 					return
+				}
+			}
+			// A shell that prompts: the line is taken as a command when the newline arrives, and the prompt
+			// comes back after it. Nothing here runs anything: it is a shape for the app to read, and the one
+			// command it knows about is a slow one, so that a test can see something running.
+			if prompt != "" {
+				for _, c := range buf[:n] {
+					if c != '\n' && c != '\r' {
+						if len(line) < 4096 {
+							line = append(line, c)
+						}
+						continue
+					}
+					said := strings.TrimSpace(string(line))
+					line = line[:0]
+					if _, werr := way.Write([]byte("\r\n")); werr != nil {
+						return
+					}
+					if strings.HasPrefix(said, "slow") {
+						select {
+						case <-time.After(700 * time.Millisecond):
+						case <-b.closed:
+							return
+						}
+					}
+					if said != "" {
+						if _, werr := way.Write([]byte(said + ": nothing was run, this is a lab box\r\n")); werr != nil {
+							return
+						}
+					}
+					if _, werr := way.Write([]byte(prompt)); werr != nil {
+						return
+					}
 				}
 			}
 			tail = append(tail, buf[:n]...)
