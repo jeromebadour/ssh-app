@@ -158,6 +158,10 @@ port.onState((info) => {
     // works out itself from ".". The shell started there too, so the two begin together.
     askedFor = info.box?.folder ? info.box.folder : '.';
     files.open(askedFor);
+    // What has been in this disk's trash longer than the box keeps things goes now, once per tab, as the plan
+    // says (B2.5, entry 4). It is the one thing Berth does on a box without being asked, it touches nothing
+    // but its own trash, and what it took is said on the pane rather than done in silence.
+    files.emptyOldTrash();
   }
   // The end of a link is also written where it happened, in the terminal, in Berth's own words.
   if (info.box && info.link.phase === 'ended' && now !== last) term.note(`Berth: the link is gone: ${ending(info.link.cause).said} at ${clock(Date.now())}`);

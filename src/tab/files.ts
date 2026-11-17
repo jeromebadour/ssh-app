@@ -68,6 +68,22 @@ const SENT_MARK: Record<string, string> = {
   '': 'but it was not checked',
 };
 
+// What the window says for each way a delete, a restore or an emptying can end.
+// How long a box's trash keeps things, which is the engine's own number said here so the button can name it.
+const TRASH_DAYS = 7;
+
+const TRASH_WHY: Record<string, string> = {
+  refused: 'Berth does not delete that',
+  'no-trash': 'This disk cannot hold a trash, so nothing here can be deleted',
+  'already-there': 'Something of that name is there now, so it was not put back',
+  'no-such-file': 'That is not there any more',
+  denied: 'This account may not do that',
+  unsupported: 'This box has no file subsystem',
+  'no-answer': 'The box did not answer',
+  'no-link': 'There is no link to the box',
+  failed: 'It could not be done',
+};
+
 // Every ask on the tab's one file channel takes a number from here, so the browser and the viewer can both
 // use it and each knows which pages are its own.
 export interface Asker {
@@ -79,7 +95,9 @@ export function makeAsker(port: TabPort): Asker {
   return {
     ask(a) {
       const id = a.id && a.id > 0 ? a.id : next++;
-      port.files(a.which ? { id, do: a.do, path: a.path, which: a.which } : { id, do: a.do, path: a.path });
+      if (a.which) port.files({ id, do: a.do, path: a.path, which: a.which });
+      else if (a.name !== undefined) port.files({ id, do: a.do, path: a.path, name: a.name });
+      else port.files({ id, do: a.do, path: a.path });
       return id;
     },
   };
@@ -87,6 +105,7 @@ export function makeAsker(port: TabPort): Asker {
 
 export interface Files {
   open(path: string): void; // list this folder
+  emptyOldTrash(): void; // take what is older than the days this box keeps things out of its trash
   shown(): string; // the folder on screen now, as the box names it
   rows(): number;
   draw(): void;
@@ -136,7 +155,24 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   el.foot.id = 'fb-foot';
   el.moving.className = 'fb-moving';
   el.moving.id = 'fb-moving';
-  here.append(el.path, sendBtn);
+  // The trash of the disk this folder is on. It sits beside the folder's name because it belongs to the disk
+  // that folder is on, not to the window.
+  const binBtn = document.createElement('button');
+  binBtn.className = 'fb-send';
+  binBtn.id = 'fb-bin';
+  binBtn.type = 'button';
+  binBtn.title = "What has been deleted on this disk, and can be brought back";
+  binBtn.setAttribute('aria-label', 'The trash on this disk');
+  binBtn.append(glyph('bin'));
+  binBtn.addEventListener('click', () => {
+    if (bin.open) {
+      bin = { open: false, where: '', rows: [], busy: false, said: bin.said };
+      draw();
+      return;
+    }
+    openTrash();
+  });
+  here.append(el.path, binBtn, sendBtn);
   at.append(here, el.list, el.moving, el.foot);
 
   const ask = (a: FileAsk) => asker.ask(a);
@@ -181,6 +217,31 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     if (hashing && hashing.hash === '' && p.done && p.error) {
       hashing.fault = WHY[p.error] ?? 'The box could not give a hash for it';
+      draw();
+      return;
+    }
+    // The trash: what a delete, a restore or an emptying did, and what is in it now.
+    if (p.trash !== undefined || p.trashed !== undefined || p.emptied !== undefined || (bin.busy && p.done)) {
+      if (p.trash !== undefined) {
+        bin.rows = p.trash;
+        bin.where = p.where ?? bin.where;
+      }
+      if (p.trashed) {
+        const t = p.trashed;
+        bin.said = p.id === askingTrash ? bin.said : `${shorten(t.from.split('/').pop() ?? t.name, 30)} ${bin.open ? 'is back where it was' : 'is in the trash'}`;
+        if (bin.open) bin.rows = bin.rows.filter((x) => x.name !== t.name);
+        else open(where || asked); // the folder it left is listed again, so the row goes
+      }
+      if (typeof p.emptied === 'number' || typeof p.freed === 'number') {
+        const n = p.emptied ?? 0;
+        if (!quietly || n > 0) bin.said = n === 0 ? 'Nothing in the trash is old enough to empty' : `${n} ${n === 1 ? 'thing' : 'things'} older than ${TRASH_DAYS} days emptied from the trash, ${size(p.freed ?? 0)} freed`;
+        if (bin.open) openTrash();
+      }
+      if (p.done) {
+        bin.busy = false;
+        if (p.error && !quietly) bin.said = TRASH_WHY[p.error] ?? TRASH_WHY['failed']!;
+        quietly = false;
+      }
       draw();
       return;
     }
@@ -259,6 +320,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     el.path.title = here;
 
     el.list.replaceChildren();
+    binBtn.dataset['open'] = bin.open ? 'yes' : 'no';
+    binBtn.setAttribute('aria-pressed', String(bin.open));
+    if (bin.open) {
+      drawTrash();
+      drawFoot();
+      return;
+    }
     if (why !== '') {
       const fault = document.createElement('div');
       fault.className = 'fb-why';
@@ -300,10 +368,63 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     if (hadFocus) drawn.find((e) => e.tabIndex === 0)?.focus();
 
+    drawFoot();
+  };
+
+  // What has been deleted on this disk, newest first, each with where it came from and when, and a way to put
+  // it back. It is drawn in the list's own place, because it is the same list seen from the other side.
+  const drawTrash = () => {
+    const head = document.createElement('div');
+    head.className = 'fb-why quiet';
+    head.id = 'fb-bin-head';
+    head.textContent = bin.busy && bin.rows.length === 0 ? 'Reading the trash' : bin.rows.length === 0 ? 'Nothing has been deleted on this disk' : `Deleted on this disk, newest first`;
+    el.list.append(head);
+    if (bin.rows.length > 0) {
+      const empty = document.createElement('button');
+      empty.className = 'fb-bin-empty';
+      empty.id = 'fb-bin-empty';
+      empty.type = 'button';
+      empty.append(glyph('bin'));
+      const word = document.createElement('span');
+      word.textContent = `Empty what is older than ${TRASH_DAYS} days`;
+      empty.append(word);
+      empty.addEventListener('click', () => emptyTrash());
+      el.list.append(empty);
+    }
+    for (const t of bin.rows) {
+      const row = document.createElement('div');
+      row.className = `fb-row fb-${t.kind}`;
+      row.dataset['name'] = t.name;
+      row.append(glyph(t.kind));
+      const words = document.createElement('span');
+      words.className = 'fb-name';
+      words.textContent = t.from;
+      words.title = t.from;
+      const when = document.createElement('span');
+      when.className = 'fb-size';
+      when.textContent = `${t.kind === 'folder' ? '' : size(t.size) + ', '}${howLongAgo(t.when)}`;
+      const back = document.createElement('button');
+      back.className = 'fb-get fb-back';
+      back.type = 'button';
+      back.title = 'Put this back where it was';
+      back.setAttribute('aria-label', `Put ${t.from} back`);
+      back.tabIndex = -1;
+      back.append(glyph('back'));
+      back.addEventListener('click', () => putBack(t.name));
+      row.append(words, when, back);
+      el.list.append(row);
+    }
+  };
+
+  // The foot and the strip under the list, drawn the same whether the list or the trash is on screen.
+  const drawFoot = () => {
     el.foot.replaceChildren();
-    const bits: string[] = [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
-    if (space) bits.push(`${size(space.free)} free of ${size(space.total)}`);
-    if (said !== '') bits.push(said);
+    const bits: string[] = bin.open
+      ? [`${bin.rows.length} in the trash${bin.busy ? ', reading' : ''}`, ...(bin.said === '' ? [] : [bin.said])]
+      : [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
+    if (!bin.open && bin.said !== '') bits.push(bin.said);
+    if (space && !bin.open) bits.push(`${size(space.free)} free of ${size(space.total)}`);
+    if (said !== '' && !bin.open) bits.push(said);
     // What is being brought over or sent, one line each: how far it has got, how fast, and how long is left.
     // A finished one says where it went and whether it could be checked, and stays until the next move. These
     // go under the counts and may take two lines, because what they say is a sentence and a sentence that is
@@ -336,6 +457,51 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       el.foot.append(part);
     }
     el.moving.replaceChildren();
+    // Deleting asks first, and names what would go. It is asked in the pane rather than on the shell because
+    // it is about this tab's own box and folder, and because the answer is one press either way
+    // (BUILD-RULES 2.20). Keeping it has the focus, so Enter and Escape both keep it.
+    if (goingToTrash) {
+      const ask = document.createElement('div');
+      ask.className = 'fb-ask';
+      ask.id = 'fb-ask-delete';
+      const head = document.createElement('div');
+      head.className = 'fb-ask-head';
+      head.textContent = `Delete ${shorten(goingToTrash.name, 26)}?`;
+      const said = document.createElement('div');
+      said.className = 'fb-ask-said';
+      said.id = 'fb-ask-said';
+      said.textContent =
+        goingToTrash.kind === 'folder'
+          ? 'It goes to this disk\u2019s trash, whole, and can be brought back from there. The box keeps it for 7 days.'
+          : `${size(goingToTrash.size)}. It goes to this disk\u2019s trash and can be brought back from there. The box keeps it for 7 days, so that much stays used.`;
+      const acts = document.createElement('div');
+      acts.className = 'fb-ask-acts';
+      const keep = document.createElement('button');
+      keep.className = 'fb-ask-keep';
+      keep.id = 'fb-ask-keep';
+      keep.type = 'button';
+      keep.append(glyph('close'));
+      const keepWord = document.createElement('span');
+      keepWord.textContent = 'Keep it';
+      keep.append(keepWord);
+      keep.addEventListener('click', () => {
+        goingToTrash = null;
+        draw();
+      });
+      const go = document.createElement('button');
+      go.className = 'fb-ask-go';
+      go.id = 'fb-ask-go';
+      go.type = 'button';
+      go.append(glyph('bin'));
+      const goWord = document.createElement('span');
+      goWord.textContent = 'Delete it';
+      go.append(goWord);
+      go.addEventListener('click', () => reallyDelete());
+      acts.append(keep, go);
+      ask.append(head, said, acts);
+      el.moving.append(ask);
+      setTimeout(() => (document.getElementById('fb-ask-keep') as HTMLButtonElement | null)?.focus(), 0);
+    }
     // A hash a person asked for: what it is, a way to copy it, and a place to paste what it should be.
     if (hashing) {
       const h = document.createElement('div');
@@ -485,6 +651,18 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         place(r.name);
         bring(r.name);
       });
+      const bye = document.createElement('button');
+      bye.className = 'fb-get fb-bye';
+      bye.type = 'button';
+      bye.title = 'Delete this file (Delete)';
+      bye.setAttribute('aria-label', `Delete ${r.name}`);
+      bye.tabIndex = -1;
+      bye.append(glyph('bin'));
+      bye.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        place(r.name);
+        askToDelete(r.name);
+      });
       const sum = document.createElement('button');
       sum.className = 'fb-get fb-sum';
       sum.type = 'button';
@@ -497,7 +675,22 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         place(r.name);
         askHash(r.name, ev.shiftKey ? 'md5' : 'sha256');
       });
-      e.append(sum, get);
+      e.append(sum, get, bye);
+    } else if (r.kind === 'folder' && r.name !== '..') {
+      // A folder is deleted whole, and comes back whole; it has no hash and nothing to bring over.
+      const bye = document.createElement('button');
+      bye.className = 'fb-get fb-bye';
+      bye.type = 'button';
+      bye.title = 'Delete this folder (Delete)';
+      bye.setAttribute('aria-label', `Delete ${r.name}`);
+      bye.tabIndex = -1;
+      bye.append(glyph('bin'));
+      bye.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        place(r.name);
+        askToDelete(r.name);
+      });
+      e.append(bye);
     }
     return e;
   };
@@ -569,12 +762,70 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
+  // Deleting, and the trash it goes into. Nothing is removed: the window asks main, main asks the engine, and
+  // the engine moves it into the trash on its own disk. What the window does here is ask first, with what
+  // would go in front of the person, and then say where it went (BUILD-RULES 2.20, plan B4.4).
+  const askToDelete = (name: string): void => {
+    const r = rows.find((x) => x.name === name);
+    if (!r) return;
+    goingToTrash = { name, kind: r.kind, size: r.size };
+    draw();
+  };
+
+  const reallyDelete = (): void => {
+    const going = goingToTrash;
+    goingToTrash = null;
+    if (!going) return;
+    bin.busy = true;
+    bin.said = '';
+    asker.ask({ do: 'delete', path: join(where || asked, going.name) });
+    draw();
+  };
+
+  const openTrash = (): void => {
+    bin = { open: true, where: '', rows: [], busy: true, said: '' };
+    askingTrash = asker.ask({ do: 'trash', path: where || asked });
+    draw();
+  };
+
+  // The emptying that happens by itself when a tab comes up: the same thing the button does, but it says
+  // nothing at all when there was nothing old enough, because that is not news, and nothing when the disk
+  // cannot hold a trash, because a tab coming up is not the place to say so.
+  let emptiedOnce = false;
+  let quietly = false;
+  const emptyOldTrash = (): void => {
+    if (emptiedOnce) return;
+    emptiedOnce = true;
+    quietly = true;
+    asker.ask({ do: 'empty', path: where || asked });
+  };
+
+  const emptyTrash = (): void => {
+    bin.busy = true;
+    bin.said = '';
+    asker.ask({ do: 'empty', path: where || asked });
+    draw();
+  };
+
+  const putBack = (name: string): void => {
+    bin.busy = true;
+    bin.said = '';
+    asker.ask({ do: 'restore', path: where || asked, name });
+    draw();
+  };
+
   // A box's own hash of one of its files, because a person asked for it. sha256 is what a transfer compares;
   // md5 is here because people still paste md5 at each other, and it is the only other hash a box may ever be
   // asked for (plan B2.5, entry 3). What comes back can be copied, and an expected one can be pasted in and
   // compared here, so nobody has to compare sixty-four characters by eye.
   type Hashing = { name: string; which: 'sha256' | 'md5'; hash: string; fault: string; expected: string };
   let hashing: Hashing | null = null;
+  // The trash of the disk the folder on screen is on: what is in it, and what the last thing done to it was.
+  type Binned = { open: boolean; where: string; rows: TrashedRow[]; busy: boolean; said: string };
+  let bin: Binned = { open: false, where: '', rows: [], busy: false, said: '' };
+  let askingTrash = 0;
+  let goingToTrash: { name: string; kind: string; size: number } | null = null;
+  type TrashedRow = { name: string; from: string; when: number; size: number; kind: string };
 
   const askHash = (name: string, which: 'sha256' | 'md5'): void => {
     const r = rows.find((x) => x.name === name);
@@ -597,6 +848,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // The list is reached by the keyboard, not only by a mouse: Tab lands on it, the arrows move inside it, and
   // Enter opens what a double-click would. Anything with Ctrl, Alt or the Windows key is not the list's: those
   // belong to the window itself or to the box.
+  // Escape keeps whatever is being asked about, from anywhere in the pane.
+  at.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !goingToTrash) return;
+    goingToTrash = null;
+    draw();
+    e.preventDefault();
+  });
+
   el.list.addEventListener('keydown', (e: KeyboardEvent) => {
     // The one press with Ctrl the list answers: bringing the file it is standing on over to the PC. It is the
     // save key, it is not a key a window or a box has any use for here, and the list is not a terminal.
@@ -614,7 +873,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const all = names();
-    if (e.key === 'ArrowDown') step(1);
+    if (e.key === 'Delete') {
+      if (standing !== '' && standing !== '..') askToDelete(standing);
+    } else if (e.key === 'ArrowDown') step(1);
     else if (e.key === 'ArrowUp') step(-1);
     else if (e.key === 'Home') place(all[0] ?? '');
     else if (e.key === 'End') place(all[all.length - 1] ?? '');
@@ -634,10 +895,20 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   return {
     open,
+    emptyOldTrash,
     shown: () => where,
     rows: () => rows.length,
     draw,
   };
+}
+
+// How long ago something was, in the words a person uses for it.
+function howLongAgo(when: number): string {
+  const ago = Date.now() / 1000 - when;
+  if (ago < 90) return 'a moment ago';
+  if (ago < 5400) return `${Math.round(ago / 60)} minutes ago`;
+  if (ago < 36 * 3600) return `${Math.round(ago / 3600)} hours ago`;
+  return `${Math.round(ago / 86400)} days ago`;
 }
 
 // A length of time in the words a person uses for it, never more exactly than it is worth saying.
@@ -703,6 +974,8 @@ export const SHAPES: Record<string, string> = {
   send: 'M8 9.5v-7M5 5.5L8 2.5l3 3M3.5 12.5h9',
   sum: 'M4.5 3.5h7l-4 4.5 4 4.5h-7',
   copy: 'M5.5 5.5h7.5v7.5h-7.5zM3 10.5V3h7.5',
+  bin: 'M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5',
+  back: 'M3.5 8.5h7a2.5 2.5 0 0 0 0-5H7M6 11L3.5 8.5 6 6',
 };
 
 export function glyph(kind: string): SVGSVGElement {

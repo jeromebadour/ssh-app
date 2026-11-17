@@ -854,7 +854,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -885,6 +885,15 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
     const which = a['which'];
     if (which !== 'sha256' && which !== 'md5') return drop('tab:file-ask', e);
     if (!tab.engine.askFiles({ id, do: 'hash', path: where, name: which })) return drop('tab:file-ask', e);
+    return;
+  }
+  // Putting something back names one thing inside the trash, and that name came from the box itself a moment
+  // ago. It is passed on as a name and never as a path: the engine looks it up in that trash's own record.
+  if (what === 'restore') {
+    const name = a['name'];
+    if (typeof name !== 'string' || name === '' || name.length > 512 || name.includes('/') || name.includes('\\')) return drop('tab:file-ask', e);
+    if (!tab.engine.askFiles({ id, do: 'restore', path: where, name })) return drop('tab:file-ask', e);
+    filesAsked.set('restore', (filesAsked.get('restore') ?? 0) + 1);
     return;
   }
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);

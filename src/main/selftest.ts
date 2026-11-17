@@ -179,10 +179,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
   };
+  // The one thing this guard is for is a hang: a run that stops answering, with nothing to show for it. How
+  // fast the app is has its own budgets, measured and reported separately (B8), so this ceiling is generous
+  // on purpose and rises with the number of things the lab tries, rather than quietly cutting them. On a slow
+  // test machine it is multiplied by the stated factor, as every other budget is.
+  const wholeRunMs = 300_000 * Math.max(1, Number(process.env['SSHAPP_BUDGET_FACTOR']) || 1);
   const guard = setTimeout(() => {
-    check('finished in time', false, `no end within 90 s; stuck ${stage}`);
+    check('finished in time', false, `no end within ${Math.round(wholeRunMs / 1000)} s; stuck ${stage}`);
     finish(1);
-  }, 90_000);
+  }, wholeRunMs);
 
   // A canary: a web server on this machine that must never hear from a view. It exists only during this
   // test, in an unpackaged build; the app itself never listens on any port.
@@ -1078,6 +1083,66 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('syslog'), 10_000);
+          }
+          // Deleting, and the trash it goes into. Nothing is removed on a box: a delete asks first, naming what
+          // would go, and then moves it into the trash on that disk, where it can be brought back from.
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            const names = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+            await lab.tell('read var/log/syslog');
+            // The press asks first, and nothing has moved while it is asking.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-bye')?.click()`);
+            const asked = await until(() => has('#fb-ask-delete', front), 5000);
+            const saidWhat = await js<string>(front.view, `document.getElementById('fb-ask-said')?.textContent ?? ''`);
+            const focused = await js<string>(front.view, `document.activeElement?.id ?? ''`);
+            const stillThere = await lab.tell('read var/log/syslog');
+            check('a delete asks first, says where it would go and what it is holding, and nothing has moved', asked && saidWhat.includes('trash') && saidWhat.includes('28 B') && focused === 'fb-ask-keep' && typeof stillThere['text'] === 'string', [saidWhat, focused, stillThere]);
+            await shot('delete-asks', 'deleting a file on a box, asked about before anything moves', front);
+            // Keep it: the file is exactly where it was.
+            await js(front.view, `document.getElementById('fb-ask-keep')?.click()`);
+            await sleep(200);
+            check('Keep it leaves the file where it was', !(await has('#fb-ask-delete', front)) && (await names()).includes('syslog') && typeof (await lab.tell('read var/log/syslog'))['text'] === 'string', await names());
+            // Delete it: it leaves the folder and the window says where it went.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-bye')?.click()`);
+            await until(() => has('#fb-ask-delete', front), 5000);
+            await js(front.view, `document.getElementById('fb-ask-go')?.click()`);
+            const gone = await until(async () => !(await names()).includes('syslog'), 15_000);
+            const went = await until(async () => (await foot()).includes('is in the trash'), 15_000);
+            const onTheBox = await lab.tell('read var/log/syslog');
+            check('Delete it moves the file out of the folder, says so, and the box no longer has it there', gone && went && onTheBox['error'] === 'no such file', [await foot(), onTheBox]);
+            // The trash says what is in it, where each came from and when.
+            await js(front.view, `document.getElementById('fb-bin')?.click()`);
+            const inBin = await until(async () => (await js<string>(front.view, `document.getElementById('fb-list')?.textContent ?? ''`)).includes('/var/log/syslog'), 15_000);
+            const binText = await js<string>(front.view, `document.getElementById('fb-list')?.textContent ?? ''`);
+            check('the trash says what has been deleted on this disk, with where it came from and when', inBin && binText.includes('Deleted on this disk') && binText.includes('a moment ago'), binText.slice(0, 160));
+            await shot('the-trash', 'what has been deleted on a disk, and the way to put it back', front);
+            // Put it back: it is where it was, with its own bytes.
+            await js(front.view, `document.querySelector('#fb-list .fb-row .fb-back')?.click()`);
+            const back = await until(async () => (await foot()).includes('is back where it was'), 15_000);
+            const backOnTheBox = await lab.tell('read var/log/syslog');
+            check('Put it back puts the file where it came from, with its own bytes', back && backOnTheBox['text'] === "a line of the box's own log\n", [await foot(), backOnTheBox]);
+            // A view may name one thing inside a trash and nothing that could be a path of its own.
+            const droppedBefore = ctx.dropped();
+            await js(front.view, `(window.tabPort.files({ id: 91001, do: 'restore', path: '/var/log', name: '../../etc/passwd' }), window.tabPort.files({ id: 91002, do: 'restore', path: '/var/log', name: '' }), window.tabPort.files({ id: 91003, do: 'restore', path: '/var/log' }))`);
+            await sleep(400);
+            check('a view putting something back may name one thing in the trash and nothing path-shaped', ctx.dropped() === droppedBefore + 3, ctx.dropped() - droppedBefore);
+            await js(front.view, `document.getElementById('fb-bin')?.click()`);
+            await until(async () => (await names()).includes('syslog'), 15_000);
+            // What Berth will not delete is refused, and the box keeps it.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('log'), 10_000);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('var'), 10_000);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="var"] .fb-bye')?.click()`);
+            await until(() => has('#fb-ask-delete', front), 5000);
+            await js(front.view, `document.getElementById('fb-ask-go')?.click()`);
+            const refused = await until(async () => (await foot()).includes('does not delete that'), 15_000);
+            check('a folder at the top of the box is refused, and it is still there', refused && (await names()).includes('var'), [await foot(), await names()]);
+            // Back to the folder the probes after this one expect.
+            await js(front.view, `document.querySelector('[data-name="var"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('syslog'), 10_000);
           }
           // A box that says no to the file subsystem the first time it is asked. A real box does, when it is
           // busy or when the link is barely up. One refusal used to leave that tab's browser dead for as long
