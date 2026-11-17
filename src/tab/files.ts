@@ -280,6 +280,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   };
   at.style.setProperty('--fb-size', '1');
   at.dataset['size'] = '100';
+  // Where this tab's list starts, from the settings. The nearest of the sizes this pane has, so that the keys
+  // step from it rather than from somewhere between two of them.
+  port.onSettings((s) => {
+    const want = typeof s?.paneSize === 'number' && s.paneSize >= 0.5 && s.paneSize <= 3 ? s.paneSize : 1;
+    let near = SIZES.indexOf(1);
+    for (let i = 0; i < SIZES.length; i++) if (Math.abs(SIZES[i]! - want) < Math.abs(SIZES[near]! - want)) near = i;
+    setSize(near, false);
+  });
   // The keys, taken only while this pane has the focus: the terminal beside it has its own size and its own
   // keys, and a press meant for one must never move the other.
   at.addEventListener('keydown', (e) => {

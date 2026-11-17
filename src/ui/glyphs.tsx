@@ -31,6 +31,12 @@ const shapes: Record<string, JSX.Element> = {
   copy: <><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1" /><path d="M3 10.5v-7.5h7.5" /></>,
   close: <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
   plus: <path d="M8 3.5v9M3.5 8h9" />,
+  // How big the text is: two letters, one larger than the other, which is the one glyph a person reads as
+  // "the size of what is written" without a word beside it.
+  zoom: <><path d="M2 12.5l3.2-8 3.2 8M3.1 10h4.2" /><path d="M9.6 12.5l2.1-5.2 2.1 5.2M10.3 10.9h2.8" /></>,
+  // Bringing something over to this PC, and putting a thing back the way it was: the two the settings need.
+  bring: <path d="M8 2.5v7M5 6.5L8 9.5l3-3M3.5 12.5h9" />,
+  back: <path d="M3.5 8.5h7a2.5 2.5 0 0 0 0-5H7M6 11L3.5 8.5 6 6" />,
   settings: <><circle cx="8" cy="8" r="2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" /></>,
   key: <><circle cx="5.5" cy="10.5" r="2.5" /><path d="M7.3 8.7l5.2-5.2M10.5 5.5l1.5 1.5M9 7l1 1" /></>,
   check: <path d="M3.5 8.5l3 3 6-6.5" />,
