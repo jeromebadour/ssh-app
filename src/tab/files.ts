@@ -254,6 +254,55 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   here.append(el.path, binBtn, sendBtn);
   at.append(here, tools, el.list, el.moving, el.foot);
 
+  // ---- How big this pane's text is ----
+  // His own words about MobaXterm: the terminal zooms and the file browser does not, and that annoys him.
+  // The pane has its own size, apart from the terminal's, because the two are read for different things: a
+  // folder of long names wants room across, a terminal wants lines down. It is this tab's own and lasts as
+  // long as the tab; keeping it between runs comes with the settings.
+  const SIZES = [0.75, 0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
+  let sizeAt = SIZES.indexOf(1);
+  const setSize = (to: number, say: boolean): void => {
+    const next = Math.min(SIZES.length - 1, Math.max(0, to));
+    // A press that changes nothing still answers, or a person at either end presses again and again into
+    // silence wondering whether the key is reaching the window at all (BUILD-RULES 2.18).
+    if (next === sizeAt && say) {
+      // A press that changes nothing says why it changed nothing, and the three reasons are different: it is
+      // as small as it goes, as large as it goes, or already at its own size.
+      said = next === 0 ? 'This is as small as the list goes' : next === SIZES.length - 1 ? 'This is as large as the list goes' : 'The list is already at its own size';
+      draw();
+      return;
+    }
+    sizeAt = next;
+    at.style.setProperty('--fb-size', String(SIZES[sizeAt]));
+    at.dataset['size'] = String(Math.round(SIZES[sizeAt]! * 100));
+    if (say) said = SIZES[sizeAt] === 1 ? 'The list is back to its own size' : `The list is at ${Math.round(SIZES[sizeAt]! * 100)}%`;
+    draw();
+  };
+  at.style.setProperty('--fb-size', '1');
+  at.dataset['size'] = '100';
+  // The keys, taken only while this pane has the focus: the terminal beside it has its own size and its own
+  // keys, and a press meant for one must never move the other.
+  at.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    const bigger = e.key === '+' || e.key === '=';
+    const smaller = e.key === '-' || e.key === '_';
+    const same = e.key === '0';
+    if (!bigger && !smaller && !same) return;
+    e.preventDefault(); // the browser's own zoom would take the whole view, terminal and all
+    e.stopPropagation();
+    setSize(same ? SIZES.indexOf(1) : sizeAt + (bigger ? 1 : -1), true);
+  });
+  // And the wheel, which is how a person who is already pointing at the list reaches for it.
+  at.addEventListener(
+    'wheel',
+    (e) => {
+      if (!e.ctrlKey || e.deltaY === 0) return;
+      e.preventDefault();
+      setSize(sizeAt + (e.deltaY < 0 ? 1 : -1), true);
+    },
+    { passive: false },
+  );
+
   const ask = (a: FileAsk) => asker.ask(a);
 
   const open = (path: string, keepTries = 0) => {
