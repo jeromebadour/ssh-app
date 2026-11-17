@@ -77,7 +77,7 @@ export function makeAsker(port: TabPort): Asker {
   return {
     ask(a) {
       const id = a.id && a.id > 0 ? a.id : next++;
-      port.files({ id, do: a.do, path: a.path });
+      port.files(a.which ? { id, do: a.do, path: a.path, which: a.which } : { id, do: a.do, path: a.path });
       return id;
     },
   };
@@ -172,6 +172,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let trying: ReturnType<typeof setTimeout> | null = null;
 
   port.onFilePage((p: FilePage) => {
+    if (hashing && typeof p.hash === 'string' && p.hash !== '') {
+      hashing.hash = p.hash;
+      draw();
+      return;
+    }
+    if (hashing && hashing.hash === '' && p.done && p.error) {
+      hashing.fault = WHY[p.error] ?? 'The box could not give a hash for it';
+      draw();
+      return;
+    }
     const down = bringing.get(p.id);
     if (down) {
       if (typeof p.of === 'number' && p.of > 0) down.of = p.of;
@@ -322,10 +332,112 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       el.foot.append(part);
     }
     el.moving.replaceChildren();
-    for (const line of lines) {
+    // A hash a person asked for: what it is, a way to copy it, and a place to paste what it should be.
+    if (hashing) {
+      const h = document.createElement('div');
+      h.className = 'fb-hash';
+      h.id = 'fb-hash';
+      const top = document.createElement('div');
+      top.className = 'fb-hash-top';
+      const what = document.createElement('span');
+      what.className = 'fb-hash-what';
+      what.textContent = `${hashing.which} of ${shorten(hashing.name, 24)}`;
+      const shut = document.createElement('button');
+      shut.className = 'fb-hash-shut';
+      shut.id = 'fb-hash-shut';
+      shut.type = 'button';
+      shut.setAttribute('aria-label', 'Close this hash');
+      shut.append(glyph('close'));
+      shut.addEventListener('click', () => {
+        hashing = null;
+        draw();
+      });
+      top.append(what, shut);
+      h.append(top);
+      if (hashing.fault !== '') {
+        const bad = document.createElement('div');
+        bad.className = 'fb-hash-fault';
+        bad.id = 'fb-hash-fault';
+        bad.textContent = hashing.fault;
+        h.append(bad);
+      } else if (hashing.hash === '') {
+        const wait = document.createElement('div');
+        wait.className = 'fb-hash-wait quiet';
+        wait.id = 'fb-hash-wait';
+        wait.textContent = 'Asking the box';
+        h.append(wait);
+      } else {
+        const row = document.createElement('div');
+        row.className = 'fb-hash-row';
+        const value = document.createElement('code');
+        value.className = 'fb-hash-value';
+        value.id = 'fb-hash-value';
+        value.textContent = hashing.hash;
+        const copy = document.createElement('button');
+        copy.className = 'fb-hash-copy';
+        copy.id = 'fb-hash-copy';
+        copy.type = 'button';
+        copy.title = 'Copy this hash';
+        copy.setAttribute('aria-label', 'Copy this hash');
+        copy.append(glyph('copy'));
+        copy.addEventListener('click', () => {
+          port.copy(hashing?.hash ?? '');
+        });
+        row.append(value, copy);
+        const field = document.createElement('input');
+        field.className = 'fb-hash-expected';
+        field.id = 'fb-hash-expected';
+        field.type = 'text';
+        field.spellcheck = false;
+        field.placeholder = 'Paste what it should be';
+        field.setAttribute('aria-label', 'What this hash should be');
+        field.value = hashing.expected;
+        field.addEventListener('input', () => {
+          if (!hashing) return;
+          hashing.expected = field.value;
+          draw();
+          (document.getElementById('fb-hash-expected') as HTMLInputElement | null)?.focus();
+        });
+        const said = document.createElement('div');
+        said.className = 'fb-hash-said';
+        said.id = 'fb-hash-said';
+        // The two are compared here, with case ignored and anything around them left out, because a hash
+        // pasted from somewhere else arrives with a file name beside it as often as not.
+        const want = (hashing.expected.match(/[0-9a-fA-F]{32,64}/) ?? [''])[0].toLowerCase();
+        if (hashing.expected.trim() === '') said.textContent = '';
+        else if (want === '') {
+          said.textContent = 'That does not hold a hash';
+          said.dataset['how'] = 'no';
+        } else if (want === hashing.hash.toLowerCase()) {
+          said.textContent = 'The same';
+          said.dataset['how'] = 'yes';
+        } else {
+          said.textContent = 'Not the same';
+          said.dataset['how'] = 'no';
+        }
+        h.append(row, field, said);
+      }
+      el.moving.append(h);
+    }
+    for (const [id, b] of bringing) {
       const one = document.createElement('div');
       one.className = 'fb-moving-one';
-      one.textContent = line;
+      const words = document.createElement('span');
+      words.textContent = lines.shift() ?? '';
+      one.append(words);
+      // A transfer still going can be stopped, and stopping it leaves nothing behind at either end.
+      if (b.ended === '') {
+        const stop = document.createElement('button');
+        stop.className = 'fb-stop';
+        stop.type = 'button';
+        stop.title = 'Stop this transfer';
+        stop.setAttribute('aria-label', `Stop ${b.name}`);
+        stop.append(glyph('close'));
+        stop.addEventListener('click', () => {
+          asker.ask({ id, do: 'cancel', path: '' });
+        });
+        one.append(stop);
+      }
       el.moving.append(one);
     }
   };
@@ -369,7 +481,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         place(r.name);
         bring(r.name);
       });
-      e.append(get);
+      const sum = document.createElement('button');
+      sum.className = 'fb-get fb-sum';
+      sum.type = 'button';
+      sum.title = "The box's own hash of this file (Ctrl+H, Ctrl+Shift+H for md5)";
+      sum.setAttribute('aria-label', `The box's own hash of ${r.name}`);
+      sum.tabIndex = -1;
+      sum.append(glyph('sum'));
+      sum.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        place(r.name);
+        askHash(r.name, ev.shiftKey ? 'md5' : 'sha256');
+      });
+      e.append(sum, get);
     }
     return e;
   };
@@ -441,6 +565,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
+  // A box's own hash of one of its files, because a person asked for it. sha256 is what a transfer compares;
+  // md5 is here because people still paste md5 at each other, and it is the only other hash a box may ever be
+  // asked for (plan B2.5, entry 3). What comes back can be copied, and an expected one can be pasted in and
+  // compared here, so nobody has to compare sixty-four characters by eye.
+  type Hashing = { name: string; which: 'sha256' | 'md5'; hash: string; fault: string; expected: string };
+  let hashing: Hashing | null = null;
+
+  const askHash = (name: string, which: 'sha256' | 'md5'): void => {
+    const r = rows.find((x) => x.name === name);
+    if (!r || r.kind !== 'file') return;
+    hashing = { name, which, hash: '', fault: '', expected: '' };
+    asker.ask({ do: 'hash', path: join(where || asked, name), which });
+    draw();
+  };
+
   // Sending a file from the PC to this folder on the box. The view says the folder and nothing else: which
   // file leaves this PC is answered in the system's own chooser, which only a person can answer (plan B2.7).
   const send = (): void => {
@@ -459,6 +598,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // save key, it is not a key a window or a box has any use for here, and the list is not a terminal.
     if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 's' || e.key === 'S')) {
       bring(standing);
+      e.preventDefault();
+      return;
+    }
+    // And the one other: asking the box for its own hash of the file the list is standing on. Shift makes it
+    // md5, which is the only other hash a box may ever be asked for.
+    if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
+      askHash(standing, e.shiftKey ? 'md5' : 'sha256');
       e.preventDefault();
       return;
     }
@@ -551,6 +697,8 @@ export const SHAPES: Record<string, string> = {
   close: 'M4.5 4.5l7 7M11.5 4.5l-7 7',
   bring: 'M8 2.5v7M5 6.5L8 9.5l3-3M3.5 12.5h9',
   send: 'M8 9.5v-7M5 5.5L8 2.5l3 3M3.5 12.5h9',
+  sum: 'M4.5 3.5h7l-4 4.5 4 4.5h-7',
+  copy: 'M5.5 5.5h7.5v7.5h-7.5zM3 10.5V3h7.5',
 };
 
 export function glyph(kind: string): SVGSVGElement {

@@ -851,7 +851,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'cancel';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -860,6 +860,14 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   // main's to decide (plan B2.7).
   if (what === 'get') return void bringOver(tab, id, where);
   if (what === 'put') return void sendOver(tab, id, where);
+  // Which hash a box may be asked for is written down here and nowhere else: a view may ask for one of two
+  // and can name no other, so no command of a view's choosing can reach a box through this (plan B2.5).
+  if (what === 'hash') {
+    const which = a['which'];
+    if (which !== 'sha256' && which !== 'md5') return drop('tab:file-ask', e);
+    if (!tab.engine.askFiles({ id, do: 'hash', path: where, name: which })) return drop('tab:file-ask', e);
+    return;
+  }
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
 });
 

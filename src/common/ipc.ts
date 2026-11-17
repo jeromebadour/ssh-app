@@ -315,7 +315,8 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'cancel';
+  which?: 'sha256' | 'md5'; // a hash asked for: which one. Only these two may ever be asked of a box
   path: string;
 }
 
@@ -348,4 +349,6 @@ export interface FilePage {
   replaced?: boolean; // a file sent to a box: it went in over a file that was already there
   there?: FileRow; // a file sent to a box: what is already at that name, when something is
   asking?: string; // a file sent to a box: it is waiting on a question about this name, and nothing is moving
+  hash?: string; // a hash asked for: the box's own hash of the file
+  which?: string; // a hash asked for: which one it is
 }
