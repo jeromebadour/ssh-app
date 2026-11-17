@@ -110,8 +110,17 @@ jobs:
         run: |
           source scripts/env.sh
           cd engine
-          LAB_OPENSSH="$GITHUB_WORKSPACE/out/lab-openssh" LAB_OPENSSH_REQUIRED=1 go test -count=1 -v -run '^TestOpenSSH$' ./internal/link 2>&1 \
+          # Every test that needs the real servers, named one by one. A pattern anchored to a single name is
+          # how a test written later runs nowhere and is reported as proof all the same: TestOpenSSHFirstVisit
+          # was added, this job went green, and it had not run.
+          LAB_OPENSSH="$GITHUB_WORKSPACE/out/lab-openssh" LAB_OPENSSH_REQUIRED=1 go test -count=1 -v -run '^(TestOpenSSH|TestOpenSSHFirstVisit)$' ./internal/link 2>&1 \
+            | tee /tmp/openssh.out \
             | grep -E '^(\s*--- |ok|FAIL|panic|\s+\S+_test\.go)'
+          # And every one of them really ran: a skip here means the lab was not there, and a run that proves
+          # nothing must not pass for one that does.
+          for t in TestOpenSSH TestOpenSSHFirstVisit; do
+            grep -qE "^--- PASS: $t\b" /tmp/openssh.out || { echo "openssh: $t did not run against the real servers" >&2; exit 1; }
+          done
 
   # The Windows run. Not on every pull request (Windows runner time costs more): only when asked, see `plan`.
   # It builds everything again on Windows from the same commit, so it is also a second builder: the Windows
