@@ -162,25 +162,25 @@ const cannotBeWrittenTo = async (dir: string): Promise<void> => {
     await chmod(dir, 0o500);
     return;
   }
-  await new Promise<void>((done) => {
-    const who = process.env['USERNAME'] ?? '';
-    const p = spawn('icacls', [dir, '/deny', `${who}:(WD,AD,WA)`], { windowsHide: true });
+  // Everyone, by the id Windows knows it as whatever the machine's language is, and a deny beats anything
+  // else a person holds, administrator included. The user's own name is not used: on a machine joined to a
+  // domain it is not the name icacls wants, and a deny that quietly did not apply is a probe proving nothing.
+  await icacls([dir, '/deny', '*S-1-1-0:(WD,AD,WA)']);
+};
+
+const icacls = (args: string[]): Promise<void> =>
+  new Promise<void>((done) => {
+    const p = spawn('icacls', args, { windowsHide: true });
     p.on('close', () => done());
     p.on('error', () => done());
   });
-};
 
 const canBeWrittenToAgain = async (dir: string): Promise<void> => {
   if (process.platform !== 'win32') {
     await chmod(dir, 0o700).catch(() => undefined);
     return;
   }
-  await new Promise<void>((done) => {
-    const who = process.env['USERNAME'] ?? '';
-    const p = spawn('icacls', [dir, '/remove:d', who], { windowsHide: true });
-    p.on('close', () => done());
-    p.on('error', () => done());
-  });
+  await icacls([dir, '/remove:d', '*S-1-1-0']);
 };
 
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
@@ -283,7 +283,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
           const p = path.join(dir, e.name);
           if (e.isDirectory()) await walk(p);
-          else if (e.isFile() && (await stat(p)).size < 64 * 1024 * 1024 && (await readFile(p).catch(() => Buffer.alloc(0))).includes(needle)) found.push(p);
+          else if (e.isFile()) {
+            // A file can go between being listed and being looked at: the browser engine writes its own
+            // settings under a temporary name and renames it a moment later. That is not a fault of the
+            // app's and must not end a run.
+            const at = await stat(p).catch(() => null);
+            if (at && at.size < 64 * 1024 * 1024 && (await readFile(p).catch(() => Buffer.alloc(0))).includes(needle)) found.push(p);
+          }
         }
       };
       await walk(path.dirname(path.dirname(ctx.listFile)));
@@ -3073,7 +3079,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
 
       // What a box prints that is not an address to open: nothing becomes clickable at all.
       const refusedBefore = ctx.opened().refused;
-      await type(t, 'echo file:///etc/shadow javascript:void(0) ftp://x.test/y\n');
+      // One kind to a line, each line short: a narrower window puts the end of a long line on the next row,
+      // and what is asked here is what the app makes of the row a thing is drawn on.
+      // Each ends with a carriage return as well as a newline, which is what a terminal gets from a real
+      // shell: without it the lab's box echoes a newline alone, every line starts further right than the
+      // last, and a line eventually wraps in the middle of the very words being looked for.
+      await type(t, 'echo file:///etc/shadow\r\n');
+      await until(async () => (await shown(t)).includes('file:///etc'), 5000);
+      await type(t, 'echo ftp://x.test/y\r\n');
+      await until(async () => (await shown(t)).includes('ftp://x.test'), 5000);
+      await type(t, 'echo javascript:void(0)\r\n');
       await until(async () => (await shown(t)).includes('javascript:void'), 5000);
       // What the app itself treats as an address to open, asked of the app, row by row.
       const onRow = async (words: string): Promise<string[]> => {
@@ -3085,7 +3100,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const row = await js<number>(t.view, `(() => { const s = document.querySelector('.xterm-screen').getBoundingClientRect(); const t = window.berthTerm.size(); return Math.floor((${where.y} - s.top) / (s.height / t.rows)) + 1; })()`);
         return js<string[]>(t.view, `window.berthTerm.links(${row})`);
       };
-      check('a file, a script, or any address of another kind a box prints is not a link at all', JSON.stringify(await onRow('javascript:void')) === '[]', await onRow('javascript:void'));
+      const otherKinds = [await onRow('file:///etc'), await onRow('ftp://x.test'), await onRow('javascript:void')];
+      const tail = (await js<string>(t.view, `window.berthTerm.text()`)).split('\n').slice(-6).join(' | ');
+      check('a file, a script, or any address of another kind a box prints is not a link at all', JSON.stringify(otherKinds) === '[[],[],[]]', [otherKinds, tail]);
       check('and the address that is one is the whole address, and only it', JSON.stringify(await onRow('demo-eu.example.test')) === JSON.stringify(['https://demo-eu.example.test/runbook#step-4']), await onRow('demo-eu.example.test'));
       check('nothing was opened or asked by any of it', !(await has('#link')) && ctx.opened().asked === openedBefore + 1 && ctx.opened().refused === refusedBefore, [await has('#link'), ctx.opened()]);
       await lab.tell('quiet on');

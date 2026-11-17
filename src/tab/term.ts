@@ -232,6 +232,15 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
         const col = (b.getLine(b.viewportY + row)?.translateToString(true) ?? '').indexOf(text);
         if (col >= 0) return { x: Math.round(screen.left + (col + 1.5) * c.w), y: Math.round(screen.top + (row + 0.5) * c.h), hand: !!host.querySelector('.xterm-cursor-pointer') };
       }
+      // Not on screen: it may be above or below what is in view, because the terminal stays where it was
+      // put rather than jumping about. The words are looked for in the whole of what the terminal holds and
+      // brought into view, so that asking where something is drawn answers about the thing and not about
+      // where the view happened to be standing.
+      for (let i = 0; i < b.length; i++) {
+        if ((b.getLine(i)?.translateToString(true) ?? '').indexOf(text) < 0) continue;
+        term.scrollToLine(Math.max(0, Math.min(i, b.length - term.rows)));
+        return null; // in view at the next frame; whoever asked looks again
+      }
       return null;
     },
     bracketedPaste: () => term.modes.bracketedPasteMode,
