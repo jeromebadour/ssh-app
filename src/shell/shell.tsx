@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, WindowStrip, type BarActions } from '../ui/bar';
-import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialog } from '../ui/boxdialogs';
+import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialog, ReplaceDialog } from '../ui/boxdialogs';
 import { LinkDialog } from '../ui/linkdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
@@ -24,7 +24,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -173,6 +173,14 @@ function Unlocked(props: { s: ShellState }) {
           }}
           onAdd={(draft) => { pendingAdd = dialog.req; port.cmd({ op: 'editBox', req: dialog.req, box: editing.id, draft }); }}
           onCancel={() => setDialog({ kind: 'none' })}
+        />
+      )}
+      {/* A file is already where one is being sent: main asked, with both files in front of the person. */}
+      {s.replacing && (
+        <ReplaceDialog
+          asked={s.replacing}
+          onReplace={() => port.cmd({ op: 'replaceFile' })}
+          onKeep={() => port.cmd({ op: 'keepFile' })}
         />
       )}
       {/* Closing the window: main asked, naming every session that would end. */}

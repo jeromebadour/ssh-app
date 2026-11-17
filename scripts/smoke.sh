@@ -112,8 +112,11 @@ case "$mode" in
     selftest "$log" "$electron" .
     # The box screens, by real clicks and keys, against the lab's SSH server. Each screen is pictured on the
     # way, so the picture tool itself is run and checked (a picture must show the tab through the shell).
-    mkdir -p "$work/pictures" && chmod 777 "$work/pictures"
-    selftest_mode=boxes-ui selftest_pictures="$work/pictures" selftest "$log" "$electron" .
+    # The pictures of each screen. They go with the run unless a folder is named, which is how they are looked
+    # at: the run's own folder is removed when it ends.
+    shots="${SSHAPP_PICTURES:-$work/pictures}"
+    mkdir -p "$shots" && chmod 777 "$shots"
+    selftest_mode=boxes-ui selftest_pictures="$shots" selftest "$log" "$electron" .
     # Before requiring silence, the listener is proven able to hear: a program of its own, behind the same
     # proxy, reaches out once and must land in its log. A listener that is broken is silent too, and Berth's
     # own code has no such call anywhere (check.sh fails the build if the app ever sets a proxy of its own).

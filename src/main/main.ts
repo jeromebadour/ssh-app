@@ -9,7 +9,7 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type KeyFileChosen, type LinkAsked, type PasteShown, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes, fingerprintOf } from './boxes';
@@ -276,7 +276,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -608,6 +608,23 @@ function openTab(boxId = '', place = ''): Tab | null {
     filePage: (page: Record<string, unknown>) => {
       if (tabs.get(id) !== tab) return;
       const ask = typeof page['id'] === 'number' ? page['id'] : 0;
+      // A file is in the way of one being sent: the window asks about it, with what is there in front of the
+      // person, instead of the strip simply saying no.
+      const send = sendingNow.get(comingKey(id, ask));
+      if (send) {
+        const there = page['there'] as FileRow | undefined;
+        if (there && typeof page['of'] === 'number') {
+          // Held by its tab while the question is open, and still under its own number, so the refusal the
+          // engine sends next is known for what it is and is not shown as the answer: the question is.
+          sendingNow.set(comingKey(id, 0), send);
+          askAboutReplacing(send, there, page['of']);
+          return;
+        }
+        if (page['done'] === true) {
+          if (page['error'] === 'already-there' && sendingNow.has(comingKey(id, 0))) return; // the question has it
+          sendingNow.delete(comingKey(id, ask));
+        }
+      }
       const mine = coming.get(comingKey(id, ask));
       if (mine) {
         const size = page['of'];
@@ -912,7 +929,57 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   if (tabs.get(tab.id) !== tab) return;
   // The name it will have on the box is the name it has here, and nothing of the path it came from.
   const name = path.basename(from);
-  if (!tab.engine.askFiles({ id, do: 'put', path: folder, name, from })) say('no-link');
+  sendingNow.set(comingKey(tab.id, id), { tab: tab.id, id, from, name, folder });
+  if (!tab.engine.askFiles({ id, do: 'put', path: folder, name, from })) {
+    sendingNow.delete(comingKey(tab.id, id));
+    say('no-link');
+  }
+}
+
+// A file is already where one is being sent. Berth asks first, with both files in front of the person, and
+// nothing on the box is touched until the answer comes back (BUILD-RULES 2.20). One question at a time: the
+// window has one person at it.
+let replaceAsked: ReplaceAsked | null = null;
+type Sending = { tab: number; id: number; from: string; name: string; folder: string };
+const sendingNow = new Map<string, Sending>();
+
+function askAboutReplacing(mine: Sending, there: FileRow, sendingBytes: number): void {
+  const tab = tabs.get(mine.tab);
+  if (!tab) return;
+  replaceAsked = { tab: mine.tab, box: tab.box?.name ?? '', folder: mine.folder, name: mine.name, bytes: there.size, changed: there.mtime, sendingBytes };
+  // The tab is told its send is waiting on a question, so its own strip says that rather than a transfer that
+  // seems to have stopped at nothing.
+  sendTo(tab.view, CH.tabFilePage, { id: mine.id, asking: mine.name });
+  overlay = true;
+  stack();
+  tellShell();
+}
+
+// The answer. Replace sends the same file again, saying this time that it may go in over what is there; Keep
+// it leaves the box exactly as it was and tells the window so, rather than leaving the strip waiting.
+function answerReplacing(replace: boolean): void {
+  const asked = replaceAsked;
+  replaceAsked = null;
+  overlay = false;
+  stack();
+  if (!asked) return tellShell();
+  const mine = sendingNow.get(comingKey(asked.tab, 0));
+  const tab = tabs.get(asked.tab);
+  sendingNow.delete(comingKey(asked.tab, 0));
+  if (!tab || !mine) return tellShell();
+  sendingNow.delete(comingKey(asked.tab, mine.id));
+  sendTo(tab.view, CH.tabFilePage, { id: mine.id, asking: '' });
+  if (!replace) {
+    done = `${asked.name} on ${asked.box} was left as it was`;
+    sendTo(tab.view, CH.tabFilePage, { id: mine.id, done: true, error: 'kept' });
+    return tellShell();
+  }
+  done = `Replacing ${asked.name} on ${asked.box}`;
+  sendingNow.set(comingKey(asked.tab, mine.id), mine);
+  if (!tab.engine.askFiles({ id: mine.id, do: 'put', path: mine.folder, name: mine.name, from: mine.from, replace: true })) {
+    sendTo(tab.view, CH.tabFilePage, { id: mine.id, done: true, error: 'no-link' });
+  }
+  tellShell();
 }
 
 // How much room the disk has left for one more file. The file being replaced, if there is one, is still there
@@ -1083,6 +1150,10 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     else if (c.do === 'close') win.close();
     else if (win.isMaximized()) win.unmaximize();
     else win.maximize();
+  } else if (c?.op === 'replaceFile' && replaceAsked) {
+    answerReplacing(true);
+  } else if (c?.op === 'keepFile' && replaceAsked) {
+    answerReplacing(false);
   } else if (c?.op === 'closeApp') {
     // Asked and answered: close for real. The question is dropped first, so a second close is a plain close.
     closingAsked = null;

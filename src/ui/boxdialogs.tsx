@@ -6,7 +6,7 @@
 // again before anything is saved; what the box showed is in the check only once main has compared a paste.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { BOX_COLOURS, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, type BoxDraft, type Check, type Place } from '../common/boxes';
-import type { BoxView, CheckShown, KeyFileChosen } from '../common/ipc';
+import type { BoxView, CheckShown, KeyFileChosen, ReplaceAsked } from '../common/ipc';
 import { Glyph } from './glyphs';
 
 // A field, the way every field in Berth is drawn: a label with its glyph, the input as wide as the value it will
@@ -563,6 +563,69 @@ export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove():
       </div>
     </div>
   );
+}
+
+// ------------------------------------------------------------------ replacing a file on a box
+
+// Sending a file where a file of that name already is. What is on the box cannot be put back from here, so
+// both files are put in front of the person: the one on the box with its size and when it last changed, and
+// the one that would go in its place. Keeping what is there has the focus, so Enter and Escape both keep it.
+export function ReplaceDialog(props: { asked: ReplaceAsked; onReplace(): void; onKeep(): void }) {
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => keep.current?.focus(), []);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') props.onKeep();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  const a = props.asked;
+  return (
+    <div class="scrim">
+      <div class="dialog dlg-remove" id="replacing" role="dialog" aria-modal="true" aria-labelledby="replacing-title">
+        <h1 id="replacing-title"><Glyph name="upload" />Replace {a.name} on {a.box}?</h1>
+        <ul class="goes" id="replacing-both">
+          <li>
+            <Glyph name="box" />
+            <span>On the box now: <b>{bytesAs(a.bytes)}</b>{a.changed > 0 ? <span class="quiet">, last changed {whenAs(a.changed)}</span> : null}</span>
+          </li>
+          <li>
+            <Glyph name="upload" />
+            <span>Going in its place: <b>{bytesAs(a.sendingBytes)}</b> <span class="quiet">from this PC</span></span>
+          </li>
+        </ul>
+        <p class="said quiet" id="replacing-where">
+          In {a.folder}. Replacing it cannot be undone from Berth: what is there now is gone, and only the box's own backups would have it.
+        </p>
+        <div class="dlg-actions">
+          <button type="button" class="btn keep-plain" id="replacing-keep" ref={keep} onClick={props.onKeep}><Glyph name="close" />Keep what is there<kbd>Esc</kbd></button>
+          <button type="button" class="btn danger" id="replacing-do" onClick={props.onReplace}><Glyph name="file" />Replace it</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A count of bytes as a person reads it, and a moment as a person says it. Both are only ever shown.
+function bytesAs(n: number): string {
+  const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let u = 0;
+  while (v >= 1000 && u < units.length - 1) {
+    v /= 1000;
+    u++;
+  }
+  return u === 0 ? `${n} bytes` : `${v < 100 ? v.toFixed(1) : Math.round(v)} ${units[u]}`;
+}
+
+function whenAs(seconds: number): string {
+  const ago = Date.now() / 1000 - seconds;
+  if (ago < 90) return 'a moment ago';
+  if (ago < 5400) return `${Math.round(ago / 60)} minutes ago`;
+  if (ago < 36 * 3600) return `${Math.round(ago / 3600)} hours ago`;
+  if (ago < 30 * 86400) return `${Math.round(ago / 86400)} days ago`;
+  return new Date(seconds * 1000).toISOString().slice(0, 10);
 }
 
 // ------------------------------------------------------------------ closing
