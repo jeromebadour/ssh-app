@@ -1,5 +1,5 @@
 // The tab's view: its terminal, its own file browser on the box's files, and where its link stands. It talks to main through the few functions of tabPort and to nothing else.
-import type { TabInfo, TabPort } from '../common/ipc';
+import { COPY_MAX, type TabInfo, type TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
@@ -86,10 +86,57 @@ port.onPace((now) => { share = now; });
 const blocks = new Blocks();
 let seenRow = 0;
 let saidDoing = '';
+// The blocks drawn so far, by the number of the prompt they belong to, and how to take each one off again.
+// A prompt is drawn once: one redrawn as he types is the same block, not another one. The number is the
+// mark's own and never a row, because rows move under everything once the terminal is full and starts
+// forgetting its oldest lines.
+const drawn = new Map<number, () => void>();
+let hue = '';
+let blocksFault = ''; // what stopped a block being drawn, if anything: the lab reads it
+let copied = ''; // what the last press on a block's copy did, for the lab
+const drawBlocks = (): void => {
+  if (hue === '') return; // no box, no colour of its own: nothing to draw a block in
+  try {
+    drawBlocksNow();
+  } catch (err) {
+    // Drawing a block is a reading aid. It runs inside the path that takes a box's output, and a reading
+    // aid must never be the thing that stops a terminal from drawing what the box said.
+    blocksFault = err instanceof Error ? err.message : String(err);
+    document.documentElement.dataset['blocks'] = blocksFault;
+  }
+};
+const drawBlocksNow = (): void => {
+  for (const m of blocks.marks) {
+    if (drawn.has(m.id)) continue;
+    // What this block printed is read when the press happens, not now: the command may still be running,
+    // and the rows under it are the box's to fill until its prompt comes back.
+    const off = term.blockAt(m.row, m.width, hue, () => {
+      const next = blocks.marks.find((x) => x.id > m.id);
+      const text = term.outputAfter(m.row, next ? next.row : term.rows());
+      if (text !== '') port.copy(text.slice(0, COPY_MAX));
+      // A press that copied nothing says so, in Berth's own line: a button that looks as if it did
+      // something when it did nothing is the silence this app is built not to have.
+      else term.note('Berth: that command printed nothing, so nothing was copied');
+      copied = text === '' ? 'nothing' : 'copied';
+      document.documentElement.dataset['copied'] = copied;
+    });
+    if (off) drawn.set(m.id, off);
+  }
+  // What the reading no longer holds is taken off, oldest first: a decoration is a thing on a screen, and
+  // the ones belonging to commands long scrolled away are not worth keeping.
+  const oldest = blocks.marks[0]?.id ?? 0;
+  for (const [id, off] of [...drawn]) {
+    if (id >= oldest) continue;
+    off();
+    drawn.delete(id);
+  }
+};
+
 const readShape = (): void => {
   const got = term.since(seenRow);
   seenRow = got.next;
   for (const [i, l] of got.lines.entries()) blocks.sawLine(l.text, l.atCursor, got.next - (got.lines.length - 1 - i));
+  drawBlocks();
   const done = blocks.takeFinished();
   // Main is told only when it changes, and the finished command's length is a number and nothing else: what
   // was typed is his own text and never leaves this view (plan B2.7).
@@ -158,6 +205,12 @@ port.onState((info) => {
   // the same colour as a live one.
   const live = info.box !== null && ['connecting', 'key-exchange', 'signing-in', 'up'].includes(info.link.phase);
   document.documentElement.style.setProperty('--hue', info.box ? `var(--box-${info.box.colour})` : 'var(--line)');
+  // The same colour, read back as the six digits a terminal decoration needs: the stylesheet is where a
+  // box's colours are written down, once, and this reads them from it rather than holding a second copy.
+  if (info.box) {
+    const read = getComputedStyle(document.documentElement).getPropertyValue(`--box-${info.box.colour}`).trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(read)) hue = read;
+  }
   document.documentElement.dataset['live'] = live ? 'yes' : 'no';
   const now = words(info);
   state.textContent = now;

@@ -18,6 +18,19 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
   --hue: var(--line);
 }
 
+/* Where one command ends and the next begins: a hairline above each prompt, in the box's own colour, very
+   quiet. It is the whole of the decoration: the prompt's own letters are coloured by the terminal itself.
+   Nothing here moves, and nothing is drawn over what the box printed. */
+/* The one press a block answers: copy what this command printed. It sits at the right-hand end of the
+   prompt's own row, where a prompt almost never reaches, and it is quiet until the pointer is near it. */
+.berth-block-copy { display: grid; place-items: center; cursor: pointer; opacity: 0; color: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
+.berth-block-copy::before { content: ''; width: 9px; height: 9px; border: 1.5px solid currentColor; border-radius: 2px; box-shadow: -3px 3px 0 -1.5px currentColor; }
+#term:hover .berth-block-copy { opacity: .55; }
+.berth-block-copy:hover { opacity: 1; }
+.berth-block-copy:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; opacity: 1; }
+
+.berth-block-line { border-top: 1px solid color-mix(in srgb, var(--block-hue, #27323c) 30%, transparent); background: color-mix(in srgb, var(--block-hue, #27323c) 9%, transparent); pointer-events: none; }
+
 /* The file browser on the left, the terminal on the right, as MobaXterm's layout is and as the design keeps
    it. The two never share a channel to the box, so a slow listing cannot hold up what is typed; here they do
    not share room either: the browser has a width of its own and the terminal takes the rest. */

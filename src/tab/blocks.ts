@@ -82,6 +82,12 @@ export class Blocks {
   // When what is running now started, and the row the last prompt was drawn on.
   since = 0;
   private promptRow = -1;
+  // Every prompt row seen, newest last, and how long the prompt itself is on each: what the terminal draws a
+  // block from. Only the last few are kept, because a decoration is a thing on a screen and the ones that
+  // have scrolled far out of reach are not worth holding.
+  readonly marks: { id: number; row: number; width: number }[] = [];
+  private nextMark = 1;
+  static readonly MARKS_KEPT = 200;
   // The last command that finished: how long it took. What was typed is never kept at all; nothing here
   // needs it, and his own typing is his.
   finished: { ms: number } | null = null;
@@ -109,6 +115,7 @@ export class Blocks {
           this.shape = shape;
           this.prompts++;
           this.promptRow = row;
+          this.mark(row, line);
           this.doing = 'idle';
           return;
         }
@@ -120,6 +127,7 @@ export class Blocks {
     if (isPrompt(line, this.shape)) {
       this.prompts++;
       this.promptRow = row;
+      this.mark(row, line);
       if (this.doing === 'running') this.finished = { ms: Math.max(0, this.now() - this.since) };
       this.since = 0;
       this.doing = 'idle';
@@ -131,6 +139,20 @@ export class Blocks {
       this.doing = 'running';
       this.since = this.now();
     }
+  }
+
+  // One prompt row written down, with how wide the prompt itself is, so what is drawn over it covers the
+  // prompt and not what he typed after it. The same row seen twice (a prompt redrawn as he types) is the
+  // same mark, not another one.
+  private mark(row: number, line: string): void {
+    const width = line.replace(/\s+$/, '').length;
+    const last = this.marks.at(-1);
+    if (last && last.row === row) {
+      last.width = width;
+      return;
+    }
+    this.marks.push({ id: this.nextMark++, row, width });
+    if (this.marks.length > Blocks.MARKS_KEPT) this.marks.splice(0, this.marks.length - Blocks.MARKS_KEPT);
   }
 
   // The one command that finished since this was last asked, and nothing twice: a mark on a tab and a
