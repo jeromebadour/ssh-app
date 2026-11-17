@@ -315,7 +315,7 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel' | 'unqueue';
   name?: string; // restore: which thing in the trash to put back. Never a path, and never a name of a view's own making elsewhere
   which?: 'sha256' | 'md5'; // a hash asked for: which one. Only these two may ever be asked of a box
   path: string;
@@ -338,6 +338,11 @@ export interface FileRow {
   mode: number;
   mtime: number;
 }
+
+// How many files one chooser may hand over to one box at a time. A person picking a folder's worth gets them
+// all; a person who picked ten thousand by accident gets as many as this and a line saying the rest were
+// left. Main holds to it and the window names it, so it is written once, here.
+export const MOST_AT_ONCE = 64;
 
 export interface FilePage {
   id: number;
@@ -367,4 +372,8 @@ export interface FilePage {
   trash?: Trashed[]; // what is in the trash now, newest first
   emptied?: number; // an emptying: how many things went
   freed?: number; // an emptying: how much they were holding
+  alsoSending?: string; // more than one file was chosen: a transfer main began on its own, under this name
+  waiting?: number; // more than one file was chosen: how many are still waiting their turn
+  tooMany?: number; // more than one chooser may hand over was chosen: how many were left behind
+  unqueued?: number; // what was waiting to be sent was dropped: how many were dropped
 }

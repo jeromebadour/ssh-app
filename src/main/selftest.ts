@@ -52,7 +52,8 @@ interface Ctx {
   keysRefused(): number;
   downloads: string;
   filesAsked(): Record<string, number>;
-  chooseToSend(answer: (() => string | undefined) | null): void;
+  chooseToSend(answer: (() => string | string[] | undefined) | null): void;
+  stillToSend(tab: number): number;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -122,12 +123,12 @@ function verifies(keyLine: string, data: Buffer, signatureB64: string): boolean 
   return verify(null, data, key, sig.subarray(sig.length - 64));
 }
 
-async function until(what: () => boolean | Promise<boolean>, ms: number): Promise<boolean> {
+async function until(what: () => boolean | Promise<boolean>, ms: number, every = 25): Promise<boolean> {
   const end = Date.now() + ms;
   for (;;) {
     if (await what()) return true;
     if (Date.now() > end) return false;
-    await sleep(25);
+    await sleep(every);
   }
 }
 
@@ -169,7 +170,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
   let stage = 'starting';
   const check = (name: string, ok: boolean, detail: unknown = '') => {
     stage = `after "${name}"`;
-    results.push({ name, ok, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+    // What a probe says about a failure is for a person to read, so it is bounded: one probe that happened to
+    // hold a whole file would otherwise make a result line nothing downstream could carry.
+    const said = typeof detail === 'string' ? detail : JSON.stringify(detail);
+    results.push({ name, ok, detail: said.length > 1500 ? `${said.slice(0, 1500)}... (${said.length} characters in all)` : said });
   };
   const finish = (asked: number) => {
     // Every mode ends here, so every mode is held to this: a page that asked for a file the app does not hold
@@ -1079,6 +1083,80 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             ctx.chooseToSend(() => undefined);
             await js(front.view, `document.getElementById('fb-send')?.click()`);
             check('a chooser answered with nothing is said, and nothing is sent', await until(async () => (await foot()).includes('No file was chosen'), 10_000), await foot());
+            // More than one file chosen in one go. They are sent one at a time, each with a line of its own,
+            // and the strip says how many are still waiting. One at a time matters: a box asked for everything
+            // at once answers none of it quickly, and the count is what a person reads instead of sixty lines.
+            {
+              const three = ['first.conf', 'second.conf', 'third.conf'];
+              for (const [i, n] of three.entries()) await writeFile(path.join(mine, n), `file number ${i + 1} of a batch\n`.repeat(400));
+              ctx.chooseToSend(() => three.map((n) => path.join(mine, n)));
+              await lab.tell('filepace 60'); // so each send has a middle long enough to be looked at
+              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              // While they go: how many lines are about a transfer still moving (the waiting line is not one
+              // of them), and whether the count of what is waiting was ever shown.
+              let mostAtOnce = 0;
+              let sawWaiting = '';
+              const landed = await until(
+                async () => {
+                  const now = await js<{ moving: number; waiting: string }>(
+                    front.view,
+                    `(() => { const ones = [...document.querySelectorAll('#fb-moving .fb-moving-one')]; return { moving: ones.filter((e) => e.id !== 'fb-waiting' && e.querySelector('.fb-stop')).length, waiting: document.getElementById('fb-waiting')?.textContent ?? '' }; })()`,
+                  );
+                  mostAtOnce = Math.max(mostAtOnce, now.moving);
+                  if (now.waiting !== '') sawWaiting = now.waiting;
+                  const there = await Promise.all(three.map((n) => lab.tell(`read var/log/${n}`)));
+                  return there.every((r) => typeof r['text'] === 'string' && (r['text'] as string).startsWith('file number'));
+                },
+                60_000,
+                60,
+              );
+              await lab.tell('filepace 0');
+              const each = await Promise.all(three.map((n) => lab.tell(`read var/log/${n}`)));
+              const rightBytes = each.every((r, i) => r['text'] === `file number ${i + 1} of a batch\n`.repeat(400));
+              check('three files chosen at once all reach the box, with the right bytes each', landed && rightBytes, [landed, each.map((r) => String(r['text'] ?? r['error']).slice(0, 24))]);
+              check('they go one at a time, and the strip says how many are waiting', mostAtOnce === 1 && sawWaiting.includes('waiting to be sent'), [mostAtOnce, sawWaiting]);
+              check('nothing is left waiting once they have all gone', ctx.stillToSend(front.id) === 0, ctx.stillToSend(front.id));
+              for (const n of three) await lab.tell(`forget var/log/${n}`);
+            }
+            // What is still waiting can be dropped: the button says what it did, what was moving is left alone
+            // to finish, and nothing that was waiting ever reaches the box.
+            {
+              const six = [0, 1, 2, 3, 4, 5].map((i) => `batch-${i}.conf`);
+              // Big enough that one of them takes a while at this pace, or the whole queue would be through
+              // before the button could be pressed and this probe would be about nothing.
+              for (const n of six) await writeFile(path.join(mine, n), 'one of six\n'.repeat(50_000));
+              ctx.chooseToSend(() => six.map((n) => path.join(mine, n)));
+              await lab.tell('filepace 120');
+              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              const shown = await until(() => has('#fb-waiting-stop', front), 25_000);
+              await clickOn('#fb-waiting-stop', front);
+              const dropped = await until(async () => (await foot()).includes('will not be sent'), 10_000);
+              const said = await foot();
+              const holding = ctx.stillToSend(front.id);
+              await lab.tell('filepace 0');
+              // The first one was already moving when the rest were dropped, so it is allowed to finish; the
+              // last one was only ever waiting, so it must never appear on the box at all.
+              await until(async () => typeof (await lab.tell('read var/log/batch-0.conf'))['text'] === 'string', 25_000);
+              await sleep(500);
+              const last = await lab.tell('read var/log/batch-5.conf');
+              check('dropping what is waiting says so, holds nothing back, and none of it reaches the box', shown && dropped && said.includes('will not be sent') && holding === 0 && last['text'] === undefined, [shown, said.slice(-120), holding, String(last['text'] ?? last['error']).slice(0, 40)]);
+              for (const n of six) await lab.tell(`forget var/log/${n}`);
+            }
+            // More than one chooser may hand over. The first of them go, and the rest are said rather than
+            // quietly dropped: a file a person chose and did not get is never a silent matter.
+            {
+              const many = Array.from({ length: 66 }, (_, i) => `heap-${String(i).padStart(2, '0')}.conf`);
+              for (const n of many) await writeFile(path.join(mine, n), 'one of a heap\n');
+              ctx.chooseToSend(() => many.map((n) => path.join(mine, n)));
+              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              const toldAbout = await until(() => has('#fb-too-many', front), 20_000);
+              const tooMany = await js<string>(front.view, `document.getElementById('fb-too-many')?.textContent ?? ''`);
+              const quiet = await until(async () => ctx.stillToSend(front.id) === 0 && (await js<number>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one')].filter((e) => e.id !== 'fb-waiting' && e.querySelector('.fb-stop')).length`)) === 0, 120_000, 200);
+              const onTheBox = await Promise.all(many.map((n) => lab.tell(`read var/log/${n}`)));
+              const got = onTheBox.filter((r) => typeof r['text'] === 'string').length;
+              check('only as many as one send may hold go, and the two over are said and not sent', toldAbout && quiet && got === 64 && tooMany.includes('2 more files were chosen') && tooMany.includes('64 at a time'), [got, tooMany, quiet]);
+              for (const n of many) await lab.tell(`forget var/log/${n}`);
+            }
             ctx.chooseToSend(null);
             await rm(mine, { recursive: true, force: true });
             await lab.tell('forget var/log/from-the-pc.conf');

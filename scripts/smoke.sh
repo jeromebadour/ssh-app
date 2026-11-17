@@ -58,13 +58,16 @@ selftest() {
     grep -a -A12 '^MAINFAULT' "$log" >&2 || tail -40 "$log" >&2
     return 1
   fi
-  node -e '
-    const r = JSON.parse(process.argv[1].slice(9));
+  # The result line is given to node on its standard input, never as an argument: a probe that says a lot
+  # about why it failed would otherwise be a result line too long for the system to pass as one, and the run
+  # would end with "argument list too long" instead of with the probe that failed.
+  printf '%s' "$line" | node -e '
+    const r = JSON.parse(require("node:fs").readFileSync(0, "utf8").slice(9));
     for (const x of r.results) console.log((x.ok ? "ok    " : "FAIL  ") + x.name + (x.ok ? "" : "   -> " + x.detail));
     const bad = r.results.filter((x) => !x.ok).length;
     console.log(bad ? `smoke: ${bad} of ${r.results.length} probes FAILED (${r.kind})` : `smoke: all ${r.results.length} probes held (${r.kind})`);
     process.exit(bad ? 1 : 0);
-  ' "$line"
+  '
   [ "$code" = 0 ] || { echo "smoke: the app exited with code $code" >&2; return 1; }
 }
 

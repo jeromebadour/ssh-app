@@ -4,7 +4,7 @@
 // the first rows of a folder with thousands of files are on screen while the rest are still being read. Moving
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
-import type { FileAsk, FilePage, FileRow, TabPort } from '../common/ipc';
+import { MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
 const WHY: Record<string, string> = {
@@ -127,6 +127,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // more than one at a time, and the strip at the foot says what each is doing.
   type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; tookUpAt: number; ended: string };
   const bringing = new Map<number, Bringing>();
+  // Files chosen in one go that have not had their turn yet, and how many were past what one chooser may
+  // hand over. Both are main's count, not the window's: the window only says them.
+  let waitingToSend = 0;
+  let leftBehind = 0;
 
   const el = {
     path: document.createElement('div'),
@@ -210,6 +214,28 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let trying: ReturnType<typeof setTimeout> | null = null;
 
   port.onFilePage((p: FilePage) => {
+    // More than one file was chosen: main sends them one at a time, and says how many are still waiting and
+    // how many were past what one chooser may hand over. Both are read before anything else, because they
+    // belong to the whole strip rather than to any one transfer.
+    if (typeof p.waiting === 'number') waitingToSend = p.waiting;
+    if (typeof p.tooMany === 'number' && p.tooMany > 0) leftBehind = p.tooMany;
+    // What was waiting has been dropped, because a person asked for it to be: it is said, so the button that
+    // did it says what it did, and nothing else on this page is about a file at all.
+    if (typeof p.unqueued === 'number') {
+      said = p.unqueued === 0 ? 'Nothing was waiting to be sent' : `${p.unqueued} ${p.unqueued === 1 ? 'file' : 'files'} that ${p.unqueued === 1 ? 'was' : 'were'} waiting will not be sent`;
+      leftBehind = 0;
+      draw();
+      return;
+    }
+    // A transfer main began itself, out of that queue: it gets its own line from the moment it is named, so
+    // nothing is moving without something on screen saying so.
+    if (typeof p.alsoSending === 'string') {
+      const already = bringing.get(p.id);
+      if (already) already.name = p.alsoSending; // the file a person chose first: its line gets the real name
+      else bringing.set(p.id, { name: p.alsoSending, way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
+      draw();
+      return;
+    }
     if (hashing && typeof p.hash === 'string' && p.hash !== '') {
       hashing.hash = p.hash;
       draw();
@@ -446,6 +472,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       const tookUp = b.tookUpAt > 0 ? `, taken up at ${size(b.tookUpAt)}` : '';
       lines.push(`${b.way === 'out' ? 'Sending ' : ''}${name}${far}${tookUp}`);
     }
+
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
         const sep = document.createElement('span');
@@ -588,6 +615,41 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         h.append(row, field, said);
       }
       el.moving.append(h);
+    }
+    // What is still to come out of one choosing, as a count rather than a line each: a strip with sixty lines
+    // in it says less than one line with a number on it. It has its own Stop, which drops what is waiting and
+    // leaves what is already moving alone, because that has a Stop of its own. It is drawn above the lines
+    // about transfers rather than below them, so that it keeps its place as those come and go: nothing moves
+    // under a hand that is reaching for it (BUILD-RULES 2.4).
+    if (waitingToSend > 0) {
+      const one = document.createElement('div');
+      one.className = 'fb-moving-one';
+      one.id = 'fb-waiting';
+      const words = document.createElement('span');
+      words.textContent = `${waitingToSend} more ${waitingToSend === 1 ? 'file is' : 'files are'} waiting to be sent`;
+      const stop = document.createElement('button');
+      stop.className = 'fb-stop';
+      stop.type = 'button';
+      stop.id = 'fb-waiting-stop';
+      stop.title = 'Do not send the rest';
+      stop.setAttribute('aria-label', `Do not send the ${waitingToSend} files still waiting`);
+      stop.append(glyph('close'));
+      stop.addEventListener('click', () => {
+        asker.ask({ do: 'unqueue', path: '' });
+      });
+      one.append(words, stop);
+      el.moving.append(one);
+    }
+    // What was past the most one chooser may hand over. It stays said until the next move, because a file a
+    // person chose and did not get is not a quiet matter.
+    if (leftBehind > 0) {
+      const one = document.createElement('div');
+      one.className = 'fb-moving-one';
+      one.id = 'fb-too-many';
+      const words = document.createElement('span');
+      words.textContent = `${leftBehind} more ${leftBehind === 1 ? 'file was' : 'files were'} chosen than can go in one send (${MOST_AT_ONCE} at a time), and ${leftBehind === 1 ? 'it was' : 'they were'} not sent`;
+      one.append(words);
+      el.moving.append(one);
     }
     for (const [id, b] of bringing) {
       const one = document.createElement('div');

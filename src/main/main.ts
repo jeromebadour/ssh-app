@@ -9,7 +9,7 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, INPUT_MAX, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, INPUT_MAX, MOST_AT_ONCE, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes, fingerprintOf } from './boxes';
@@ -625,6 +625,9 @@ function openTab(boxId = '', place = ''): Tab | null {
         if (page['done'] === true) {
           if (page['error'] === 'already-there' && sendingNow.has(comingKey(id, 0))) return; // the question has it
           sendingNow.delete(comingKey(id, ask));
+          // Whatever was chosen behind this one goes now. However this one ended: a queue that stopped at the
+          // first refusal would leave the rest of what a person chose unsent and unsaid.
+          nextQueued(tab);
           const was = comingBroke.get(comingKey(id, ask));
           comingBroke.delete(comingKey(id, ask));
           const why = page['error'];
@@ -810,6 +813,7 @@ function closeTab(id: number): void {
   meter.forget(id);
   frontTold.delete(id);
   protectedPaste.delete(id);
+  queuedToSend.delete(id); // a tab that has gone takes what it still had to send with it
   if (waitingPaste?.shown.tab === id) closePaste(false);
   if (waitingLink?.tab === id) closeLink(false);
   tab.stopReopen();
@@ -854,7 +858,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel' || what === 'unqueue';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -878,6 +882,14 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
     settling.add(`stop:${key}`);
     setTimeout(() => settling.delete(`stop:${key}`), 30_000).unref();
     if (settling.has(key)) return;
+  }
+  // Dropping what a tab still has to send. It never reaches a box: it is a list main is holding, and this
+  // empties it. What is already moving is not touched, because that is its own transfer with its own Stop.
+  if (what === 'unqueue') {
+    const had = queuedToSend.get(tab.id)?.paths.length ?? 0;
+    queuedToSend.delete(tab.id);
+    sendTo(tab.view, CH.tabFilePage, { id, done: true, waiting: 0, unqueued: had });
+    return;
   }
   // Which hash a box may be asked for is written down here and nowhere else: a view may ask for one of two
   // and can name no other, so no command of a view's choosing can reach a box through this (plan B2.5).
@@ -988,7 +1000,15 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
 let choosing = false;
 // The lab cannot press a button in the system's own chooser, so the self-test answers it here instead. Nothing
 // but the self-test sets this, and it only exists where the self-test does.
-let labChoosesAFile: (() => string | undefined) | null = null;
+let labChoosesAFile: (() => string | string[] | undefined) | null = null;
+// What a tab still has to send, in the order it was chosen, and the folder it is going to. One at a time: a
+// box asked for sixty files at once is a box that answers none of them quickly, and a strip with sixty lines
+// in it says less than a strip with one line and a count.
+const queuedToSend = new Map<number, { paths: string[]; folder: string }>();
+// Sends main began itself, out of a queue, take numbers from a range of their own: above anything a view will
+// ask for, and apart from main's own invisible asks, so neither can ever be taken for the other.
+const QUEUED_ASKS_FROM = 2_000_000;
+let queuedAskNext = QUEUED_ASKS_FROM;
 
 async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
@@ -997,22 +1017,48 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
     return say('not-now');
   }
   choosing = true;
-  let from: string | undefined;
+  let chosen: string[] = [];
   try {
-    if (labChoosesAFile) from = labChoosesAFile();
+    if (labChoosesAFile) {
+      const said = labChoosesAFile();
+      chosen = said === undefined ? [] : typeof said === 'string' ? [said] : said;
+    }
     else {
-      const picked = await dialog.showOpenDialog(win, { title: `A file to send to ${tab.box?.name ?? 'the box'}`, buttonLabel: 'Send', properties: ['openFile', 'dontAddToRecent'] });
-      from = picked.canceled ? undefined : picked.filePaths[0];
+      const picked = await dialog.showOpenDialog(win, { title: `Files to send to ${tab.box?.name ?? 'the box'}`, buttonLabel: 'Send', properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
+      chosen = picked.canceled ? [] : picked.filePaths;
     }
   } finally {
     choosing = false;
   }
   if (stopWanted(tab, id)) return say('stopped');
-  if (from === undefined) return say('nothing-chosen');
+  if (chosen.length === 0) return say('nothing-chosen');
   if (tabs.get(tab.id) !== tab) return;
+  // The first of them goes now; the rest wait their turn, in the order they were chosen, and each begins as
+  // the one before it ends. Anything past what one chooser may hand over is left, and the strip says so
+  // rather than quietly dropping it (NOTHING fails silently).
+  const rest = chosen.slice(1, MOST_AT_ONCE);
+  const left = chosen.length - 1 - rest.length;
+  if (rest.length > 0) queuedToSend.set(tab.id, { paths: rest, folder });
+  if (rest.length > 0 || left > 0) sendTo(tab.view, CH.tabFilePage, { id, waiting: rest.length, tooMany: left });
+  settling.delete(comingKey(tab.id, id));
+  await startSend(tab, id, folder, chosen[0]!);
+}
+
+// One file on its way to a box: what main knows, and what the engine is told. The file a person chose first
+// comes through here, and so does each one that was waiting behind it.
+async function startSend(tab: Tab, id: number, folder: string, from: string): Promise<void> {
+  // A send that ends here, rather than at the engine, still has to move the queue on, or one file that could
+  // not be opened would leave everything chosen behind it waiting for an end that never comes. It is moved on
+  // after this turn, not inside it, so sixty files that all fail at once do not stack sixty calls deep.
+  const say = (error: string): void => {
+    sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
+    setImmediate(() => nextQueued(tab));
+  };
   // The name it will have on the box is the name it has here, and nothing of the path it came from.
   const name = path.basename(from);
-  settling.delete(comingKey(tab.id, id));
+  // The view is told that name, and only the name: it has a line of its own for this file from the moment
+  // the chooser is answered, and a person watching sees what is going rather than "a file from the PC".
+  sendTo(tab.view, CH.tabFilePage, { id, alsoSending: name });
   sendingNow.set(comingKey(tab.id, id), { tab: tab.id, id, from, name, folder });
   // A send that broke part way is taken up where it stopped, if the file on this PC is still the one those
   // bytes came from. What is checked at the end still covers the whole file.
@@ -1021,6 +1067,7 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
     const f = await stat(from);
     was = { size: f.size, mtime: Math.floor(f.mtimeMs / 1000) };
   } catch {
+    sendingNow.delete(comingKey(tab.id, id));
     return say('failed');
   }
   const key = brokeKey('out', tab.box?.id ?? '', `${folder}/${name}`);
@@ -1032,6 +1079,24 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
     say('no-link');
   }
   passOnAnyStop(tab, id);
+}
+
+// The next file of a queue, once the one before it has ended, however it ended: a queue that stops at the
+// first refusal would leave a person watching a strip that says nothing is happening. It is given a number of
+// main's own, and the view is told the name so it has a line for it before any bytes move.
+function nextQueued(tab: Tab): void {
+  const queue = queuedToSend.get(tab.id);
+  if (!queue) return;
+  const from = queue.paths.shift();
+  if (from === undefined || queue.paths.length === 0) queuedToSend.delete(tab.id);
+  if (from === undefined) return;
+  if (tabs.get(tab.id) !== tab || tab.engine.state !== 'ready') {
+    queuedToSend.delete(tab.id);
+    return;
+  }
+  const id = ++queuedAskNext;
+  sendTo(tab.view, CH.tabFilePage, { id, waiting: queue.paths.length });
+  void startSend(tab, id, queue.folder, from);
 }
 
 // Main's own asks on a tab's file channel, which no view sees. They take numbers from a range of their own,
@@ -1102,12 +1167,14 @@ function answerReplacing(replace: boolean): void {
   if (!replace) {
     done = `${asked.name} on ${asked.box} was left as it was`;
     sendTo(tab.view, CH.tabFilePage, { id: mine.id, done: true, error: 'kept' });
+    setImmediate(() => nextQueued(tab)); // whatever was chosen behind it still goes
     return tellShell();
   }
   done = `Replacing ${asked.name} on ${asked.box}`;
   sendingNow.set(comingKey(asked.tab, mine.id), mine);
   if (!tab.engine.askFiles({ id: mine.id, do: 'put', path: mine.folder, name: mine.name, from: mine.from, replace: true })) {
     sendTo(tab.view, CH.tabFilePage, { id: mine.id, done: true, error: 'no-link' });
+    setImmediate(() => nextQueued(tab));
   }
   tellShell();
 }
@@ -1511,7 +1578,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | undefined) | null) => void (labChoosesAFile = answer), keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');
