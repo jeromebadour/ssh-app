@@ -59,16 +59,24 @@ while read -r name image tool kex; do
   fi
   [ "$name" = survey ] && continue
   port=$((port + 10))
-  common="-f /dev/null -e -o PidFile=none -o AuthorizedKeysFile=/lab/authorized_keys -o StrictModes=no -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PermitRootLogin=no"
+  # A real config file, written inside the container, rather than -f /dev/null and a line of -o options.
+  # The reason is the file subsystem: sshd has no built-in Subsystem, so with no config at all every one of
+  # these servers refused sftp, and every file-protocol test against a real box had been failing since this
+  # lab was built. internal-sftp is used so no path has to be guessed per image.
+  common="-f /etc/lab/sshd_config -e"
   # A fourth server, and the only one in this lab that takes a password: the first visit of decision O2 is the
   # one place Berth ever offers one, so it is proved against a real OpenSSH rather than against our own box.
   # Its account is made inside the container with a known password, and its authorized_keys is writable, which
   # is the whole point: the visit has to put a key in it.
-  withpw="-f /dev/null -e -o PidFile=none -o StrictModes=no -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PermitRootLogin=no"
+  withpw="-f /etc/lab/sshd_config_pw -e"
   docker run -d --label berth-lab --name "berth-lab-$name" -v "$dir/mount:/lab:ro" \
     -p "127.0.0.1:$((port + 1)):2201" -p "127.0.0.1:$((port + 2)):2202" -p "127.0.0.1:$((port + 3)):2203" -p "127.0.0.1:$((port + 4)):2204" \
-    "$image" sh -c "$(install_cmd "$tool") && mkdir -p /run/sshd /etc/lab && cp /lab/host_ed /lab/host_rsa /etc/lab/ && chmod 600 /etc/lab/* \
+    "$image" sh -c "$(install_cmd "$tool") && mkdir -p /run/sshd /etc/lab && cp /lab/host_ed /lab/host_rsa /etc/lab/ && chmod 600 /etc/lab/host_* \
       && (sshd -V 2>&1 | grep -o 'OpenSSH_[^ ,]*' | head -1) > /version; \
+      printf '%s\n' 'PidFile none' 'AuthorizedKeysFile /lab/authorized_keys' 'StrictModes no' 'PasswordAuthentication no' \
+        'KbdInteractiveAuthentication no' 'PermitRootLogin no' 'Subsystem sftp internal-sftp' > /etc/lab/sshd_config; \
+      printf '%s\n' 'PidFile none' 'StrictModes no' 'PasswordAuthentication yes' 'KbdInteractiveAuthentication no' \
+        'PermitRootLogin no' 'Subsystem sftp internal-sftp' > /etc/lab/sshd_config_pw; \
       (useradd -m -s /bin/sh firstvisit 2>/dev/null || adduser -D -s /bin/sh firstvisit 2>/dev/null || true); \
       chpasswd < /lab/firstvisit-password; \
       /usr/sbin/sshd -D -p 2201 -o HostKey=/etc/lab/host_ed $common & \

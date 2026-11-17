@@ -85,7 +85,9 @@ jobs:
           files=""
           if [ -n "$NUMBER" ]; then files="$(gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename')"; fi
           if grep -qx 'toolchain/windows-run' <<<"$files"; then windows=true; fi
-          if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$)' <<<"$files"; then openssh=true; fi
+          # The workflow itself counts: the step that runs these tests, and the names it runs, live here, and a
+          # change to them that cannot be run is a change nobody has proved.
+          if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$|\.github/workflows/ci\.yml$)' <<<"$files"; then openssh=true; fi
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
           echo "openssh=$openssh" >> "$GITHUB_OUTPUT"
           echo "the Windows run: $windows; the real OpenSSH servers: $openssh"
@@ -113,9 +115,12 @@ jobs:
           # Every test that needs the real servers, named one by one. A pattern anchored to a single name is
           # how a test written later runs nowhere and is reported as proof all the same: TestOpenSSHFirstVisit
           # was added, this job went green, and it had not run.
-          LAB_OPENSSH="$GITHUB_WORKSPACE/out/lab-openssh" LAB_OPENSSH_REQUIRED=1 go test -count=1 -v -run '^(TestOpenSSH|TestOpenSSHFirstVisit)$' ./internal/link 2>&1 \
-            | tee /tmp/openssh.out \
-            | grep -E '^(\s*--- |ok|FAIL|panic|\s+\S+_test\.go)'
+          # The test's own exit status is what decides, not the grep's: piping go test into grep hands the step
+          # grep's status instead, and a failing test then prints its failure and the job goes green on it.
+          # That is how every file-protocol test against a real box failed unseen from the day this job existed.
+          LAB_OPENSSH="$GITHUB_WORKSPACE/out/lab-openssh" LAB_OPENSSH_REQUIRED=1 go test -count=1 -v -run '^(TestOpenSSH|TestOpenSSHFirstVisit)$' ./internal/link > /tmp/openssh.out 2>&1 || true
+          grep -E '^(\s*--- |ok|FAIL|panic|\s+\S+_test\.go)' /tmp/openssh.out || true
+          grep -qE '^ok\s' /tmp/openssh.out || { echo "openssh: the tests against the real servers did not pass" >&2; exit 1; }
           # And every one of them really ran: a skip here means the lab was not there, and a run that proves
           # nothing must not pass for one that does.
           for t in TestOpenSSH TestOpenSSHFirstVisit; do
