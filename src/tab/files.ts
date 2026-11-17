@@ -46,15 +46,24 @@ const SEND_WHY: Record<string, string> = {
   'no-link': 'There is no link to the box',
   'not-now': 'The window is busy with another question',
   'nothing-chosen': 'No file was chosen',
+  kept: 'The file on the box was left as it was',
   failed: 'It could not be sent',
 };
 
-// What a mark on a finished download means, in words.
+// What a mark on a finished transfer means, in words. The two ways round are not the same sentence: one says
+// what this PC now holds, the other what the box now holds.
 const MARK: Record<string, string> = {
   checked: 'checked against the box',
   changed: 'it changed on the box while it was read, so it could not be checked',
   'not-checked': 'the box could not check it',
   '': 'it was not checked',
+};
+
+const SENT_MARK: Record<string, string> = {
+  checked: 'and the box holds the same file',
+  changed: 'but it changed on this PC while it was read, so it could not be checked',
+  'not-checked': 'but the box could not check it',
+  '': 'but it was not checked',
 };
 
 // Every ask on the tab's one file channel takes a number from here, so the browser and the viewer can both
@@ -95,13 +104,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
   // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
   // more than one at a time, and the strip at the foot says what each is doing.
-  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; ended: string };
+  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; ended: string };
   const bringing = new Map<number, Bringing>();
 
   const el = {
     path: document.createElement('div'),
     list: document.createElement('div'),
     foot: document.createElement('div'),
+    moving: document.createElement('div'),
   };
   el.path.className = 'fb-path';
   const here = document.createElement('div');
@@ -122,8 +132,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   el.list.setAttribute('aria-label', 'Files on the box');
   el.foot.className = 'fb-foot';
   el.foot.id = 'fb-foot';
+  el.moving.className = 'fb-moving';
+  el.moving.id = 'fb-moving';
   here.append(el.path, sendBtn);
-  at.append(here, el.list, el.foot);
+  at.append(here, el.list, el.moving, el.foot);
 
   const ask = (a: FileAsk) => asker.ask(a);
 
@@ -177,7 +189,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (typeof p.markWhy === 'string') down.markWhy = p.markWhy;
       if (typeof p.renamed === 'string') down.renamed = p.renamed;
       if (p.replaced === true) down.replaced = true;
+      if (typeof p.asking === 'string') down.asking = p.asking;
       if (p.done) {
+        down.asking = '';
         const words = down.way === 'in' ? DOWNLOAD_WHY : SEND_WHY;
         down.ended = p.error
           ? (words[p.error] ?? words['failed']!)
@@ -185,7 +199,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
             ? 'It was stopped'
             : down.way === 'in'
               ? `${down.landed} is in the download folder, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
-              : `${down.landed} is on the box${down.replaced ? ', over the file that was there' : ''}, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}`;
+              : `${down.landed} is on the box${down.replaced ? ', over the file that was there' : ''}, ${SENT_MARK[down.mark] ?? 'but it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}`;
         down.at = performance.now();
       }
       draw();
@@ -277,16 +291,25 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const bits: string[] = [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
     if (space) bits.push(`${size(space.free)} free of ${size(space.total)}`);
     if (said !== '') bits.push(said);
-    // What is being brought over, one line each: how far it has got, how fast, and how long is left. A
-    // finished one says where it went and whether it could be checked, and stays until the next move.
+    // What is being brought over or sent, one line each: how far it has got, how fast, and how long is left.
+    // A finished one says where it went and whether it could be checked, and stays until the next move. These
+    // go under the counts and may take two lines, because what they say is a sentence and a sentence that is
+    // cut off at the edge of the pane is a sentence nobody can read.
+    const lines: string[] = [];
     for (const b of bringing.values()) {
       if (b.ended !== '') {
-        bits.push(b.ended);
+        lines.push(b.ended);
+        continue;
+      }
+      if (b.asking !== '') {
+        lines.push(`${shorten(b.asking, 28)} is already on the box: waiting on your answer`);
         continue;
       }
       const left = b.rate > 1 && b.of > b.got ? `, ${howLong((b.of - b.got) / b.rate)} left` : '';
-      const of = b.of > 0 ? ` of ${size(b.of)}` : '';
-      bits.push(`${b.way === 'out' ? 'Sending ' : ''}${shorten(b.landed === '' ? b.name : b.landed, 28)} ${size(b.got)}${of}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}`);
+      const name = shorten(b.landed === '' ? b.name : b.landed, 28);
+      // Until the other end has said how big it is there is nothing worth counting, so nothing is counted.
+      const far = b.of > 0 ? ` ${size(b.got)} of ${size(b.of)}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}` : '';
+      lines.push(`${b.way === 'out' ? 'Sending ' : ''}${name}${far}`);
     }
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
@@ -297,6 +320,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       const part = document.createElement('span');
       part.textContent = b;
       el.foot.append(part);
+    }
+    el.moving.replaceChildren();
+    for (const line of lines) {
+      const one = document.createElement('div');
+      one.className = 'fb-moving-one';
+      one.textContent = line;
+      el.moving.append(one);
     }
   };
 
@@ -407,7 +437,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (b.name === name && b.ended === '') return; // already on its way
     }
     const id = asker.ask({ do: 'get', path: join(where || asked, name) });
-    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, ended: '' });
+    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', ended: '' });
     draw();
   };
 
@@ -417,7 +447,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const here = where || asked;
     if (here === '' || busy) return;
     const id = asker.ask({ do: 'put', path: here });
-    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, ended: '' });
+    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', ended: '' });
     draw();
   };
 

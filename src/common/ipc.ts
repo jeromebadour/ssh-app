@@ -163,6 +163,20 @@ export interface ShellState {
   maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
   keyFile: KeyFileChosen | null; // a key file chosen for the box being added (plan O1)
+  replacing: ReplaceAsked | null; // a file is already where one is being sent: what is there, and what is coming
+}
+
+// Sending a file where a file of that name already is. Replacing one on a box cannot be undone from here, so
+// Berth asks first and puts both files in front of the person rather than taking one press for it
+// (BUILD-RULES 2.20). Keeping what is there has the focus.
+export interface ReplaceAsked {
+  tab: number;
+  box: string;
+  folder: string; // the folder on the box, as the box names it
+  name: string; // the name both files have
+  bytes: number; // what is on the box now
+  changed: number; // when it last changed, as the box says (seconds)
+  sendingBytes: number; // what would go in its place
 }
 
 // A key file the person chose for the box being added. Its bytes live in main alone and are never told to a
@@ -232,7 +246,9 @@ export type ShellCmd =
   | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
   | { op: 'keepApp' } // the asking answered: keep everything open
   | { op: 'pickKeyFile' } // open the system's file chooser for a key file to bring in (plan O1)
-  | { op: 'dropKeyFile' }; // the chosen key file is put aside; the box gets a key Berth makes
+  | { op: 'dropKeyFile' } // the chosen key file is put aside; the box gets a key Berth makes
+  | { op: 'replaceFile' } // the file being sent may go in over the one on the box
+  | { op: 'keepFile' }; // the file on the box is left exactly as it is, and nothing is sent
 
 // What a view may tell the meter: numbers only, in milliseconds.
 // The slowest reaction also says where its time went, so that a slow one can be explained and not guessed at:
@@ -330,4 +346,6 @@ export interface FilePage {
   into?: string; // the folder everything brought over lands in; main's word, never a view's
   renamed?: string; // why the name it landed under is not the box's name for it
   replaced?: boolean; // a file sent to a box: it went in over a file that was already there
+  there?: FileRow; // a file sent to a box: what is already at that name, when something is
+  asking?: string; // a file sent to a box: it is waiting on a question about this name, and nothing is moving
 }

@@ -857,7 +857,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               front.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
               await sleep(120);
             };
-            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
             const standOn = async (name: string): Promise<boolean> => {
               const there = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row[data-name="${name}"]').length`)) === 1, 8000);
               await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${name}"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
@@ -906,10 +906,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await standOn('shortcut.lnk');
             await tap('S', ['control']);
             const refused = await until(async () => (await foot()).includes('not enough room'), 25_000);
-            await sleep(400);
+            // The window says so as soon as it is stopped; the file it had opened to write into goes as the
+            // download unwinds, a moment later. The folder is waited for rather than looked at once, and a
+            // folder that never comes back to what it was fails this.
+            const empty = await until(async () => (await readdir(ctx.downloads).catch(() => [] as string[])).length === before.length, 10_000);
             const after = await readdir(ctx.downloads).catch(() => [] as string[]);
             await lab.tell('pretendsize - 0');
-            check('a file bigger than the disk is refused before anything is written, and the window says why', refused && after.length === before.length, [await foot(), before.length, after.length]);
+            check('a file bigger than the disk is refused before anything is written, and the window says why', refused && empty && after.every((n) => !n.startsWith('.berth-')), [await foot(), before, after]);
             // Back to the folder the probes after this one expect.
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
@@ -920,7 +923,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
           // part is only naming the folder it is looking at.
           {
-            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
             const mine = await mkdtemp(path.join(os.tmpdir(), 'berth-send-'));
             const sending = path.join(mine, 'from-the-pc.conf');
             await writeFile(sending, 'a file this PC is sending\n');
@@ -929,13 +932,33 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const sent = await until(async () => (await foot()).includes('is on the box'), 25_000);
             const said = await foot();
             const landed = await lab.tell('read var/log/from-the-pc.conf');
-            check('the send button puts a file from the PC on the box, and the box agrees about it', sent && said.includes('checked against the box') && landed['text'] === 'a file this PC is sending\n', [said, landed]);
-            // A file already on the box is not written over by a send that did not ask to.
-            await writeFile(sending, 'a second try, which must not go in\n');
+            check('the send button puts a file from the PC on the box, and the box agrees about it', sent && said.includes('the box holds the same file') && landed['text'] === 'a file this PC is sending\n', [said, landed]);
+            // A file already on the box: Berth asks first, with both files in front of the person, and nothing
+            // on the box is touched until the answer comes back (BUILD-RULES 2.20).
+            await writeFile(sending, 'the second try, which only goes in if he says so\n');
             await js(front.view, `document.getElementById('fb-send')?.click()`);
-            const refused = await until(async () => (await foot()).includes('already on the box'), 25_000);
-            const stillThere = await lab.tell('read var/log/from-the-pc.conf');
-            check('a file already on the box is not written over by a send that did not ask to', refused && stillThere['text'] === 'a file this PC is sending\n', [await foot(), stillThere]);
+            const asked = await until(() => has('#replacing'), 25_000);
+            await shot('replace-asks', 'a file already on the box, asked about before anything is replaced', front);
+            const bothShown = await text('#replacing-both');
+            const titleShown = await text('#replacing-title');
+            const focused = await js<string>(ctx.shell, `document.activeElement?.id ?? ''`);
+            const untouchedWhileAsking = await lab.tell('read var/log/from-the-pc.conf');
+            // While the question is open the pane says the send is waiting on it, and does not say it was
+            // refused: a refusal shown beside the question would contradict the thing being asked.
+            const stripWhileAsking = await foot();
+            check('a file already on the box is asked about, with both files shown, nothing touched, and the pane waiting on the answer', asked && titleShown.includes('from-the-pc.conf') && bothShown.includes('On the box now') && bothShown.includes('Going in its place') && focused === 'replacing-keep' && stripWhileAsking.includes('waiting on your answer') && !stripWhileAsking.includes('A file of that name is already on the box') && untouchedWhileAsking['text'] === 'a file this PC is sending\n', [titleShown, bothShown, focused, stripWhileAsking, untouchedWhileAsking]);
+            // Keep what is there: the box is left exactly as it was, and the strip says so.
+            await clickOn('#replacing-keep');
+            const kept = await until(async () => (await foot()).includes('left as it was'), 10_000);
+            const afterKeeping = await lab.tell('read var/log/from-the-pc.conf');
+            check('Keep what is there leaves the box exactly as it was, and says so', kept && !(await has('#replacing')) && afterKeeping['text'] === 'a file this PC is sending\n', [await foot(), afterKeeping]);
+            // Replace it: the new one goes in, over the old, and the box agrees about what arrived.
+            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            await until(() => has('#replacing'), 25_000);
+            await clickOn('#replacing-do');
+            const over = await until(async () => (await foot()).includes('over the file that was there'), 25_000);
+            const afterReplacing = await lab.tell('read var/log/from-the-pc.conf');
+            check('Replace it puts the new file in over the old one, and the box agrees about it', over && (await foot()).includes('the box holds the same file') && afterReplacing['text'] === 'the second try, which only goes in if he says so\n', [await foot(), afterReplacing]);
             // The chooser answered with nothing: the window says so and the box is not touched.
             ctx.chooseToSend(() => undefined);
             await js(front.view, `document.getElementById('fb-send')?.click()`);

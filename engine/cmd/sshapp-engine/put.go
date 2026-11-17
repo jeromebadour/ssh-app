@@ -100,6 +100,10 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 			return errInTheWay
 		}
 		if !a.Replace {
+			// What is in the way, so the window can ask about it with the file in front of a person rather
+			// than a bare name: how big it is and when it last changed.
+			row := row(a.Name, there)
+			f.page(filePage{ID: a.ID, There: &row, Of: size})
 			return errAlreadyThere
 		}
 		replacing = true
