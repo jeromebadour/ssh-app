@@ -4,6 +4,7 @@
 //
 // Nothing here decides anything: every check of what is typed is the one in common/boxes.ts, which main applies
 // again before anything is saved; what the box showed is in the check only once main has compared a paste.
+import { whenAs } from '../common/when';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { BOX_COLOURS, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, type BoxDraft, type Check, type Place } from '../common/boxes';
 import type { BoxView, CheckShown, KeyFileChosen, ReplaceAsked } from '../common/ipc';
@@ -619,14 +620,6 @@ function bytesAs(n: number): string {
   return u === 0 ? `${n} bytes` : `${v < 100 ? v.toFixed(1) : Math.round(v)} ${units[u]}`;
 }
 
-function whenAs(seconds: number): string {
-  const ago = Date.now() / 1000 - seconds;
-  if (ago < 90) return 'a moment ago';
-  if (ago < 5400) return `${Math.round(ago / 60)} minutes ago`;
-  if (ago < 36 * 3600) return `${Math.round(ago / 3600)} hours ago`;
-  if (ago < 30 * 86400) return `${Math.round(ago / 86400)} days ago`;
-  return new Date(seconds * 1000).toISOString().slice(0, 10);
-}
 
 // ------------------------------------------------------------------ closing
 

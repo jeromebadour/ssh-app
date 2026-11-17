@@ -1043,6 +1043,60 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the next try takes it up where it stopped, and the whole file is what the box has', done && said.includes('taken up where it broke') && said.includes('checked against the box') && !after.includes('.berth-broken.log.part') && itsHash === onTheBox['sha256'], [said, after, itsHash === onTheBox['sha256']]);
             await lab.tell('forget var/log/broken.log');
           }
+          // The order of the list, and narrowing it. Both are the window's own: no ask leaves it for either,
+          // because the folder it already has is the whole folder (plan B4.1).
+          {
+            const names = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const asksBefore = { ...ctx.filesAsked() };
+            const byName = await names();
+            // Folders come first whatever the order is by, and the way up is always the first row.
+            // The way up is left out: it is a folder in every order there is, so a check that counted it would
+            // say folders come first however the list was really ordered.
+            const kinds = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..').map((r) => r.dataset.kind)`);
+            const foldersFirstByName = (await kinds()).join(',').startsWith('folder');
+            await clickOn('#fb-by-size', front);
+            const bySize = await names();
+            const sizes = await js<number[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => Number(r.dataset.bytes))`);
+            const biggestFirst = sizes.every((n, i) => i === 0 || sizes[i - 1]! >= n);
+            const foldersStillFirst = (await kinds()).join(',').startsWith('folder');
+            check('ordering by size puts the biggest file first, keeps folders above files, and asks the box for nothing', bySize.join() !== byName.join() && biggestFirst && foldersStillFirst && JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore), [bySize.slice(0, 5), sizes.slice(0, 5), foldersStillFirst]);
+            // The same column again turns it around.
+            await clickOn('#fb-by-size', front);
+            const smallest = await js<number[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => Number(r.dataset.bytes))`);
+            check('pressing the same column again turns the order around', smallest.every((n, i) => i === 0 || smallest[i - 1]! <= n) && smallest.length === sizes.length, [smallest.slice(0, 5)]);
+            // Ordered by when it changed, the rows say when: an order with nothing on screen to read it
+            // against is an order a person has to take on trust.
+            await clickOn('#fb-by-changed', front);
+            const saysWhen = await js<number>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..' && (r.querySelector('.fb-size')?.textContent ?? '') !== '').length`);
+            const times = await js<number[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => Number(r.dataset.changed))`);
+            check('ordered by when it changed, the newest is first and every row says when', times.every((n, i) => i === 0 || times[i - 1]! >= n) && saysWhen > 0, [times.slice(0, 4), saysWhen]);
+            await clickOn('#fb-by-name', front);
+            check('and the order goes back to the name', (await names()).join() === byName.join(), [(await names()).slice(0, 5), byName.slice(0, 5)]);
+            // Narrowing the list hides rows and nothing else: the folder is still the whole folder, the count
+            // says what is hidden, and the box is asked for nothing.
+            await js(front.view, `(document.getElementById('fb-find').value = 'log', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
+            const narrowed = await names();
+            const saidHidden = (await foot()).includes('hidden by the filter');
+            check('narrowing the list shows only what is being looked for, says how many are hidden, and asks the box for nothing', narrowed.length < byName.length && narrowed.filter((n) => n !== '..').every((n) => n.toLowerCase().includes('log')) && saidHidden && JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore), [narrowed, saidHidden]);
+            // Nothing matches: the pane says so rather than looking like an empty folder.
+            await js(front.view, `(document.getElementById('fb-find').value = 'zzzz-nothing', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
+            const saidNone = await until(() => has('#fb-none-match', front), 5000);
+            const stillHas = (await js<string>(front.view, `document.getElementById('fb-none-match')?.textContent ?? ''`)).includes('hidden by the filter');
+            check('a filter that matches nothing says so, and says the folder is not empty', saidNone && stillHas && !(await has('#fb-empty', front)), [saidNone, stillHas]);
+            // One press gives the folder back.
+            await clickOn('#fb-find-clear', front);
+            const back = await until(async () => (await names()).join() === byName.join(), 5000);
+            check('one press on the clear gives the whole folder back', back && (await js<string>(front.view, `document.getElementById('fb-find')?.value ?? 'x'`)) === '', [back]);
+            // And moving to another folder does not carry the filter into it.
+            await js(front.view, `(document.getElementById('fb-find').value = 'log', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('log'), 10_000);
+            const cleared = await js<string>(front.view, `document.getElementById('fb-find')?.value ?? 'x'`);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('syslog'), 10_000);
+            check('a filter belongs to the folder it was typed in, and does not follow you out of it', cleared === '', cleared);
+          }
           // Dragging a file out of the window. The drag itself belongs to Windows and is his PC's to prove; what
           // is proven here is everything around it: which files a tab may drag, that a view names a number and
           // never a path, that another tab's file and a made-up number are refused, and that a tab closing takes
@@ -1067,7 +1121,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // Bring it over, and it becomes draggable: a line in the strip and the row itself.
             await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
             const there = await until(async () => (await foot()).includes('is in the download folder'), 30_000);
-            const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"].fb-here')?.getAttribute('draggable') === 'true'`), 5000);
+            const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"].fb-on-pc')?.getAttribute('draggable') === 'true'`), 5000);
             const lineNow = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('dragme.log'))`);
             check('a file this tab brought over becomes draggable, from its line and from its row; before it was not', there && rowNow && lineNow && !rowBefore && ctx.canDrag(front.id) === canDragBefore + 1, [there, rowNow, lineNow, rowBefore, ctx.canDrag(front.id) - canDragBefore]);
             // The press hands main the number of the ask, and main hands the system the file it decided on. The
