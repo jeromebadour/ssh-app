@@ -99,17 +99,47 @@ func tryRun(l *Link, cmd string, limit time.Duration) (string, error) {
 		return "", err
 	}
 	defer ch.Close()
-	go ssh.DiscardRequests(reqs)
+	// The box's exit status is kept, not discarded. A setup command that fails has to say so here: a test
+	// whose setup failed in silence proves nothing, which is how the hash case above once passed on a file
+	// that was never created.
+	status := make(chan int, 1)
+	go func() {
+		for r := range reqs {
+			if r.Type == "exit-status" && len(r.Payload) >= 4 {
+				select {
+				case status <- int(binary.BigEndian.Uint32(r.Payload)):
+				default:
+				}
+			}
+			if r.WantReply {
+				_ = r.Reply(false, nil)
+			}
+		}
+	}()
 	payload := make([]byte, 4+len(cmd))
 	binary.BigEndian.PutUint32(payload, uint32(len(cmd)))
 	copy(payload[4:], cmd)
 	if ok, err := ch.SendRequest("exec", true, payload); err != nil || !ok {
 		return "", fmt.Errorf("the box did not start %q: %v", cmd, err)
 	}
+	// Both of what it printed: a box's complaint goes to the other stream, and swallowing that is what let a
+	// broken command look like a quiet one.
+	var grumble strings.Builder
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(&grumble, ch.Stderr()); close(done) }()
 	out := make(chan string, 1)
 	go func() { b, _ := io.ReadAll(ch); out <- string(b) }()
 	select {
 	case s := <-out:
+		<-done
+		select {
+		case code := <-status:
+			if code != 0 {
+				return "", fmt.Errorf("%q ended %d on the box: %s", cmd, code, strings.TrimSpace(grumble.String()))
+			}
+		case <-time.After(5 * time.Second):
+			return "", fmt.Errorf("%q printed %q but the box never said how it ended", cmd, s)
+		}
 		return s, nil
 	case <-time.After(limit):
 		return "", fmt.Errorf("%q did not finish within %v", cmd, limit)
@@ -591,7 +621,9 @@ func TestOpenSSH(t *testing.T) {
 				body := "the bytes whose hash this test knows\n"
 				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && printf %s '"+body+"' > "+dir+"/plain.txt && echo done", 15*time.Second)
 				// And a name holding the things a shell would act on, to prove the quoting on a real shell.
-				odd := dir + "/it's $(id) `id` \"x\" ;rm -rf / *.txt"
+				// No slash anywhere in the name itself: a slash would make it a path into a folder that is not
+				// there, and the test would be proving nothing about quoting.
+				odd := dir + "/it's $(id) `id` \"x\" ;rm -rf *.txt"
 				run(t, l, "cp "+dir+"/plain.txt '"+strings.ReplaceAll(odd, "'", `'\''`)+"' && echo done", 15*time.Second)
 
 				want := sha256.Sum256([]byte(body))
@@ -735,7 +767,9 @@ func TestOpenSSHFirstVisit(t *testing.T) {
 
 			// A box that is not the one pinned never sees the password at all: the identity is compared
 			// before any sign-in is tried, which is the whole of decision O2's argument.
-			if _, e := FirstVisit(t.Context(), Target{Addr: b.withPassword, User: "firstvisit", HostKey: lab.hostRSA}, lab.password, command, Options{}); e == nil || e.Cause != IdentityChanged {
+			// The pinned key is of the kind this box really offers (ed25519, here the lab's user key), so what
+			// stops the visit is the identity itself and not a disagreement about algorithms.
+			if _, e := FirstVisit(t.Context(), Target{Addr: b.withPassword, User: "firstvisit", HostKey: lab.user.PublicKey()}, lab.password, command, Options{}); e == nil || e.Cause != IdentityChanged {
 				t.Fatalf("a box showing another identity was not stopped: %v", e)
 			}
 
