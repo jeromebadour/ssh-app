@@ -49,6 +49,7 @@ interface Ctx {
   missing(): Record<string, number>;
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
+  keysRefused(): number;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -1894,6 +1895,57 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await js(frontTab.view, `window.tabPort.copy('one\\ntwo')`);
       await sleep(250);
       check('the tab in front of the window in use can: the text is on the clipboard, and the window says what was copied', stillInUse && (await clipboard.readText()) === 'one\ntwo' && (await text('#status')).includes('Copied 2 lines'), [await clipboard.readText(), await text('#status'), stillInUse]);
+      // The window's own keys. Which tab is in front is the window's business, not a box's, so main answers
+      // these presses before any view is given them: they work the same wherever the focus is, and a box is
+      // never sent them.
+      const press = (w: Electron.WebContents, keyCode: string, modifiers: ('control' | 'shift' | 'alt')[]): void => {
+        w.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+        w.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+      };
+      const ids = [...ctx.tabs.keys()];
+      const nextAlong = ids[(ids.indexOf(t.id) + 1) % ids.length]!;
+      await boxGot();
+      const keysRefusedBefore = ctx.keysRefused();
+      // The page is asked to write down any key it is given, so the rule being proved is the real one: main
+      // answers these presses and no view is ever given them, rather than the view simply making nothing of it.
+      await js(t.view, `(window.__keysSeen = [], document.addEventListener('keydown', (e) => window.__keysSeen.push(e.key), true))`);
+      press(t.view.webContents, 'Tab', ['control']);
+      const moved = await until(() => ctx.shellState().active === nextAlong, 2000);
+      const keyToBox = await boxGot();
+      const pageSaw = await js<string[]>(t.view, `window.__keysSeen`);
+      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', moved && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
+      press(t.view.webContents, 'Tab', ['control', 'shift']);
+      check('and Ctrl+Shift+Tab moves back the other way', await until(() => ctx.shellState().active === t.id, 2000), [ctx.shellState().active, t.id]);
+      press(t.view.webContents, '1', ['control', 'alt']);
+      const toTheFirst = await until(() => ctx.shellState().active === ids[0], 2000);
+      press(t.view.webContents, '9', ['control', 'alt']);
+      const toTheLast = await until(() => ctx.shellState().active === ids[ids.length - 1], 2000);
+      check('Ctrl+Alt and a number reaches that tab, and 9 is the last one however many there are', toTheFirst && toTheLast && ids.length > 1, [toTheFirst, toTheLast, ids.length]);
+      // A number past the last tab: nothing moves, and the window says there is no such tab rather than
+      // leaving the press unanswered.
+      const whereItWas = ctx.shellState().active;
+      press(t.view.webContents, '8', ['control', 'alt']);
+      await sleep(250);
+      check('a number past the last tab moves nothing, and the window says there is no such tab', ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8, [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
+      // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
+      // given a key that was meant for main.
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
+      await sleep(100);
+      const refusedBeforeDialog = ctx.keysRefused();
+      press(t.view.webContents, 'Tab', ['control']);
+      await sleep(250);
+      const stayed = ctx.shellState().active === whereItWas;
+      const counted = ctx.keysRefused() === refusedBeforeDialog + 1;
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: false })`);
+      check('under a dialog the press moves nothing and is counted, not passed to a view', stayed && counted && (await boxGot()) === '', [stayed, ctx.keysRefused() - refusedBeforeDialog]);
+      // And the same press where the focus is the shell's own: the row of tabs, a menu, the status line.
+      ctx.win.focus();
+      await until(() => ctx.win.isFocused(), 4000);
+      press(ctx.shell.webContents, 'Tab', ['control']);
+      const shellPressWorked = await until(() => ctx.shellState().active !== whereItWas, 2000);
+      check('the same press works when the focus is on the shell and not on a tab', shellPressWorked, [ctx.shellState().active, whereItWas]);
+      await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+      await until(() => ctx.shellState().active === t.id, 2000);
       // A size that is none (no cells, absurdly many, not a number) is refused and never reaches the box.
       const droppedBeforeSize = ctx.dropped();
       const askedBefore = JSON.stringify(((await lab.tell('seen'))['sessions'] as { Asked?: string[] }[]).map((x) => x.Asked));
