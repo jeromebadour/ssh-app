@@ -299,7 +299,7 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'cancel';
   path: string;
 }
 
@@ -329,4 +329,5 @@ export interface FilePage {
   markWhy?: string; // why it could not be checked, where it could not
   into?: string; // the folder everything brought over lands in; main's word, never a view's
   renamed?: string; // why the name it landed under is not the box's name for it
+  replaced?: boolean; // a file sent to a box: it went in over a file that was already there
 }

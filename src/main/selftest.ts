@@ -8,7 +8,7 @@ import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os, { availableParallelism } from 'node:os';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { COPY_MAX, type ShellState } from '../common/ipc';
 import { fingerprintOf, type Boxes } from './boxes';
@@ -51,6 +51,7 @@ interface Ctx {
   windowAsked(): string[];
   keysRefused(): number;
   downloads: string;
+  chooseToSend(answer: (() => string | undefined) | null): void;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -910,6 +911,38 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await lab.tell('pretendsize - 0');
             check('a file bigger than the disk is refused before anything is written, and the window says why', refused && after.length === before.length, [await foot(), before.length, after.length]);
             // Back to the folder the probes after this one expect.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('syslog'), 10_000);
+          }
+          // Sending a file from the PC to the box. Which file leaves this PC is answered in the system's own
+          // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
+          // part is only naming the folder it is looking at.
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            const mine = await mkdtemp(path.join(os.tmpdir(), 'berth-send-'));
+            const sending = path.join(mine, 'from-the-pc.conf');
+            await writeFile(sending, 'a file this PC is sending\n');
+            ctx.chooseToSend(() => sending);
+            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            const sent = await until(async () => (await foot()).includes('is on the box'), 25_000);
+            const said = await foot();
+            const landed = await lab.tell('read var/log/from-the-pc.conf');
+            check('the send button puts a file from the PC on the box, and the box agrees about it', sent && said.includes('checked against the box') && landed['text'] === 'a file this PC is sending\n', [said, landed]);
+            // A file already on the box is not written over by a send that did not ask to.
+            await writeFile(sending, 'a second try, which must not go in\n');
+            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            const refused = await until(async () => (await foot()).includes('already on the box'), 25_000);
+            const stillThere = await lab.tell('read var/log/from-the-pc.conf');
+            check('a file already on the box is not written over by a send that did not ask to', refused && stillThere['text'] === 'a file this PC is sending\n', [await foot(), stillThere]);
+            // The chooser answered with nothing: the window says so and the box is not touched.
+            ctx.chooseToSend(() => undefined);
+            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            check('a chooser answered with nothing is said, and nothing is sent', await until(async () => (await foot()).includes('No file was chosen'), 10_000), await foot());
+            ctx.chooseToSend(null);
+            await rm(mine, { recursive: true, force: true });
+            await lab.tell('forget var/log/from-the-pc.conf');
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
