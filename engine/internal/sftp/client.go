@@ -108,6 +108,11 @@ type Entry struct {
 type Space struct {
 	Total uint64
 	Free  uint64 // what this user may actually use
+	// Which filesystem this is, as the box names it. Two paths with the same id are on the same disk, which is
+	// what decides whether a file can be moved into a trash folder by a rename rather than copied.
+	Id uint64
+	// The filesystem takes no writes at all, so nothing can be made on it, trash included.
+	ReadOnly bool
 }
 
 // Client talks SFTP over one channel of an SSH link. One request is in flight at a time per call, but calls may
