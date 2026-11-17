@@ -152,6 +152,19 @@ export interface CheckShown {
   askedAt: string[]; // when the box was asked (UTC), the latest last
 }
 
+// The first visit (decision O2). It never carries a password: what is typed goes straight to main and is not
+// kept, so there is nothing here to leak into a window's state or into a picture of it.
+export interface FirstVisitShown {
+  box: string; // the box's id
+  name: string; // and its name, for the screen
+  user: string;
+  addr: string;
+  phase: '' | 'asking' | 'visiting' | 'proving' | 'done' | 'failed';
+  said: string; // what the box printed back, escaped and capped: a box's own words
+  error: string; // why it did not work, in one word from a written list
+  detail: string;
+}
+
 export interface ShellState {
   tabs: TabInfo[];
   active: number; // tab id, or 0 for none
@@ -166,6 +179,7 @@ export interface ShellState {
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
   keyFile: KeyFileChosen | null; // a key file chosen for the box being added (plan O1)
   replacing: ReplaceAsked | null; // a file is already where one is being sent: what is there, and what is coming
+  firstVisit: FirstVisitShown | null; // decision O2: the one screen that ever asks for a box's own password
   settings: AppSettings; // what the app remembers about itself; the defaults until the list is open
   settingsOpen: boolean; // the settings are on screen
   downloadsNow: string; // where downloads land as things stand, default or chosen: the folder, written out
@@ -245,10 +259,14 @@ export type ShellCmd =
   | { op: 'sendPaste' } // the paste being shown: send it to its box
   | { op: 'dropPaste' } // the paste being shown: send nothing
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
+  | { op: 'trustThenVisit'; box: string } // pin it, then open the first visit (decision O2) instead of a tab
   | { op: 'closeCheck'; box: string }
   | { op: 'copyBlock'; box: string }
   | { op: 'window'; do: 'minimize' | 'maximize' | 'close' } // the window's own three buttons, which Berth draws
   | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
+  | { op: 'firstVisit'; box: string } // decision O2: open the one screen that ever asks for a box's password
+  | { op: 'firstVisitGo'; box: string; password: string } // use it once, to put Berth's key on that box
+  | { op: 'firstVisitClose' } // the screen is closed; nothing is kept
   | { op: 'settings'; show: boolean } // open or close the settings; nothing is changed by opening it
   | { op: 'pickDownloads' } // choose where downloads land: main opens the system's own chooser
   | { op: 'defaultDownloads' } // put the download folder back to Berth's own default

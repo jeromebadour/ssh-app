@@ -303,6 +303,7 @@ export interface CheckActions {
   paste(text: string): void;
   again(): void;
   trust(): void;
+  trustThenVisit(): void; // pin it, then put Berth's key on it with one password (decision O2)
   close(): void;
 }
 
@@ -483,6 +484,14 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
             <div class={`dlg-actions ${mismatch || c.step === 'match' ? '' : 'gap-top'}`}>
               {mismatch && <button type="button" class="btn quiet" id="check-again" onClick={props.act.again}><Glyph name="reconnect" />Check again</button>}
               <button type="button" class={`btn ${mismatch ? 'keep' : 'keep-plain'}`} id="check-close" onClick={props.act.close}><Glyph name="close" />{mismatch ? 'Close' : 'Cancel'}</button>
+              {/* A box that already holds Berth's key is connected to. A box that holds no key of his at all
+                  cannot be, and the way in is the first visit: pinned first, then one password, once
+                  (decision O2). Both are offered because only he knows which this box is. */}
+              {c.step === 'match' && (
+                <button type="button" class={`btn keep-plain ${trusting ? 'waiting' : ''}`} id="check-visit" onClick={() => { setTrusting(true); props.act.trustThenVisit(); }}>
+                  <Glyph name="fileKey" />Trust, and put my key on it
+                </button>
+              )}
               {c.step === 'match' && (
                 <button type="button" class={`btn primary ${trusting ? 'waiting' : ''}`} id="check-trust" onClick={() => { setTrusting(true); props.act.trust(); }}>
                   {trusting ? <><span class="wait-ring" />Trusting and connecting</> : <><Glyph name="identity" />Trust and connect</>}

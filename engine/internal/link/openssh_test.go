@@ -29,13 +29,15 @@ import (
 
 type realBox struct {
 	name, honest, rsaOnly, weakCipher, kex, version string
+	withPassword                                    string // the one server in this lab that takes a password
 }
 
 type realLab struct {
-	boxes   []realBox
-	user    ssh.Signer
-	hostEd  ssh.PublicKey
-	hostRSA ssh.PublicKey
+	boxes    []realBox
+	user     ssh.Signer
+	hostEd   ssh.PublicKey
+	hostRSA  ssh.PublicKey
+	password string // this run's own password for the one server that takes one; made fresh, never committed
 }
 
 func openLab(t *testing.T) *realLab {
@@ -65,14 +67,14 @@ func openLab(t *testing.T) *realLab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lab := &realLab{user: user, hostEd: pub("host_ed.pub"), hostRSA: pub("host_rsa.pub")}
+	lab := &realLab{user: user, hostEd: pub("host_ed.pub"), hostRSA: pub("host_rsa.pub"), password: strings.TrimSpace(string(read("firstvisit-password")))}
 	sc := bufio.NewScanner(strings.NewReader(string(read("boxes"))))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
-		if len(f) != 6 {
-			t.Fatalf("a line of the lab's box list is not six words: %q", sc.Text())
+		if len(f) != 7 {
+			t.Fatalf("a line of the lab's box list is not seven words: %q", sc.Text())
 		}
-		lab.boxes = append(lab.boxes, realBox{f[0], f[1], f[2], f[3], f[4], f[5]})
+		lab.boxes = append(lab.boxes, realBox{f[0], f[1], f[2], f[3], f[4], f[5], f[6]})
 	}
 	if len(lab.boxes) < 2 {
 		t.Fatalf("the lab has %d servers; it must have the oldest and the newest", len(lab.boxes))
@@ -696,6 +698,64 @@ func TestOpenSSH(t *testing.T) {
 					t.Fatalf("the link was reconnected: %d connections", p.Open())
 				}
 			})
+		})
+	}
+}
+
+// The first visit, against a real OpenSSH that really takes a password (decision O2). This is the one place
+// in the whole app where a password is ever offered, so it is proved here and not only against our own box:
+// what matters is that a real sshd accepts it, that the one command really lands, and that the key it installs
+// really lets Berth back in without it.
+func TestOpenSSHFirstVisit(t *testing.T) {
+	lab := openLab(t)
+	if lab.password == "" {
+		t.Fatal("the lab made no password for its password server")
+	}
+	block, err := os.ReadFile(filepath.Join("..", "..", "..", "protocol", "first-connection.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Block string `json:"block"`
+	}
+	if err := json.Unmarshal(block, &file); err != nil || file.Block == "" {
+		t.Fatalf("the one block Berth runs could not be read: %v", err)
+	}
+
+	for _, b := range lab.boxes {
+		t.Run(b.name, func(t *testing.T) {
+			target := Target{Addr: b.withPassword, User: "firstvisit", HostKey: lab.hostEd}
+			line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(lab.user.PublicKey())))
+			command := strings.ReplaceAll(file.Block, "{KEY}", line)
+
+			// A wrong password is refused, and nothing is run.
+			if _, e := FirstVisit(t.Context(), target, lab.password+"-wrong", command, Options{}); e == nil {
+				t.Fatal("a wrong password was taken")
+			}
+
+			// A box that is not the one pinned never sees the password at all: the identity is compared
+			// before any sign-in is tried, which is the whole of decision O2's argument.
+			if _, e := FirstVisit(t.Context(), Target{Addr: b.withPassword, User: "firstvisit", HostKey: lab.hostRSA}, lab.password, command, Options{}); e == nil || e.Cause != IdentityChanged {
+				t.Fatalf("a box showing another identity was not stopped: %v", e)
+			}
+
+			// The right password: the block runs, and the box prints its own fingerprints as it does.
+			said, e := FirstVisit(t.Context(), target, lab.password, command, Options{})
+			if e != nil {
+				t.Fatalf("the first visit failed: %v", e)
+			}
+			if !strings.Contains(said, "SHA256:") {
+				t.Fatalf("the box printed no fingerprints: %q", said)
+			}
+
+			// And now the key alone gets in, with no password anywhere, which is the thing the visit exists
+			// for. Proving it this way and not by reading authorized_keys is the point: what matters is that
+			// the key works, not that a file looks right.
+			l, derr := Dial(t.Context(), target, lab.user, Options{})
+			if derr != nil {
+				t.Fatalf("the key the visit installed does not let Berth in: %v", derr)
+			}
+			l.Close()
 		})
 	}
 }

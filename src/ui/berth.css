@@ -341,6 +341,21 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .size-btn:hover { color: var(--text-1); border-color: color-mix(in srgb, var(--main) 40%, var(--line)); }
 .size-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--main) 70%, var(--text-1)); outline-offset: 1px; }
 .size-btn.on { color: var(--text-1); border-color: color-mix(in srgb, var(--main) 70%, var(--line)); background: color-mix(in srgb, var(--main) 20%, transparent); }
+/* The first visit (decision O2): the one screen that asks for a box's own password. It reads as a dialog like
+   any other, because it is one; what sets it apart is what it says, not how it looks. */
+.dlg-visit { width: 500px; }
+.dlg-visit .said { margin: 0 0 10px; font-size: 12px; color: var(--text-2); }
+.dlg-visit .said.quiet { color: var(--text-3); }
+.dlg-visit .said.problem { color: var(--problem); }
+.dlg-visit .said.ok { color: var(--checked); }
+.visit-form { margin-top: 4px; }
+.visit-label { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; color: var(--text-2); }
+.visit-label .glyph { width: 14px; height: 14px; color: var(--text-3); }
+.visit-field { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--term-bg); color: var(--text-1); font: inherit; font-size: 13px; }
+.visit-field:focus { outline: none; border-color: color-mix(in srgb, var(--main) 65%, var(--line)); }
+.visit-field:focus-visible { outline: 2px solid color-mix(in srgb, var(--main) 70%, var(--text-1)); outline-offset: 1px; }
+/* What the box printed back: its own words, so it is shown as text and nothing else, and never acted on. */
+.visit-said { margin: 8px 0 0; padding: 8px 10px; max-height: 120px; overflow: auto; border-radius: 4px; background: var(--term-bg); color: var(--text-3); font-family: 'Plex Mono', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 .bm-foot { display: flex; gap: 6px; }
 .bm-settings { margin-left: auto; }
 .place-row { display: grid; grid-template-columns: 120px 1fr 16px; align-items: center; gap: 10px; height: 32px; padding: 0 10px; margin-bottom: 4px; border-radius: var(--r); background: var(--bg); }

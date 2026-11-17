@@ -59,6 +59,7 @@ interface Ctx {
   watchDrags(watch: ((file: string) => void) | null): void;
   chooseFolder(answer: (() => string | undefined) | null): void;
   settingsNow(): { downloads: string; paneSize: number };
+  watchFirstVisits(watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => { ok: true; said: string } | { ok: false; cause: string; detail: string }) | null): void;
   dragsAsked(): number;
   canDrag(tab: number): number;
   chooseKeyFile(file: string): Promise<void>;
@@ -724,6 +725,105 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await lab.tell(`accept ${ctx.boxes.list.find((b) => b.name === 'lab-box')?.publicKey ?? ''}`);
           for (const b of ctx.boxes.list.filter((x) => x.name === 'own-key-box')) await ctx.boxes.remove(b.id);
           await rm(dir, { recursive: true, force: true });
+        }
+
+        // The first visit (decision O2): the one screen in this app that ever asks for a box's own password.
+        // What a real box does with a real password is proved against real OpenSSH in the engine's own tests
+        // (TestOpenSSHFirstVisit). What is proved here is everything on this side of the wire, and above all
+        // the order: the box is pinned before the field exists, so a box pretending to be his never sees one.
+        {
+          const visits: { addr: string; user: string; hostKey: string; password: string; command: string }[] = [];
+          let answer: { ok: true; said: string } | { ok: false; cause: string; detail: string } = { ok: true, said: 'SHA256:xxxx root@lab\n' };
+          ctx.watchFirstVisits((v) => {
+            visits.push(v);
+            return answer;
+          });
+          const add = async (name: string): Promise<string> => {
+            // Add box lives in the Boxes menu, so the menu is opened first: pressing what is not on screen is
+            // a press that lands on nothing.
+            if (!(await has('#add-box-open'))) await clickOn('#boxes');
+            await until(() => has('#add-box-open'), 5000);
+            await clickOn('#add-box-open');
+            await until(() => has('#box-name'), 5000);
+            await clickOn('#box-name');
+            await typeKeys(name);
+            await clickOn('#box-host');
+            await typeKeys('127.0.0.1');
+            await clickOn('#box-port');
+            await typeKeys(port);
+            await clickOn('#box-user');
+            await typeKeys('demo');
+            await clickOn('#add-submit');
+            await until(() => has('#check'), 20_000);
+            return ctx.boxes.list.find((b) => b.name === name)?.id ?? '';
+          };
+          // A box that has not been checked cannot be visited at all: the screen is not reachable by asking
+          // for it, which is the only way a taken-over window could try.
+          const idA = await add('first-visit-box');
+          const droppedBefore = ctx.dropped();
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'firstVisit', box: ${JSON.stringify(idA)} })`);
+          await sleep(400);
+          check('a box that has not been checked cannot be visited: the screen does not open', !(await has('#first-visit')) && ctx.shellState().firstVisit === null && visits.length === 0, [await has('#first-visit'), visits.length]);
+          // The way in is the check, after a match, with the identity pinned first.
+          await clickOn('#check-paste');
+          await selectAll();
+          await typeKeys(printed.trim());
+          await until(() => has('#check-visit'), 10_000);
+          await clickOn('#check-visit');
+          const opened = await until(() => has('#first-visit'), 15_000);
+          const pinnedFirst = ctx.boxes.list.find((b) => b.id === idA)?.pin !== '';
+          await shot('first-visit', 'the one screen that ever asks for a box\'s own password, after the box is pinned', null);
+          check('the first visit opens only from the check, and only with the box already pinned', opened && pinnedFirst && ctx.shellState().firstVisit?.box === idA, [opened, pinnedFirst]);
+          // What is typed goes to main and nowhere else: it is not in the window's state, which is what a
+          // picture of this screen holds and what every view is told.
+          await clickOn('#first-visit-password');
+          await typeKeys('a-password-for-the-box');
+          const stateHolds = JSON.stringify(ctx.shellState());
+          check('the password is not in the window\'s state, before it is sent or after', !stateHolds.includes('a-password-for-the-box'), stateHolds.length);
+          // Sent: main hands the visit the box it pinned, that box's user, and the one block with that box's
+          // own key in it. Nothing of this is a view's to choose.
+          const theBox = ctx.boxes.list.find((b) => b.id === idA)!;
+          await lab.tell(`accept ${theBox.publicKey}`);
+          await clickOn('#first-visit-go');
+          const went = await until(() => visits.length === 1, 15_000);
+          const v = visits[0];
+          check('main hands the visit the pinned box, its user, and the one block with that box\'s own key', went && v?.password === 'a-password-for-the-box' && v?.hostKey === theBox.pin && v?.user === 'demo' && v?.command.includes(theBox.publicKey) && v?.command.includes('authorized_keys'), [went, v?.user, v?.hostKey === theBox.pin, v?.command.slice(0, 40)]);
+          // It says it worked only if the key really works: a tab is opened and signed in to with the key
+          // alone, and only then does the screen say so.
+          const said = await until(async () => (await has('#first-visit-done')), 30_000);
+          const reallyIn = [...ctx.tabs.values()].some((t) => t.box?.id === idA && t.engine.link.phase === 'up');
+          check('it says it worked only after signing back in with the key alone, and the tab is really up', said && reallyIn, [said, reallyIn]);
+          await clickOn('#first-visit-close');
+          // Once, whatever happens: a second visit to the same box is refused.
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'firstVisit', box: ${JSON.stringify(idA)} })`);
+          await sleep(400);
+          check('a box is visited once: asking again does nothing', !(await has('#first-visit')) && visits.length === 1 && (await text('#status')).includes('already been visited'), [await has('#first-visit'), visits.length]);
+          for (const t of [...ctx.tabs.values()].filter((t) => t.box?.id === idA)) ctx.closeTab(t.id);
+
+          // And when the key does not work, it says so rather than claiming it worked. The lab says the visit
+          // went fine; the box is never told to accept this second box's key, so the sign-in that follows must
+          // fail and the screen must say that.
+          const idB = await add('second-visit-box');
+          await clickOn('#check-paste');
+          await selectAll();
+          await typeKeys(printed.trim());
+          await until(() => has('#check-visit'), 10_000);
+          await clickOn('#check-visit');
+          await until(() => has('#first-visit'), 15_000);
+          await clickOn('#first-visit-password');
+          await typeKeys('another-password');
+          await clickOn('#first-visit-go');
+          const failed = await until(() => has('#first-visit-failed'), 60_000);
+          const why = await text('#first-visit-failed');
+          check('a visit whose key does not work says so, and does not claim it worked', failed && !(await has('#first-visit-done')) && why.includes('signing in with it did not work'), [failed, why]);
+          await clickOn('#first-visit-close');
+          // A box the lab refuses is left behind as it is: the tabs it opened are closed and the box removed,
+          // so the rest of the suite sees the world it expects.
+          for (const t of [...ctx.tabs.values()].filter((t) => t.box?.id === idB)) ctx.closeTab(t.id);
+          ctx.watchFirstVisits(null);
+          for (const b of ctx.boxes.list.filter((x) => x.name === 'first-visit-box' || x.name === 'second-visit-box')) await ctx.boxes.remove(b.id);
+          await lab.tell(`accept ${ctx.boxes.list.find((b) => b.name === 'lab-box')?.publicKey ?? ''}`);
+          answer = { ok: true, said: '' };
         }
 
         // The Boxes menu: the box, its place beside it; a place opens a tab there.
