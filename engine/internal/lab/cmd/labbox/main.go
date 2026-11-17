@@ -19,6 +19,8 @@
 //	keyfile <path> [passphrase]     write a private key file where a person's own would be, in the format
 //	                                OpenSSH writes, and say its public half and fingerprint
 //	rekey                           become another box at the same address: a new identity, nothing else changed
+//	read <path>                     {"text":"..."}: what one of the box's own files holds
+//	forget <path>                   take one of the box's own files away
 //	nofiles <n>                     say no to the next n asks for the file subsystem, as a busy box does
 //	pretendsize <name> <bytes>      the box says that file is that big, whatever it really is
 //	oddnames <folder>               make files whose names a PC cannot hold as they are
@@ -255,6 +257,17 @@ func main() {
 				}
 			}
 			say(map[string]any{"made": made})
+		case "read":
+			// What one of the box's own files holds, so the self-test can see what a send really left there.
+			b, err := os.ReadFile(filepath.Join(files, filepath.FromSlash(rest)))
+			if err != nil {
+				say(map[string]any{"error": "no such file"})
+				continue
+			}
+			say(map[string]any{"text": string(b)})
+		case "forget":
+			// Take one of the box's own files away again, so a test can run twice.
+			say(map[string]any{"gone": os.Remove(filepath.Join(files, filepath.FromSlash(rest))) == nil})
 		case "nofiles":
 			n, err := strconv.Atoi(rest)
 			if err != nil || n < 0 {

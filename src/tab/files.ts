@@ -32,6 +32,23 @@ const DOWNLOAD_WHY: Record<string, string> = {
   failed: 'It could not be brought over',
 };
 
+// And for a file sent the other way. The same reasons where they are the same, and its own where they are not.
+const SEND_WHY: Record<string, string> = {
+  'not-a-name': 'That file cannot be given a name on the box',
+  'not-a-folder': 'That is not a folder on the box',
+  'in-the-way': 'Something is already there that Berth will not write through',
+  'already-there': 'A file of that name is already on the box',
+  'box-full': "There is not enough room on the box's disk",
+  'not-the-same': 'What arrived on the box is not what was sent, so it was not put in place',
+  denied: 'This account may not write there',
+  unsupported: 'This box has no file subsystem',
+  'no-answer': 'The box did not answer',
+  'no-link': 'There is no link to the box',
+  'not-now': 'The window is busy with another question',
+  'nothing-chosen': 'No file was chosen',
+  failed: 'It could not be sent',
+};
+
 // What a mark on a finished download means, in words.
 const MARK: Record<string, string> = {
   checked: 'checked against the box',
@@ -78,7 +95,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
   // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
   // more than one at a time, and the strip at the foot says what each is doing.
-  type Bringing = { name: string; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; ended: string };
+  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; ended: string };
   const bringing = new Map<number, Bringing>();
 
   const el = {
@@ -87,13 +104,26 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     foot: document.createElement('div'),
   };
   el.path.className = 'fb-path';
+  const here = document.createElement('div');
+  here.className = 'fb-here';
+  // Sending a file into the folder on screen. It sits beside the folder's own name, because that is what it
+  // acts on, and it says what it does with a glyph before a word (BUILD-RULES 2.1).
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'fb-send';
+  sendBtn.id = 'fb-send';
+  sendBtn.type = 'button';
+  sendBtn.title = 'Send a file from this PC into this folder';
+  sendBtn.setAttribute('aria-label', 'Send a file from this PC into this folder');
+  sendBtn.append(glyph('send'));
+  sendBtn.addEventListener('click', () => send());
   el.list.className = 'fb-list';
   el.list.id = 'fb-list';
   el.list.setAttribute('role', 'listbox');
   el.list.setAttribute('aria-label', 'Files on the box');
   el.foot.className = 'fb-foot';
   el.foot.id = 'fb-foot';
-  at.append(el.path, el.list, el.foot);
+  here.append(el.path, sendBtn);
+  at.append(here, el.list, el.foot);
 
   const ask = (a: FileAsk) => asker.ask(a);
 
@@ -146,12 +176,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (typeof p.mark === 'string') down.mark = p.mark;
       if (typeof p.markWhy === 'string') down.markWhy = p.markWhy;
       if (typeof p.renamed === 'string') down.renamed = p.renamed;
+      if (p.replaced === true) down.replaced = true;
       if (p.done) {
+        const words = down.way === 'in' ? DOWNLOAD_WHY : SEND_WHY;
         down.ended = p.error
-          ? (DOWNLOAD_WHY[p.error] ?? DOWNLOAD_WHY['failed']!)
-          : down.landed !== ''
-            ? `${down.landed} is in the download folder, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
-            : 'It was stopped';
+          ? (words[p.error] ?? words['failed']!)
+          : down.landed === ''
+            ? 'It was stopped'
+            : down.way === 'in'
+              ? `${down.landed} is in the download folder, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
+              : `${down.landed} is on the box${down.replaced ? ', over the file that was there' : ''}, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}`;
         down.at = performance.now();
       }
       draw();
@@ -251,7 +285,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         continue;
       }
       const left = b.rate > 1 && b.of > b.got ? `, ${howLong((b.of - b.got) / b.rate)} left` : '';
-      bits.push(`${shorten(b.name, 28)} ${size(b.got)} of ${size(b.of)}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}`);
+      const of = b.of > 0 ? ` of ${size(b.of)}` : '';
+      bits.push(`${b.way === 'out' ? 'Sending ' : ''}${shorten(b.landed === '' ? b.name : b.landed, 28)} ${size(b.got)}${of}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}`);
     }
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
@@ -372,7 +407,17 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (b.name === name && b.ended === '') return; // already on its way
     }
     const id = asker.ask({ do: 'get', path: join(where || asked, name) });
-    bringing.set(id, { name, got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', ended: '' });
+    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, ended: '' });
+    draw();
+  };
+
+  // Sending a file from the PC to this folder on the box. The view says the folder and nothing else: which
+  // file leaves this PC is answered in the system's own chooser, which only a person can answer (plan B2.7).
+  const send = (): void => {
+    const here = where || asked;
+    if (here === '' || busy) return;
+    const id = asker.ask({ do: 'put', path: here });
+    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, ended: '' });
     draw();
   };
 
@@ -475,6 +520,7 @@ export const SHAPES: Record<string, string> = {
   zoomOut: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5M5.2 7H8.8',
   close: 'M4.5 4.5l7 7M11.5 4.5l-7 7',
   bring: 'M8 2.5v7M5 6.5L8 9.5l3-3M3.5 12.5h9',
+  send: 'M8 9.5v-7M5 5.5L8 2.5l3 3M3.5 12.5h9',
 };
 
 export function glyph(kind: string): SVGSVGElement {

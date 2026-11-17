@@ -834,7 +834,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'cancel';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -842,6 +842,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   // file on its own box and nothing else. Where the file lands, and what it is called when it gets there, are
   // main's to decide (plan B2.7).
   if (what === 'get') return void bringOver(tab, id, where);
+  if (what === 'put') return void sendOver(tab, id, where);
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
 });
 
@@ -882,6 +883,36 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
     coming.delete(comingKey(tab.id, id));
     say('no-link');
   }
+}
+
+// ---- Uploads: what main decides (plan B4.3) ----
+// Which file on the PC goes to a box is never a view's to say. The view names the folder on its own box; the
+// file itself comes from the system's own chooser, which only a person can answer, and main hands the engine
+// the whole path. A view cannot open the chooser twice over, and a tab that has gone takes its ask with it.
+let choosing = false;
+// The lab cannot press a button in the system's own chooser, so the self-test answers it here instead. Nothing
+// but the self-test sets this, and it only exists where the self-test does.
+let labChoosesAFile: (() => string | undefined) | null = null;
+
+async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
+  const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
+  if (!win || !gate?.unlocked || choosing) return say('not-now');
+  choosing = true;
+  let from: string | undefined;
+  try {
+    if (labChoosesAFile) from = labChoosesAFile();
+    else {
+      const picked = await dialog.showOpenDialog(win, { title: `A file to send to ${tab.box?.name ?? 'the box'}`, buttonLabel: 'Send', properties: ['openFile', 'dontAddToRecent'] });
+      from = picked.canceled ? undefined : picked.filePaths[0];
+    }
+  } finally {
+    choosing = false;
+  }
+  if (from === undefined) return say('nothing-chosen');
+  if (tabs.get(tab.id) !== tab) return;
+  // The name it will have on the box is the name it has here, and nothing of the path it came from.
+  const name = path.basename(from);
+  if (!tab.engine.askFiles({ id, do: 'put', path: folder, name, from })) say('no-link');
 }
 
 // How much room the disk has left for one more file. The file being replaced, if there is one, is still there
@@ -1268,7 +1299,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), chooseKeyFile, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), chooseKeyFile, chooseToSend: (answer: (() => string | undefined) | null) => void (labChoosesAFile = answer), keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');
