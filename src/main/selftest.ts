@@ -54,6 +54,7 @@ interface Ctx {
   windowInUse(): boolean;
   downloads: string;
   filesAsked(): Record<string, number>;
+  faults(): Promise<{ written: number; lost: number; waiting: number; lately: { id: string; what: string }[]; file: string }>;
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
@@ -1983,6 +1984,27 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const sawGone = await until(async () => (await text('#bar', open1)).includes('The link is gone'), 20_000);
         const goneSaid = await text('#bar', open1);
         check('a link that is gone: the bar says the cause, the time, and when a new session opens', sawGone && goneSaid.includes('the connection was reset at') && /A new session opens in \d+ s/.test(goneSaid) && goneSaid.includes('Cancel'), goneSaid);
+        // The local log (step 2b's ninth finding): the failure is written down with an id, the bar says that
+        // id, and the line in the file is the same failure. A fault he can name is a fault he can look up.
+        {
+          const said = /Fault ([A-HJ-NP-Z2-9]{6})\./.exec(goneSaid);
+          const log = await ctx.faults();
+          const text = await readFile(log.file, 'utf8').catch(() => '');
+          const line = said ? (text.split('\n').find((l) => l.includes(said[1]!)) ?? '') : '';
+          check(
+            'a link that failed is written in the local log with an id, the bar says that id, and the line says which tab and which box',
+            !!said && line !== '' && line.includes(' link ') && line.includes(`tab=${open1.id}`) && line.includes('reset') && log.lost === 0,
+            [goneSaid.slice(-120), line, log.written, log.lost],
+          );
+          // And the log says which box only by its id: the file is plain text beside the encrypted list, so
+          // a name, an address or a user in it would be the one thing in that folder that is in the clear.
+          const box = open1.box?.id ?? '';
+          check(
+            'the log names a box by its id alone, never by its name, address or user',
+            box !== '' && line.includes(`box=${box}`) && !text.includes('lab-box') && !text.includes('127.0.0.1') && !text.includes('/srv/ledger'),
+            [box, line],
+          );
+        }
         await shot('tab-gone', 'the link gone: a new session is coming', open1);
         await clickOn('#cancel', open1);
         check('Cancel stops it: no new session opens, and the tab keeps everything it drew', (await until(async () => !(await text('#bar', open1)).includes('A new session opens'), 3000)) && open1.engine.pid === engineBefore && (await shown(open1)).includes(marker), [await text('#bar', open1), open1.engine.pid === engineBefore]);
@@ -3082,10 +3104,40 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // With the app closed the PC holds one locked file: no box's name is readable in anything the app wrote.
       const named = [...(await filesHolding('lab-box')), ...(await filesHolding('second-box')), ...(await filesHolding('/var/log/it'))];
       check('no file the app wrote names a box or a place in the clear', named.length === 0, named);
+
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
     check(`no message was dropped, but the ones refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
+    // The local log, over the whole run: every failure in it is one the app wrote itself, a view's flood
+    // cannot become the log, and nothing it holds was lost.
+    {
+      const log = await ctx.faults();
+      const text = await readFile(log.file, 'utf8').catch(() => '');
+      const lines = text.split('\n').filter((l) => l.trim() !== '');
+      // The flood is made here rather than hoped for: sixty asks a view may not make, in one go, so the cap
+      // is proved in every mode of the run and not only in the long one.
+      const droppedBefore = ctx.dropped();
+      await js(ctx.shell, `for (let i = 0; i < 60; i++) window.shellPort.cmd({ op: 'nothing-of-the-sort' })`);
+      await until(async () => ctx.dropped() >= droppedBefore + 60, 5000);
+      const log2 = await ctx.faults();
+      const text2 = await readFile(log2.file, 'utf8').catch(() => '');
+      const drops = text2.split('\n').filter((l) => l.includes(' dropped ')).length;
+      const ids = new Set(lines.map((l) => l.split(' ')[1]));
+      const shaped = lines.every((l) => /^\d{4}-\d{2}-\d{2}T[\d:.]+Z [A-HJ-NP-Z2-9]{6} \S+ /.test(l));
+      check(
+        'every line of the log is one line, shaped the same, with an id of its own',
+        lines.length > 0 && shaped && ids.size === lines.length && log.lost === 0,
+        [lines.length, ids.size, shaped, log.lost, lines.at(-1)],
+      );
+      check(
+        'a view that floods main with asks it may not make cannot flood the log: the first few are written, the rest counted',
+        ctx.dropped() >= droppedBefore + 60 && drops > 0 && drops <= 20,
+        [ctx.dropped() - droppedBefore, drops, log2.lost],
+      );
+      const big = await stat(log.file).catch(() => null);
+      check('the log cannot fill a disk: it is inside its own size', !!big && big.size <= 1024 * 1024, big?.size ?? -1);
+    }
   } catch (err) {
     check('no probe threw', false, err instanceof Error ? (err.stack ?? err.message) : String(err));
   }

@@ -63,7 +63,11 @@ export function bar(info: TabInfo, now: number, endedAt: number, againIn: number
     const e = ending(l.cause);
     const at = endedAt > 0 ? ` at ${clock(endedAt)}` : '';
     const again = againIn > 0 ? ` A new session opens in ${Math.max(1, Math.round((againIn - now) / 1000))} s${info.box.folder ? `, in ${info.box.folder}` : ''}.` : '';
-    return { kind: 'gone', said: 'The link is gone:', rest: `${e.said}${at}. ${e.meant}${again}`.replace(/\s+/g, ' ').trim(), aside: '' };
+    // The id of the line the app wrote in its own log, said here because this is where he reads that the
+    // link went: a failure he can name is a failure that can be looked up, which is the whole point of the
+    // log having ids at all.
+    const fault = l.fault === '' ? '' : ` Fault ${l.fault}.`;
+    return { kind: 'gone', said: 'The link is gone:', rest: `${e.said}${at}. ${e.meant}${again}${fault}`.replace(/\s+/g, ' ').trim(), aside: '' };
   }
   return { kind: 'none', said: '', rest: '', aside: '' };
 }
