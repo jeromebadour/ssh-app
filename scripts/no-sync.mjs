@@ -1,13 +1,15 @@
 // Fails if the app's own code calls anything that blocks: a synchronous file, process or message call,
 // or a blocking browser dialog. One blocked call in main freezes every tab at once.
-// Two files are allowed named calls, each once, and nothing else anywhere:
+// Three files are allowed named calls, each once, and nothing else anywhere:
 //   - src/main/lab-proof.ts, which answers "is this a lab package?" before the app has started anything (its own
 //     header says why);
 //   - src/tab/term.ts, one replaceSync: a stylesheet's rules set from text already in memory, the work a <style>
 //     element does when its text is set. It waits on no file, process or network;
-//   - src/main/main.ts, one statSync and one appendFileSync, in the fault handler alone: a fault may be the
-//     last thing this process does, and a fault nobody can read is the thing this app must never do. Nothing
-//     is waiting on the window at that moment, because the window is already in a state nobody designed.
+//   - src/main/faultlog.ts, one statSync, one renameSync and one appendFileSync, in sayNow alone, which main
+//     calls for an uncaught fault and for nothing else: that fault may be the last thing the process does,
+//     and a queued line would go with the process that queued it. A fault nobody can read is the thing this
+//     app must never do. Nothing is waiting on the window at that moment, because the window is already in a
+//     state nobody designed. Every other line of that file is written without blocking.
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -26,7 +28,7 @@ async function* files(dir) {
   }
 }
 
-const allowed = { 'main/lab-proof.ts': ['statSync', 'readFileSync'], 'tab/term.ts': ['replaceSync'], 'main/main.ts': ['statSync', 'appendFileSync'] };
+const allowed = { 'main/lab-proof.ts': ['statSync', 'readFileSync'], 'tab/term.ts': ['replaceSync'], 'main/faultlog.ts': ['statSync', 'renameSync', 'appendFileSync'] };
 const usedAllowance = new Set();
 
 let bad = 0;

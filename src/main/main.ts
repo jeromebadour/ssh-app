@@ -2,7 +2,7 @@
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
-import { constants as fsConstants, appendFileSync, statSync } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { access, mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import { freeName, safeName } from '../common/landing';
 import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
+import { FaultLog } from './faultlog';
 import { Boxes, fingerprintOf } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
@@ -58,25 +59,31 @@ const ENGINE_HASHES = path.join(DIST, 'engine-hashes.json');
 let SELFTEST = ''; // the self-test to run, or '' for none; decided once it is known what kind of build this is
 
 // A fault in main must never open a blocking error box (Electron's default) and must never pass unseen.
-// A packaged app has no console, so stderr alone would be nowhere: each fault is also written to a file
-// beside the list, with the moment it happened. The local log with an id per failure replaces this file.
-const FAULT_FILE = 'faults.txt';
-const FAULT_MAX = 256 * 1024;
+// A packaged app has no console, so stderr alone would be nowhere: every failure goes to the local log
+// beside the list, each with a short id, and the window says that id wherever it says the failure
+// (src/main/faultlog.ts, step 2b's ninth finding).
+let theLog: FaultLog | null = null;
+const faultLog = (): FaultLog => (theLog ??= new FaultLog({ folder: app.getPath('userData') }));
 let faultsWritten = 0;
 function faultHappened(what: string, detail: string): void {
-  process.stderr.write(`MAINFAULT ${what} ${detail}\n`);
   faultsWritten++;
-  try {
-    // Appending is the one blocking call here on purpose: a fault may be the last thing this process does,
-    // and a written fault is worth more than the microseconds. It is capped so it can never fill a disk.
-    const file = path.join(app.getPath('userData'), FAULT_FILE);
-    const already = statSync(file, { throwIfNoEntry: false });
-    if (!already || already.size < FAULT_MAX) appendFileSync(file, `${new Date().toISOString()} ${what} ${detail}\n`);
-  } catch {
-    // Nowhere to write it: stderr above is what there is, and the count is told to the self-test.
-  }
+  // This one is written with a blocking call on purpose, and it is the only one: an uncaught fault may be
+  // the last thing this process does, and a queued line would go with the process that queued it.
+  const id = faultLog().sayNow({ what, detail });
+  process.stderr.write(`MAINFAULT ${id} ${what} ${detail}\n`);
   if (SELFTEST) app.exit(70);
 }
+
+// Which one-word reasons get an id of their own. A reason a person can act on is an answer, not a fault: a
+// name already taken or a file that is not there needs no number to look up. What gets an id is what leaves
+// nothing to act on, which is exactly what he would come back to ask about.
+const WORTH_AN_ID = new Set(['failed', 'no-answer', 'no-link', 'protocol', 'pc-denied', 'pc-full', 'box-full', 'unsupported']);
+// Causes of a link ending that are not failures: he closed it, or the shell he was in ended.
+const ENDED_NORMALLY = new Set(['cancelled', 'shell-exited']);
+// How many dropped messages are written down before they are counted only. A view that has been taken over
+// can send thousands; the first few say what is happening, and a line each would be the flood itself.
+const DROPS_LOGGED = 20;
+let dropsLogged = 0;
 process.on('uncaughtException', (err) => faultHappened('fault', err.stack ?? String(err)));
 process.on('unhandledRejection', (reason) => faultHappened('rejection', reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)));
 
@@ -227,6 +234,13 @@ function drop(on: string, e?: IpcMainEvent): void {
   }
   droppedMessages++;
   droppedOn.set(on, (droppedOn.get(on) ?? 0) + 1);
+  // A dropped message is a view asking for something it may not have, which is the one thing in this app
+  // that is both ordinary and worth a record. The first few are written down with which channel they came
+  // on; after that they are counted only, so a flood cannot become the log.
+  if (dropsLogged < DROPS_LOGGED) {
+    dropsLogged++;
+    faultLog().say({ what: 'dropped', detail: `a view asked on ${on} and was refused` });
+  }
 }
 const meter = new Meter();
 const pace = new Pace(os.availableParallelism());
@@ -263,7 +277,34 @@ function info(t: Tab): TabInfo {
   // The box as it stands now: a box that was edited while its tabs are open says its new name on them.
   const box = t.box ? (boxes?.get(t.box.id) ?? t.box) : null;
   const place = box?.places.find((p) => p.name === t.place);
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: t.engine.link };
+  // The id of the log line for the failure that ended this link, if one ended it, is main's to add: the
+  // engine knows the cause, main is what wrote it down, and the window needs the id to say it.
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link };
+}
+
+// Per tab: the id of the log line for the failure that ended its link. One line per ending, not one per
+// time the window is told about it, and it goes when the tab opens again.
+const endFaults = new Map<number, string>();
+// A link that ended badly is written down once, here, where every change to a link passes.
+function linkEnded(t: Tab): void {
+  const link = t.engine.link;
+  if (link.phase !== 'ended' || link.cause === '' || ENDED_NORMALLY.has(link.cause)) {
+    if (link.phase !== 'ended') endFaults.delete(t.id);
+    return;
+  }
+  if (endFaults.has(t.id)) return;
+  endFaults.set(
+    t.id,
+    faultLog().say({
+      what: 'link',
+      // The cause and the phase are the app's own words, from its own lists. What the SSH library wrote is
+      // not: its text carries the addresses of both ends, and this file must name no box (the window still
+      // shows that text, escaped, where a person is looking at the tab).
+      detail: `ended in ${link.endedIn || 'an unknown phase'}: ${link.cause}`,
+      tab: t.id,
+      ...(t.box ? { box: t.box.id } : {}),
+    }),
+  );
 }
 
 function boxView(b: Box): BoxView {
@@ -590,11 +631,13 @@ function openTab(boxId = '', place = ''): Tab | null {
     },
     state: () => {
       maybeAgain();
+      linkEnded(tab);
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     link: () => {
       maybeAgain();
+      linkEnded(tab);
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
@@ -673,6 +716,21 @@ function openTab(boxId = '', place = ''): Tab | null {
           }
         }
         page = { ...page, into: mine.into, ...(mine.why === '' ? {} : { renamed: mine.why }) };
+      }
+      // A failure that leaves nothing to act on is written down and carries its id to the window, so what he
+      // reads on the row and what the log holds are the same failure. A refusal he can act on is an answer,
+      // not a fault, and gets no number (WORTH_AN_ID says which is which).
+      const stopped = page['error'];
+      if (typeof stopped === 'string' && WORTH_AN_ID.has(stopped)) {
+        page = {
+          ...page,
+          fault: faultLog().say({
+            what: 'files',
+            detail: `ask ${ask} stopped: ${stopped}`,
+            tab: id,
+            ...(tab.box ? { box: tab.box.id } : {}),
+          }),
+        };
       }
       sendTo(view, CH.tabFilePage, page);
     },
@@ -1915,7 +1973,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

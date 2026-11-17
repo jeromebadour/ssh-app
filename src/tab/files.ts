@@ -528,8 +528,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (p.done) {
         down.asking = '';
         const words = down.way === 'in' ? DOWNLOAD_WHY : SEND_WHY;
+        // A failure the app wrote down carries the id of its line, and the row says it: he can read a fault
+        // out of the pane and find that one failure in the log without going looking for it.
+        const named = p.fault === undefined || p.fault === '' ? '' : ` (fault ${p.fault})`;
         down.ended = p.error
-          ? (words[p.error] ?? words['failed']!)
+          ? `${words[p.error] ?? words['failed']!}${named}`
           : down.landed === ''
             ? 'It was stopped'
             : down.way === 'in'
@@ -547,7 +550,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       rows = rows.concat(p.rows);
       sort(rows);
     }
-    if (p.error) why = WHY[p.error] ?? WHY['failed']!;
+    if (p.error) why = `${WHY[p.error] ?? WHY['failed']!}${p.fault === undefined || p.fault === '' ? '' : ` (fault ${p.fault})`}`;
     if (p.done) {
       busy = false;
       // Whatever was just renamed or just made is what the list stands on, if it is in this listing at all.

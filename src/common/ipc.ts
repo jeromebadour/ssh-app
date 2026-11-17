@@ -93,8 +93,9 @@ export interface LinkInfo {
   waitingOnWindow: boolean; // the box is made to wait for this window
   exitStatus: number; // the shell's exit status, -1 while unknown
   droppedBytes: number; // typed bytes the engine could not keep for the box (it was silent too long): never hidden
+  fault: string; // the id of the line in the local log for the failure that ended it, or empty: main's own
 }
-export const NO_LINK: LinkInfo = { phase: 'none', cause: '', endedIn: '', detail: '', what: '', ours: [], theirs: [], shownFingerprint: '', keyExchange: '', cipher: '', postQuantum: false, silentSinceMs: 0, rttMs: -1, waitingOnWindow: false, exitStatus: -1, droppedBytes: 0 };
+export const NO_LINK: LinkInfo = { phase: 'none', cause: '', endedIn: '', detail: '', what: '', ours: [], theirs: [], shownFingerprint: '', keyExchange: '', cipher: '', postQuantum: false, silentSinceMs: 0, rttMs: -1, waitingOnWindow: false, exitStatus: -1, droppedBytes: 0, fault: '' };
 
 // Which box a tab is on, for its label. Null for the skeleton's tab with no box (the self-test's).
 export interface TabBox {
@@ -392,6 +393,7 @@ export interface FilePage {
   rows?: FileRow[];
   done?: boolean;
   error?: string; // one word for why it stopped: no-such-file, denied, too-many, unsupported, no-answer, failed
+  fault?: string; // the id of the line in the local log, for a failure that leaves nothing to act on: main's own
   where?: string; // a listing: the folder as the box itself names it
   space?: { total: number; free: number };
   attrs?: FileRow;
