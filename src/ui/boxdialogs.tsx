@@ -126,7 +126,7 @@ export function AddBoxDialog(props: AddBoxProps) {
       props.onAdd(d);
       return;
     }
-    // Refused. Pressing Add and having nothing happen is what cost Kami his host field on the first install
+    // Refused. Pressing Add and having nothing happen is what cost the owner his host field on the first install
     // (2026-11-17): the fields did mark themselves, but nothing moved, so there was no telling the press had
     // landed, and a dialog in two columns is a lot of places to go looking. The cursor goes into the first
     // field that needs attention, which both answers the press and says where to look (BUILD-RULES 2.18).
@@ -349,7 +349,7 @@ function RunStep(props: { c: CheckShown; act: CheckActions }) {
 }
 
 // Copy, which says it copied. The footer line main writes says so too, but the footer is behind this dialog
-// and its dim, so from here the press looked like nothing at all (Kami, 2026-11-17: "Copy you click it and
+// and its dim, so from here the press looked like nothing at all (the owner, 2026-11-17: "Copy you click it and
 // nothing happens which copies silently"). The button answers on its own, where the eye already is, and goes
 // back to Copy after a moment so it can be pressed again (BUILD-RULES 2.6 and 2.18).
 const COPIED_FOR_MS = 1600;

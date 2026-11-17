@@ -411,7 +411,7 @@ func usableUser(s string) bool {
 
 // TakeKey brings in a key the person already has, from a file (plan O1). It exists so that adding a box needs
 // nothing but Berth: his boxes already hold his public key, so the private half is the way in, and without this
-// the first key has to reach a box through some other program (Kami, 2026-11-17: "Berth shouldn't rely on any
+// the first key has to reach a box through some other program (the owner, 2026-11-17: "Berth shouldn't rely on any
 // other app to add a box").
 //
 // What arrives is the file's bytes and, if it has one, its passphrase. Neither is kept: the file is parsed, the

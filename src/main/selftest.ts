@@ -272,7 +272,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // themselves. Without them this screen could not be put away or moved with the mouse at all.
       check('the screens before the lock carry the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
       // And the same status line the window has. These screens had none at all, so the app's one place for
-      // saying where things stand vanished on them (Kami, 2026-11-17: "no real thin footer everywhere").
+      // saying where things stand vanished on them (the owner, 2026-11-17: "no real thin footer everywhere").
       check('the screens before the lock carry the status line too', (await has('#gate-status')) && (await text('#gate-status')).includes('Berth') && (await text('#gate-status-where')) === 'First start', await text('#gate-status'));
       await lockHolds('before any password');
       // Pressing with nothing typed: it must say what is in the way and put the cursor where it is. Before, the
@@ -546,7 +546,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('#add-submit');
         check('Add with nothing typed: the first field to fix is named, with how many there are', (await text('#add-to-fix')).includes('Name: needed') && (await text('#add-to-fix')).includes('3 fields to fix') && (await text('#box-name-check')) === 'needed' && ctx.boxes.list.length === 0, await text('#add-to-fix'));
         // A press that is refused must move something, or there is no telling it landed at all. The cursor goes
-        // into the first field that needs attention: this is what cost Kami his host field on the first install.
+        // into the first field that needs attention: this is what cost the owner his host field on the first install.
         check('and the cursor is put in the first field to fix, not left where it was', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'box-name', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
         // The same with only one field left: the one named is the one still wrong, and the cursor goes to it.
         await clickOn('#box-name');
@@ -726,7 +726,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('Boxes opens the menu, above the tabs', (await until(() => has('#box-menu'), 2000)) && (await until(shellOnTop, 1000)) && (await text('#box-menu')).includes('lab-box'), '');
         // Nothing a person is pointing at may move under them. Edit and Delete appear on the row when it is
         // hovered, and their room has to be there before that: taken out of the row and put back, they made the
-        // row grow and pushed the box's name into wrapping (Kami, 2026-11-17).
+        // row grow and pushed the box's name into wrapping (the owner, 2026-11-17).
         const rowBox = () => js<{ h: number; nameW: number; rowW: number }>(ctx.shell, `(() => { const r = document.querySelector('[data-box="lab-box"]'); const n = r.querySelector('.bm-name'); return { h: Math.round(r.getBoundingClientRect().height), nameW: Math.round(n.getBoundingClientRect().width), rowW: Math.round(r.getBoundingClientRect().width) }; })()`);
         const before = await rowBox();
         await moveTo('[data-box="lab-box"]');

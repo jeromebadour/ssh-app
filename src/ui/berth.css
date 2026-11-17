@@ -587,7 +587,7 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 /* Edit and Delete, on each box's own row in the Boxes menu, and the question Delete asks. */
 /* Edit and Delete appear when the row is hovered or has the keyboard in it, and their room is always there.
    They used to be taken out of the row entirely and put back on hover, so arriving on a row made it grow and
-   pushed the box's name into wrapping (Kami, 2026-11-17). Nothing a person is pointing at may move under them.
+   pushed the box's name into wrapping (the owner, 2026-11-17). Nothing a person is pointing at may move under them.
    They keep their place in the keyboard's order while invisible, so Tab still reaches them, and take no clicks
    until they can be seen, so the row itself cannot be edited by a press meant for the row. */
 .bm-acts { display: flex; gap: 2px; margin-left: 8px; opacity: 0; pointer-events: none; }

@@ -48,7 +48,7 @@ function TypingLine(props: { caps: boolean; letters: string }) {
 }
 
 // The same status line the window has, on the screens shown before the lock opens. Those screens had none, so
-// the app's one place for saying where things stand simply vanished on three of its screens (Kami, 2026-11-17:
+// the app's one place for saying where things stand simply vanished on three of its screens (the owner, 2026-11-17:
 // "no real thin footer everywhere"). It says only what is true here: the app's name, and where the lock stands.
 export function GateFoot(props: { gate: GateState }) {
   const g = props.gate;
