@@ -3,7 +3,9 @@ package link
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -420,6 +422,64 @@ func TestOpenSSH(t *testing.T) {
 				// And the terminal on the same link is untouched by all of it.
 				if got := run(t, l, "echo still here", 10*time.Second); got != "still here\n" {
 					t.Fatalf("after the file work the shell said %q", got)
+				}
+				run(t, l, "rm -rf "+dir+" && echo cleaned", 10*time.Second)
+			})
+
+			// The one thing this app runs on a box for a transfer (plan B2.5, entry 3): a file's hash, on a
+			// channel of its own, never in the terminal.
+			t.Run("a file's hash, asked of a real box, matches what it really is", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				dir := "/tmp/berth-hash-" + box.name
+				body := "the bytes whose hash this test knows\n"
+				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && printf %s '"+body+"' > "+dir+"/plain.txt && echo done", 15*time.Second)
+				// And a name holding the things a shell would act on, to prove the quoting on a real shell.
+				odd := dir + "/it's $(id) `id` \"x\" ;rm -rf / *.txt"
+				run(t, l, "cp "+dir+"/plain.txt '"+strings.ReplaceAll(odd, "'", `'\''`)+"' && echo done", 15*time.Second)
+
+				want := sha256.Sum256([]byte(body))
+				wantHex := hex.EncodeToString(want[:])
+
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				got, err := l.Hash(ctx, SHA256, dir+"/plain.txt")
+				if err != nil {
+					t.Fatalf("the box did not give a hash: %v", err)
+				}
+				if got != wantHex {
+					t.Fatalf("the box said %s, the bytes are %s", got, wantHex)
+				}
+
+				// The same file under a name full of things a shell acts on: the same hash, and nothing ran.
+				oddHash, err := l.Hash(ctx, SHA256, odd)
+				if err != nil {
+					t.Fatalf("a name a shell would act on was not handled: %v", err)
+				}
+				if oddHash != wantHex {
+					t.Fatalf("under an awkward name the box said %s, not %s", oddHash, wantHex)
+				}
+				if left := run(t, l, "ls "+dir+" | wc -l", 10*time.Second); strings.TrimSpace(left) != "2" {
+					t.Fatalf("the folder holds %s things: something in a name was acted on", strings.TrimSpace(left))
+				}
+
+				// md5 as well, which is the one Kami asks for by hand.
+				md5Got, err := l.Hash(ctx, MD5, dir+"/plain.txt")
+				if err != nil || len(md5Got) != 32 {
+					t.Fatalf("md5 gave %q, %v", md5Got, err)
+				}
+
+				// A file that is not there is a refusal, not a hash of nothing.
+				if _, err := l.Hash(ctx, SHA256, dir+"/not-here"); err == nil {
+					t.Fatal("a file that is not there gave a hash")
+				}
+
+				// None of it touched the terminal: the shell on this link still answers.
+				if got := run(t, l, "echo still here", 10*time.Second); got != "still here\n" {
+					t.Fatalf("after the hashes the shell said %q", got)
 				}
 				run(t, l, "rm -rf "+dir+" && echo cleaned", 10*time.Second)
 			})
