@@ -61,6 +61,7 @@ type real struct {
 	inputLen int
 	dropped  int
 	gone     bool
+	files    *files // the tab's files, on a channel of their own; made once the link is up
 }
 
 type signReply struct {
@@ -231,10 +232,22 @@ func runReal(o *out, frames <-chan frame.Frame, box boxAim, sh shellAim) int {
 	}
 	r.mu.Lock()
 	r.shell = shell
+	// The tab's files ride the same link on a channel of their own. The channel itself is not opened until
+	// something is actually asked for: a tab whose files are never looked at costs the box nothing.
+	r.files = newFiles(r.o, l)
 	if r.size != [2]int{cols, rows} { // a resize arrived while the shell was opening
 		_ = shell.Resize(r.size[0], r.size[1])
 	}
 	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		f := r.files
+		r.files = nil
+		r.mu.Unlock()
+		if f != nil {
+			f.close()
+		}
+	}()
 	r.changed.Broadcast()
 
 	go r.typeInto(shell)
@@ -307,6 +320,22 @@ func (r *real) fromMain(frames <-chan frame.Frame, parentGone func()) {
 			r.acked = n
 			r.mu.Unlock()
 			r.changed.Broadcast()
+		case frame.TypeFileAsk:
+			var a fileAsk
+			if json.Unmarshal(f.Body, &a) != nil || a.ID == 0 || a.Do == "" {
+				r.o.fatal(exitBadFrame, "a file request that cannot be read")
+			}
+			r.mu.Lock()
+			fl := r.files
+			r.mu.Unlock()
+			if fl == nil {
+				// Asked before there is a link, or after it has gone: said as finished with a reason, never
+				// left for the window to wait on for ever.
+				body, _ := json.Marshal(filePage{ID: a.ID, Done: true, Error: "no-link"})
+				r.o.send(frame.TypeFilePage, body)
+				break
+			}
+			fl.ask(a)
 		case frame.TypeSignReply:
 			var rep signReply
 			if json.Unmarshal(f.Body, &rep) != nil {

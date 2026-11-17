@@ -34,6 +34,12 @@ const port: TabPort = {
   onBanner(cb) {
     ipcRenderer.on(CH.tabBanner, (_e, bytes: Uint8Array) => cb(bytes));
   },
+  files(ask) {
+    ipcRenderer.send(CH.tabFileAsk, ask);
+  },
+  onFilePage(cb) {
+    ipcRenderer.on(CH.tabFilePage, (_e, page) => cb(page));
+  },
   resize(cols, rows) {
     ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
   },

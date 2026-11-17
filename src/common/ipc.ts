@@ -20,6 +20,10 @@ export const CH = {
   tabTaken: 'tab:taken', // tab view to main: output bytes taken in all (a number)
   tabResize: 'tab:resize', // tab view to main: the terminal's size in cells (two numbers)
   tabCopy: 'tab:copy', // tab view to main: text selected in the terminal, for the clipboard (plain text, size-limited)
+  // The tab's own file browser, on the box's files. Its asks and the pages that answer them: a listing arrives
+  // a page at a time, so a folder of thousands of files is drawn as it is read.
+  tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
+  tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -262,6 +266,8 @@ export interface TabPort {
   pasteMode(protectedPaste: boolean): void; // its box asked for protected paste, or stopped asking
   reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
+  files(ask: FileAsk): void; // ask the box's files for something
+  onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   resize(cols: number, rows: number): void;
   copy(text: string): void;
   link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
@@ -285,4 +291,32 @@ export interface ShellPort {
   gateForgetRestore(): void;
   meter(n: ViewNumbers): void;
   frame(): void;
+}
+
+
+// What a tab may ask of its box's files, and what comes back. Every ask carries its own number, and every page
+// says which ask it belongs to: a person moving quickly through folders leaves earlier listings still
+// arriving, and the window keeps the newest and drops the rest.
+export interface FileAsk {
+  id: number;
+  do: 'list' | 'stat' | 'space' | 'cancel';
+  path: string;
+}
+
+export interface FileRow {
+  name: string;
+  kind: 'file' | 'folder' | 'link' | 'pipe' | 'device' | 'socket' | 'unknown';
+  size: number;
+  mode: number;
+  mtime: number;
+}
+
+export interface FilePage {
+  id: number;
+  rows?: FileRow[];
+  done?: boolean;
+  error?: string; // one word for why it stopped: no-such-file, denied, too-many, unsupported, no-answer, failed
+  where?: string; // a listing: the folder as the box itself names it
+  space?: { total: number; free: number };
+  attrs?: FileRow;
 }

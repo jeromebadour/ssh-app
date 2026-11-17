@@ -450,3 +450,41 @@ func TestAWriteLargerThanOneBlockIsRefused(t *testing.T) {
 		t.Fatalf("an oversized write gave %v, not ErrTooLong", err)
 	}
 }
+
+// A request given up on is still ours: the answer that arrives later is dropped, and the link goes on. A
+// person moving quickly through folders leaves these behind constantly, and ending the link for one would
+// break the file browser exactly when it is being used hardest.
+func TestAnAnswerToSomethingGivenUpOnDoesNotEndTheLink(t *testing.T) {
+	answer := make(chan struct{})
+	c := dial(t, func(kind byte, id uint32, r *reader) (byte, []byte) {
+		if kind == fxpRealpath {
+			// Answer only once released, which is after the caller has given up.
+			<-answer
+			var w writer
+			w.u32(1)
+			w.string("/somewhere")
+			w.string("/somewhere")
+			w.u32(0)
+			return fxpName, w.b
+		}
+		return fxpStatus, status(fxOK, "")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := c.Realpath(ctx, "."); !errors.Is(err, context.Canceled) {
+		t.Fatalf("giving up gave %v", err)
+	}
+	close(answer) // the box answers the request that was given up on
+	time.Sleep(100 * time.Millisecond)
+
+	// The link is still usable: the next thing asked is answered.
+	done, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if _, err := c.Stat(done, "/x"); err != nil {
+		t.Fatalf("after a late answer to a request given up on, the link gave %v", err)
+	}
+}

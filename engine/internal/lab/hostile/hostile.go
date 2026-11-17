@@ -27,6 +27,9 @@ type Config struct {
 	// Sessions makes it take terminal sessions, the way a box does, and remember exactly what it was asked
 	// (Box.Sessions). Its "shell" sends back every byte it is given; the bytes "exit\n" end it with status 7.
 	Sessions bool
+	// FilesUnder makes it answer the file protocol on a "subsystem" request for sftp, backed by this real
+	// folder. Empty means it has no file subsystem at all, which is a thing a real box can be too.
+	FilesUnder string
 	// OnUp runs once a client is signed in, with the connection: the place to try things against the client.
 	OnUp func(conn *ssh.ServerConn)
 	// Listen is where it listens; empty is a free local port.
@@ -49,6 +52,7 @@ type Box struct {
 	quiet  bool          // Quiet: the shells send nothing back by themselves
 	stall  bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
 	got    []byte        // every byte the shells were given since the last Received
+	files  string        // the folder its file subsystem answers under; empty means it has none
 	flood  atomic.Int64  // Flood: bytes the sessions took, in all
 }
 
@@ -259,6 +263,12 @@ func (b *Box) session(nc ssh.NewChannel) {
 					ok, running = true, true
 					close(started)
 				}
+			case "subsystem":
+				var p struct{ Name string }
+				if ssh.Unmarshal(r.Payload, &p) == nil && p.Name == "sftp" && b.files != "" && !running {
+					ok, running = true, true
+					go serveFiles(ch, b.files)
+				}
 			case "window-change":
 				var p struct{ Cols, Rows, Wide, High uint32 }
 				if ssh.Unmarshal(r.Payload, &p) == nil {
@@ -372,7 +382,7 @@ func Start(cfg Config) (*Box, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Box{ln: ln, closed: make(chan struct{}), accept: cfg.Accept}
+	b := &Box{ln: ln, closed: make(chan struct{}), accept: cfg.Accept, files: cfg.FilesUnder}
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
