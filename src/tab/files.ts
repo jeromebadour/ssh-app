@@ -29,6 +29,7 @@ const DOWNLOAD_WHY: Record<string, string> = {
   unsupported: 'This box has no file subsystem',
   'no-answer': 'The box did not answer',
   'no-link': 'There is no link to the box',
+  stopped: 'It was stopped before it began',
   failed: 'It could not be brought over',
 };
 
@@ -47,6 +48,7 @@ const SEND_WHY: Record<string, string> = {
   'not-now': 'The window is busy with another question',
   'nothing-chosen': 'No file was chosen',
   kept: 'The file on the box was left as it was',
+  stopped: 'It was stopped before it began',
   failed: 'It could not be sent',
 };
 
