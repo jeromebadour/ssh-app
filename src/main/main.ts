@@ -608,6 +608,8 @@ function openTab(boxId = '', place = ''): Tab | null {
     filePage: (page: Record<string, unknown>) => {
       if (tabs.get(id) !== tab) return;
       const ask = typeof page['id'] === 'number' ? page['id'] : 0;
+      const ours = mainAsks.get(comingKey(id, ask));
+      if (ours) return ours(page);
       // A file is in the way of one being sent: the window asks about it, with what is there in front of the
       // person, instead of the strip simply saying no.
       const send = sendingNow.get(comingKey(id, ask));
@@ -627,23 +629,7 @@ function openTab(boxId = '', place = ''): Tab | null {
       }
       const mine = coming.get(comingKey(id, ask));
       if (mine) {
-        const size = page['of'];
-        if (!mine.checked && typeof size === 'number') {
-          // The first page of a download says how big the file is, before any of it is written. That is the
-          // moment to ask the disk, and to stop before a half-written file exists at all.
-          mine.checked = true;
-          void roomFor(mine.into, size).then((room) => {
-            if (room || !coming.has(comingKey(id, ask))) return;
-            mine.short = true;
-            tab.engine.askFiles({ id: ask, do: 'cancel', path: '' });
-          });
-        }
-        if (page['done'] === true) {
-          coming.delete(comingKey(id, ask));
-          // The engine says a download that was stopped is finished, because from where it stands it was
-          // given up on. Main knows why it was given up on, and says that instead.
-          if (mine.short) page = { ...page, error: 'pc-full' };
-        }
+        if (page['done'] === true) coming.delete(comingKey(id, ask));
         page = { ...page, into: mine.into, ...(mine.why === '' ? {} : { renamed: mine.why }) };
       }
       sendTo(view, CH.tabFilePage, page);
@@ -851,17 +837,45 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'cancel';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'cancel';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
   // Bringing a file over is the one ask that touches the PC, so the view's part of it ends here: it names a
   // file on its own box and nothing else. Where the file lands, and what it is called when it gets there, are
   // main's to decide (plan B2.7).
-  if (what === 'get') return void bringOver(tab, id, where);
-  if (what === 'put') return void sendOver(tab, id, where);
+  // Written down before either of them is started, because both begin by waiting on something and a stop that
+  // arrives in that first moment would otherwise find nothing to stop.
+  if (what === 'get' || what === 'put') {
+    settling.add(comingKey(tab.id, id));
+    if (what === 'get') void bringOver(tab, id, where);
+    else void sendOver(tab, id, where);
+    return;
+  }
+  // A stop is written down here as well as passed on, always, and for a moment afterwards. A transfer main
+  // has taken in has not reached an engine yet, and one that has may finish before the stop lands: between
+  // those two there is a gap a stop can fall into, and a stop that falls into it is a button that did
+  // nothing. Written down, it is seen by whichever of the two is still to come.
+  if (what === 'cancel') {
+    const key = comingKey(tab.id, id);
+    settling.add(`stop:${key}`);
+    setTimeout(() => settling.delete(`stop:${key}`), 30_000).unref();
+    if (settling.has(key)) return;
+  }
+  // Which hash a box may be asked for is written down here and nowhere else: a view may ask for one of two
+  // and can name no other, so no command of a view's choosing can reach a box through this (plan B2.5).
+  if (what === 'hash') {
+    const which = a['which'];
+    if (which !== 'sha256' && which !== 'md5') return drop('tab:file-ask', e);
+    if (!tab.engine.askFiles({ id, do: 'hash', path: where, name: which })) return drop('tab:file-ask', e);
+    return;
+  }
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
+  filesAsked.set(what, (filesAsked.get(what) ?? 0) + 1);
+
 });
+// What a view has asked of its box's files, by kind, for the lab to say which asks really left main.
+const filesAsked = new Map<string, number>();
 
 // ---- Downloads: what main decides (plan B4.2, B4.3) ----
 // One folder holds everything brought over from a box, so a download can never land anywhere else and a person
@@ -870,8 +884,25 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
 const downloadsInto = (): string => (LAB_PROFILE ? path.join(LAB_PROFILE, 'downloads') : path.join(app.getPath('downloads'), 'Berth'));
 // Space to leave on the disk beyond the file itself, so a download cannot be the thing that fills it.
 const spareOnDisk = 64 * 1024 * 1024;
-type Coming = { tab: number; into: string; name: string; why: string; checked: boolean; short: boolean };
+type Coming = { tab: number; into: string; name: string; why: string };
 const coming = new Map<string, Coming>(); // per tab and ask: what main knows that the engine does not
+// Transfers main has taken in and not yet given to an engine: the stat for a download, the chooser for a send.
+// A stop that arrives in that gap lands here, and is seen before anything starts.
+const settling = new Set<string>();
+const stopWanted = (tab: Tab, id: number): boolean => {
+  const key = comingKey(tab.id, id);
+  const wanted = settling.has(`stop:${key}`);
+  settling.delete(`stop:${key}`);
+  settling.delete(key);
+  return wanted;
+};
+// And once a transfer is really under way, a stop that was written down a moment before it started is still
+// its own: it is given to the engine, which is the only thing that can end a transfer that has begun.
+const passOnAnyStop = (tab: Tab, id: number): void => {
+  if (!settling.has(`stop:${comingKey(tab.id, id)}`)) return;
+  settling.delete(`stop:${comingKey(tab.id, id)}`);
+  tab.engine.askFiles({ id, do: 'cancel', path: '' });
+};
 const comingKey = (tab: number, id: number): string => `${tab}:${id}`;
 
 async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
@@ -880,8 +911,22 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
   try {
     await mkdir(into, { recursive: true });
   } catch {
+    stopWanted(tab, id);
     return say('pc-denied');
   }
+  // How big the box says it is, before anything is opened on the PC. The room has to be settled first: a check
+  // made while the file is already arriving is a race, and on a small file the file wins and lands on a disk
+  // that was supposed to have refused it.
+  const at = await askTheBox(tab, { do: 'stat', path: remote });
+  if (at.error !== '') {
+    stopWanted(tab, id);
+    return say(at.error);
+  }
+  const size = at.attrs?.size ?? 0;
+  const room = await roomFor(into, size);
+  if (stopWanted(tab, id)) return say('stopped');
+  if (!room) return say('pc-full');
+  if (tabs.get(tab.id) !== tab) return;
   // The box's own name for the file, which is everything after the last separator, turned into one name this
   // PC can hold, and then into one nothing in the folder is already using.
   const asked = remote.split('/').pop() ?? '';
@@ -895,11 +940,13 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
   const name = freeName(landed.name, taken);
   const why = [landed.changed ? landed.why : '', name !== landed.name ? 'a file of that name was already here' : ''].filter((x) => x !== '').join(', ');
   if (tabs.get(tab.id) !== tab) return;
-  coming.set(comingKey(tab.id, id), { tab: tab.id, into, name, why, checked: false, short: false });
+  coming.set(comingKey(tab.id, id), { tab: tab.id, into, name, why });
   if (!tab.engine.askFiles({ id, do: 'get', path: remote, into, name })) {
     coming.delete(comingKey(tab.id, id));
     say('no-link');
   }
+  settling.delete(comingKey(tab.id, id));
+  passOnAnyStop(tab, id);
 }
 
 // ---- Uploads: what main decides (plan B4.3) ----
@@ -913,7 +960,10 @@ let labChoosesAFile: (() => string | undefined) | null = null;
 
 async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
-  if (!win || !gate?.unlocked || choosing) return say('not-now');
+  if (!win || !gate?.unlocked || choosing) {
+    stopWanted(tab, id);
+    return say('not-now');
+  }
   choosing = true;
   let from: string | undefined;
   try {
@@ -925,15 +975,50 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   } finally {
     choosing = false;
   }
+  if (stopWanted(tab, id)) return say('stopped');
   if (from === undefined) return say('nothing-chosen');
   if (tabs.get(tab.id) !== tab) return;
   // The name it will have on the box is the name it has here, and nothing of the path it came from.
   const name = path.basename(from);
+  settling.delete(comingKey(tab.id, id));
   sendingNow.set(comingKey(tab.id, id), { tab: tab.id, id, from, name, folder });
   if (!tab.engine.askFiles({ id, do: 'put', path: folder, name, from })) {
     sendingNow.delete(comingKey(tab.id, id));
     say('no-link');
   }
+  passOnAnyStop(tab, id);
+}
+
+// Main's own asks on a tab's file channel, which no view sees. They take numbers from a range of their own,
+// above anything a view will reach, and their answers are taken here rather than passed on.
+const MAIN_ASKS_FROM = 1_000_000;
+let mainAskNext = MAIN_ASKS_FROM;
+const mainAsks = new Map<string, (p: Record<string, unknown>) => void>();
+
+function askTheBox(tab: Tab, what: { do: string; path: string }): Promise<{ error: string; attrs?: { size: number; kind: string } }> {
+  return new Promise((settle) => {
+    const ask = ++mainAskNext;
+    const key = comingKey(tab.id, ask);
+    let attrs: { size: number; kind: string } | undefined;
+    const done = setTimeout(() => {
+      mainAsks.delete(key);
+      settle({ error: 'no-answer' });
+    }, 30_000);
+    mainAsks.set(key, (p) => {
+      const a = p['attrs'] as { size?: number; kind?: string } | undefined;
+      if (a && typeof a.size === 'number') attrs = { size: a.size, kind: String(a.kind ?? '') };
+      if (p['done'] !== true) return;
+      clearTimeout(done);
+      mainAsks.delete(key);
+      const error = typeof p['error'] === 'string' ? p['error'] : '';
+      settle(attrs ? { error, attrs } : { error });
+    });
+    if (!tab.engine.askFiles({ id: ask, do: what.do, path: what.path })) {
+      clearTimeout(done);
+      mainAsks.delete(key);
+      settle({ error: 'no-link' });
+    }
+  });
 }
 
 // A file is already where one is being sent. Berth asks first, with both files in front of the person, and
@@ -1370,7 +1455,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), chooseKeyFile, chooseToSend: (answer: (() => string | undefined) | null) => void (labChoosesAFile = answer), keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | undefined) | null) => void (labChoosesAFile = answer), keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

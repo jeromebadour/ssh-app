@@ -24,7 +24,7 @@ import (
 // an ask that is given up is stopped here rather than read to its end for nobody.
 type fileAsk struct {
 	ID   uint64 `json:"id"`
-	Do   string `json:"do"`   // "list", "stat", "space", "read", "get", "put", "cancel"
+	Do   string `json:"do"`   // "list", "stat", "space", "read", "get", "put", "hash", "cancel"
 	Path string `json:"path"` // the folder or file it is about
 	// "get" only, and main's own: a tab's view never names a place on the PC (plan B2.7). Main works out the
 	// folder everything lands in and the one name this file may land under, and the engine takes both as
@@ -54,6 +54,8 @@ type filePage struct {
 	MarkWhy  string   `json:"markWhy,omitempty"`  // why it could not be checked, where it could not
 	Replaced bool     `json:"replaced,omitempty"` // "put": it went in over a file that was already there
 	There    *fileRow `json:"there,omitempty"`    // "put": what is already at that name on the box
+	Hash     string   `json:"hash,omitempty"`     // "hash": the box's own hash of the file, as it printed it
+	Which    string   `json:"which,omitempty"`    // "hash": which hash it is
 }
 
 type fileRow struct {
@@ -256,6 +258,21 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		if read >= readCap && at.Size > read {
 			f.page(filePage{ID: a.ID, More: true})
 		}
+		return nil
+	case "hash":
+		// A box's own hash of one of its files, asked for because a person asked for it (plan B2.5, entry 3).
+		// md5 is here only because people still paste md5 at each other; sha256 is what a transfer uses.
+		which := link.SHA256
+		if a.Name == "md5" {
+			which = link.MD5
+		} else if a.Name != "sha256" {
+			return errors.New("only sha256 and md5 can be asked of a box")
+		}
+		sum, err := f.l.Hash(ctx, which, a.Path)
+		if err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Hash: sum, Which: string(which)})
 		return nil
 	case "get":
 		return f.get(ctx, c, a)

@@ -4,7 +4,7 @@
 // grows out of this; these probes stay as its first cases.
 import { app, clipboard, nativeImage, type BaseWindow, type Session, type WebContentsView } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createPublicKey, randomBytes, verify } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os, { availableParallelism } from 'node:os';
@@ -51,6 +51,7 @@ interface Ctx {
   windowAsked(): string[];
   keysRefused(): number;
   downloads: string;
+  filesAsked(): Record<string, number>;
   chooseToSend(answer: (() => string | undefined) | null): void;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
@@ -896,28 +897,105 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('a name this PC cannot hold lands under one it can, and the window says why', renamed && renamedSaid.includes('renamed') && here.includes('a_b.txt') && !here.some((n) => n.includes(':')), [renamedSaid, here]);
             // A box that says a file is bigger than this disk can hold: nothing is written at all, and the
             // window says why. The check is made on what the box said, before a single byte is kept.
-            const lying = await lab.tell('pretendsize shortcut.lnk 900000000000000');
+            // A file big enough that, were the room asked about while it was already arriving, it would still
+            // be arriving when this probe looks: that is what makes the answer below about the order of things
+            // and not about which of two races happened to win.
+            const heavy = await lab.tell('bigfile var/log/heavy.log 4000000');
+            check('the lab made a file big enough to catch a download that started before it should', heavy['bytes'] === 4000000, heavy);
+            await lab.tell('filepace 40');
+            const lying = await lab.tell('pretendsize heavy.log 900000000000000');
             check('the lab box is set to say a file is bigger than any disk', lying['size'] === 900000000000000, lying);
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
-            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('shortcut.lnk'), 10_000);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('heavy.log'), 10_000);
             const before = await readdir(ctx.downloads).catch(() => [] as string[]);
-            await standOn('shortcut.lnk');
+            await standOn('heavy.log');
             await tap('S', ['control']);
             const refused = await until(async () => (await foot()).includes('not enough room'), 25_000);
-            // The window says so as soon as it is stopped; the file it had opened to write into goes as the
-            // download unwinds, a moment later. The folder is waited for rather than looked at once, and a
-            // folder that never comes back to what it was fails this.
-            const empty = await until(async () => (await readdir(ctx.downloads).catch(() => [] as string[])).length === before.length, 10_000);
+            // Nothing was ever opened on the PC: not a file under its own name, and not one of the app's own
+            // half-written ones. The folder is looked at the moment the refusal lands and again after, because
+            // a download that had started would still be going now.
+            const atOnce = await readdir(ctx.downloads).catch(() => [] as string[]);
+            await sleep(600);
             const after = await readdir(ctx.downloads).catch(() => [] as string[]);
             await lab.tell('pretendsize - 0');
-            check('a file bigger than the disk is refused before anything is written, and the window says why', refused && empty && after.every((n) => !n.startsWith('.berth-')), [await foot(), before, after]);
+            await lab.tell('filepace 0');
+            await lab.tell('forget var/log/heavy.log');
+            check('a file bigger than the disk is refused before anything is opened, and the window says why', refused && atOnce.length === before.length && after.length === before.length && after.every((n) => !n.startsWith('.berth-')), [await foot(), before, atOnce, after]);
             // Back to the folder the probes after this one expect.
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('syslog'), 10_000);
+          }
+          // A box's own hash of one of its files, because a person asked for it. Only two hashes may ever be
+          // asked of a box, and what comes back can be compared with one pasted in without reading sixty-four
+          // characters by eye.
+          {
+            const tap = async (keyCode: string, modifiers: ('control' | 'shift' | 'alt')[] = []): Promise<void> => {
+              front.view.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+              front.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+              await sleep(120);
+            };
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+            await tap('H', ['control']);
+            const gotOne = await until(async () => (await js<string>(front.view, `document.getElementById('fb-hash-value')?.textContent ?? ''`)).length === 64, 20_000);
+            const shown = await js<string>(front.view, `document.getElementById('fb-hash-value')?.textContent ?? ''`);
+            const want = createHash('sha256').update("a line of the box's own log\n").digest('hex');
+            check('Ctrl+H asks the box for its own hash of the file, and it is the file\'s real hash', gotOne && shown === want, [shown, want]);
+            // Copy puts exactly that on the clipboard, and nothing else.
+            clipboard.writeText('untouched');
+            ctx.win.focus();
+            await until(() => ctx.win.isFocused(), 4000);
+            await clickOn('#fb-hash-copy', front);
+            const copied = await until(async () => (await clipboard.readText()) === want, 4000);
+            check('Copy puts that hash on the clipboard and nothing else', copied, await clipboard.readText());
+            // What it should be, pasted in: the same, and then not the same.
+            await js(front.view, `(() => { const f = document.getElementById('fb-hash-expected'); f.value = '${want}  syslog'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            await sleep(200);
+            const same = await js<string>(front.view, `document.getElementById('fb-hash-said')?.textContent ?? ''`);
+            await js(front.view, `(() => { const f = document.getElementById('fb-hash-expected'); f.value = '${'0'.repeat(64)}'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            await sleep(200);
+            const notSame = await js<string>(front.view, `document.getElementById('fb-hash-said')?.textContent ?? ''`);
+            check('a hash pasted in is compared, even with a file name beside it, and says plainly which it is', same === 'The same' && notSame === 'Not the same', [same, notSame]);
+            await shot('a-hash-asked-for', "a box's own hash of a file, with what it should be pasted in", front);
+            // Only the two written-down hashes may ever be asked of a box. A view asking for anything else is
+            // refused by main before it reaches an engine, and the box is left alone.
+            const droppedBefore = ctx.dropped();
+            const ranBefore = ((await lab.tell('seen'))['sessions'] as { Command?: string }[]).length;
+            await js(front.view, `(window.tabPort.files({ id: 90001, do: 'hash', path: '/var/log/syslog', which: 'rm -rf /' }), window.tabPort.files({ id: 90002, do: 'hash', path: '/var/log/syslog' }))`);
+            await sleep(500);
+            const ranAfter = ((await lab.tell('seen'))['sessions'] as { Command?: string }[]).length;
+            check('a view may ask a box for one of two hashes and for nothing else', ctx.dropped() === droppedBefore + 2 && ranAfter === ranBefore, [ctx.dropped() - droppedBefore, ranBefore, ranAfter]);
+            await js(front.view, `document.getElementById('fb-hash-shut')?.click()`);
+            await until(async () => !(await js<boolean>(front.view, `document.getElementById('fb-hash') !== null`)), 3000);
+          }
+          // Stopping a transfer that is under way: it stops, and nothing of it is left on the PC.
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            const big = await lab.tell('bigfile var/log/wide.log 8000000');
+            check('the lab made a file big enough to stop in the middle of', big['bytes'] === 8000000, big);
+            await lab.tell('filepace 60');
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('wide.log'), 10_000);
+            const before = await readdir(ctx.downloads).catch(() => [] as string[]);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="wide.log"] .fb-get:not(.fb-sum)')?.click()`);
+            // It has to be really under way before it is stopped, or this proves nothing: the line has to be
+            // counting bytes of a file it has not finished.
+            const partWay = await until(async () => /wide\.log [0-9.]+ [KM]?B of 8\.0 MB/.test(await foot()), 25_000);
+            const stops = await js<number>(front.view, `document.querySelectorAll('.fb-moving-one .fb-stop').length`);
+            const clicked = await js<boolean>(front.view, `(() => { const one = [...document.querySelectorAll('.fb-moving-one')].find((d) => d.textContent.includes('wide.log')); const b = one?.querySelector('.fb-stop'); if (!b) return false; b.click(); return true; })()`);
+            // The end has to say it was stopped. "No longer counting" is not the same thing: a download that
+            // ran to its end is not counting either, and that is the failure this probe exists to catch.
+            const stopped = await until(async () => (await foot()).includes('It was stopped'), 25_000);
+            const back = await until(async () => (await readdir(ctx.downloads).catch(() => [] as string[])).length === before.length, 15_000);
+            const after = await readdir(ctx.downloads).catch(() => [] as string[]);
+            await lab.tell('filepace 0');
+            check('a transfer under way can be stopped, and nothing of it is left on the PC', partWay && stops === 1 && clicked && stopped && back && !after.includes('wide.log'), [partWay, stops, clicked, ctx.filesAsked(), await foot(), before.length, after]);
           }
           // Sending a file from the PC to the box. Which file leaves this PC is answered in the system's own
           // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
