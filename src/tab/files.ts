@@ -125,7 +125,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
   // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
   // more than one at a time, and the strip at the foot says what each is doing.
-  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; tookUpAt: number; ended: string };
+  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; tookUpAt: number; ended: string; canDrag: boolean };
   const bringing = new Map<number, Bringing>();
   // Files chosen in one go that have not had their turn yet, and how many were past what one chooser may
   // hand over. Both are main's count, not the window's: the window only says them.
@@ -221,6 +221,26 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (typeof p.tooMany === 'number' && p.tooMany > 0) leftBehind = p.tooMany;
     // What was waiting has been dropped, because a person asked for it to be: it is said, so the button that
     // did it says what it did, and nothing else on this page is about a file at all.
+    // The file is not in the download folder any more: it was moved, renamed or deleted since it landed. The
+    // line says so and stops offering the drag, rather than leaving a hand reaching for nothing.
+    if (p.dragGone === true) {
+      const b = bringing.get(p.id);
+      if (b) b.canDrag = false;
+      said = `${shorten(b?.landed === '' || b?.landed === undefined ? (b?.name ?? 'That file') : b.landed, 28)} is not in the download folder any more`;
+      draw(); // the list is drawn again from what is already known: the row stops offering the drag with it
+
+      return;
+    }
+    // A page that says only "this one can be dragged" belongs to a transfer that may already have ended, so it
+    // is taken before the pages of a listing are, and it draws.
+    if (p.draggable === true) {
+      const b = bringing.get(p.id);
+      if (b) {
+        b.canDrag = true;
+        draw();
+        return;
+      }
+    }
     if (typeof p.unqueued === 'number') {
       said = p.unqueued === 0 ? 'Nothing was waiting to be sent' : `${p.unqueued} ${p.unqueued === 1 ? 'file' : 'files'} that ${p.unqueued === 1 ? 'was' : 'were'} waiting will not be sent`;
       leftBehind = 0;
@@ -232,7 +252,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (typeof p.alsoSending === 'string') {
       const already = bringing.get(p.id);
       if (already) already.name = p.alsoSending; // the file a person chose first: its line gets the real name
-      else bringing.set(p.id, { name: p.alsoSending, way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
+      else bringing.set(p.id, { name: p.alsoSending, way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '', canDrag: false });
       draw();
       return;
     }
@@ -284,6 +304,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // Where it landed is said on its own page, a moment before the one that says the ask is finished: what
       // each page carries is kept, and the end is written from all of it together.
       if (typeof p.landed === 'string') down.landed = p.landed;
+      // Main has said this one is on the PC and may be dragged out. The window keeps the number of the ask and
+      // nothing else: where the file is on this PC is main's knowledge and never this view's (plan B2.7).
+      if (p.draggable === true) down.canDrag = true;
       if (typeof p.mark === 'string') down.mark = p.mark;
       if (typeof p.markWhy === 'string') down.markWhy = p.markWhy;
       if (typeof p.renamed === 'string') down.renamed = p.renamed;
@@ -654,6 +677,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (const [id, b] of bringing) {
       const one = document.createElement('div');
       one.className = 'fb-moving-one';
+      // A file that is here on the PC can be taken out of the window by hand, into a chat or a folder. The
+      // window starts nothing itself: it says which ask, and main hands the file to the system (plan B4.5).
+      if (b.canDrag) dragFrom(one, id, b.landed === '' ? b.name : b.landed);
       const words = document.createElement('span');
       words.textContent = lines.shift() ?? '';
       one.append(words);
@@ -672,6 +698,34 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       }
       el.moving.append(one);
     }
+  };
+
+  // Making something draggable: the same two lines wherever it is done, so a row and a line in the strip
+  // behave alike. The press is answered at once by the window (the dragging mark), and the file itself is
+  // main's to hand over: a view holds a number, never a path (BUILD-RULES 2.18, plan B2.7).
+  const dragFrom = (e: HTMLElement, ask: number, what: string): void => {
+    e.draggable = true;
+    e.title = `Drag ${what} out of this window`;
+    e.addEventListener('dragstart', (ev) => {
+      ev.preventDefault(); // the system's own drag takes over from here, started by main
+      e.dataset['dragging'] = 'yes';
+      said = `${shorten(what, 28)} is being dragged out`;
+      draw();
+      port.drag(ask);
+    });
+    e.addEventListener('dragend', () => {
+      delete e.dataset['dragging'];
+    });
+  };
+
+  // Which ask brought a file of this name over, if this tab brought it and it is still here. A row of the
+  // list is dragged as the transfer that fetched it, so nothing new has to be remembered to say what it is.
+  // The latest one, not the first: a file fetched twice has two lines, and a row must offer the copy that was
+  // brought over last. If that last try failed, the row offers nothing at all, rather than quietly handing
+  // over an older copy of a file that has since changed on the box.
+  const broughtOver = (name: string): number | undefined => {
+    for (const [id, b] of [...bringing].reverse()) if (b.way === 'in' && (b.landed === name || b.name === name)) return b.canDrag ? id : undefined;
+    return undefined;
   };
 
   const row = (r: FileRow, enter: (() => void) | undefined, id?: string) => {
@@ -694,6 +748,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     right.className = 'fb-size';
     right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
     e.append(name, right);
+    // A file this tab has already brought over is draggable from its own row too, not only from the strip:
+    // the row is where a person is looking when they decide to take it somewhere.
+    const brought = r.kind === 'file' ? broughtOver(r.name) : undefined;
+    if (brought !== undefined) {
+      e.classList.add('fb-here');
+      dragFrom(e, brought, r.name);
+    }
     if (enter) {
       e.classList.add('fb-can-enter');
       e.addEventListener('dblclick', enter);
@@ -820,7 +881,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (b.name === name && b.ended === '') return; // already on its way
     }
     const id = asker.ask({ do: 'get', path: join(where || asked, name) });
-    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
+    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '', canDrag: false });
     draw();
   };
 
@@ -903,7 +964,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const here = where || asked;
     if (here === '' || busy) return;
     const id = asker.ask({ do: 'put', path: here });
-    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
+    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '', canDrag: false });
     draw();
   };
 

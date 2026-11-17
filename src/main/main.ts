@@ -1,6 +1,6 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
-import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, stat, statfs } from 'node:fs/promises';
@@ -639,6 +639,13 @@ function openTab(boxId = '', place = ''): Tab | null {
       }
       const mine = coming.get(comingKey(id, ask));
       if (mine) {
+        // Where a download really landed is main's own knowledge, worked out before the engine was asked
+        // (B4.2). When the engine says it is there and whole, that path becomes the one thing this tab may
+        // drag out, named by the number of the ask and never by a path a view could say for itself.
+        if (page['landed'] === mine.name && page['error'] === undefined) {
+          draggable.set(comingKey(id, ask), path.join(mine.into, mine.name));
+          sendTo(view, CH.tabFilePage, { id: ask, draggable: true });
+        }
         if (page['done'] === true) {
           coming.delete(comingKey(id, ask));
           // A transfer that broke with bytes already written is written down, so the next try takes it up.
@@ -814,6 +821,7 @@ function closeTab(id: number): void {
   frontTold.delete(id);
   protectedPaste.delete(id);
   queuedToSend.delete(id); // a tab that has gone takes what it still had to send with it
+  for (const key of [...draggable.keys()]) if (key.startsWith(`${id}:`)) draggable.delete(key); // and what it could drag out
   if (waitingPaste?.shown.tab === id) closePaste(false);
   if (waitingLink?.tab === id) closeLink(false);
   tab.stopReopen();
@@ -1189,6 +1197,48 @@ const brokeKey = (way: string, box: string, where: string): string => `${way}:${
 // The ways a transfer can end with bytes worth keeping. Anything else either wrote nothing or wrote something
 // known to be wrong, and the engine has already taken its half-written file away.
 const WORTH_TAKING_UP = new Set(['no-answer', 'no-link', 'failed', 'denied']);
+
+// ---- Dragging a file out of the window (plan B4.5) ----
+// What a tab may drag out: files its own engine brought over, by the number of the ask that brought each.
+// A view names a number and never a path, so a view that has been taken over can drag out nothing it was not
+// given, and nothing of another tab's (B2.7).
+const draggable = new Map<string, string>();
+// The lab cannot take hold of a real drag, so it watches what main handed to the system instead. Nothing but
+// the self-test sets this.
+let labWatchesDrags: ((file: string) => void) | null = null;
+
+ipcMain.on(CH.tabDrag, (e: IpcMainEvent, ask: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:drag', e);
+  if (typeof ask !== 'number' || !Number.isInteger(ask) || ask < 1) return drop('tab:drag', e);
+  const file = draggable.get(comingKey(tab.id, ask));
+  if (file === undefined) return drop('tab:drag', e); // not a file this tab brought over: there is nothing to drag
+  void handOver(tab, ask, file);
+});
+
+// What main knows about a file is what it knew when the file landed, and the download folder is his: a file
+// can be moved, renamed or deleted between landing and the hand reaching for it. So it is looked for again
+// before it is handed to the system, and if it has gone the window says so rather than handing over a path to
+// nothing (NOTHING fails silently).
+async function handOver(tab: Tab, ask: number, file: string): Promise<void> {
+  try {
+    const f = await stat(file);
+    if (!f.isFile()) throw new Error('not a file');
+  } catch {
+    draggable.delete(comingKey(tab.id, ask));
+    sendTo(tab.view, CH.tabFilePage, { id: ask, dragGone: true });
+    return;
+  }
+  if (tabs.get(tab.id) !== tab) return;
+  dragsAsked++;
+  if (labWatchesDrags) return labWatchesDrags(file);
+  // The window hands the file to the system itself. An icon is asked for from the system rather than drawn by
+  // us, so what is under the hand is the file's own kind.
+  const icon = await app.getFileIcon(file, { size: 'normal' }).catch(() => nativeImage.createEmpty());
+  if (tabs.get(tab.id) === tab) tab.view.webContents.startDrag({ file, icon });
+}
+// How many drags main has acted on, for the lab.
+let dragsAsked = 0;
 
 // How much room the disk has left for one more file. The file being replaced, if there is one, is still there
 // while the new one is written, so what must fit is the whole of the new file beside everything already on the
@@ -1578,7 +1628,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

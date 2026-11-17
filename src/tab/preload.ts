@@ -40,6 +40,9 @@ const port: TabPort = {
   onFilePage(cb) {
     ipcRenderer.on(CH.tabFilePage, (_e, page) => cb(page));
   },
+  drag(ask) {
+    ipcRenderer.send(CH.tabDrag, Number(ask));
+  },
   resize(cols, rows) {
     ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
   },

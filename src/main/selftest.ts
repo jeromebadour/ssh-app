@@ -56,6 +56,9 @@ interface Ctx {
   filesAsked(): Record<string, number>;
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
   stillToSend(tab: number): number;
+  watchDrags(watch: ((file: string) => void) | null): void;
+  dragsAsked(): number;
+  canDrag(tab: number): number;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -1040,6 +1043,92 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the next try takes it up where it stopped, and the whole file is what the box has', done && said.includes('taken up where it broke') && said.includes('checked against the box') && !after.includes('.berth-broken.log.part') && itsHash === onTheBox['sha256'], [said, after, itsHash === onTheBox['sha256']]);
             await lab.tell('forget var/log/broken.log');
           }
+          // Dragging a file out of the window. The drag itself belongs to Windows and is his PC's to prove; what
+          // is proven here is everything around it: which files a tab may drag, that a view names a number and
+          // never a path, that another tab's file and a made-up number are refused, and that a tab closing takes
+          // what it could drag with it (plan B4.5, B2.7).
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            let handedOver = '';
+            ctx.watchDrags((file) => void (handedOver = file));
+            // This one file has not been brought over, so its row is not draggable, whatever else this tab has
+            // fetched already.
+            const canDragBefore = ctx.canDrag(front.id);
+            const rowBefore = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') === 'true'`);
+            // Bring it over, and it becomes draggable: a line in the strip and the row itself.
+            await lab.tell('read var/log/syslog');
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            const there = await until(async () => (await foot()).includes('is in the download folder'), 30_000);
+            const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"].fb-here')?.getAttribute('draggable') === 'true'`), 5000);
+            const lineNow = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('syslog'))`);
+            check('a file this tab brought over becomes draggable, from its line and from its row; before it was not', there && rowNow && lineNow && !rowBefore && ctx.canDrag(front.id) === canDragBefore + 1, [there, rowNow, lineNow, rowBefore, ctx.canDrag(front.id) - canDragBefore]);
+            // The press hands main the number of the ask, and main hands the system the file it decided on. The
+            // row is pressed rather than a line of the strip, because the row names one file and no other.
+            const asked = ctx.dragsAsked();
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+            const handed = await until(() => handedOver !== '', 5000);
+            const saidSo = await until(async () => (await foot()).includes('being dragged out'), 5000);
+            // What was handed over is the file itself: in the download folder, under the name main gave it
+            // (which is not always the box's, B4.2), and holding what the box holds.
+            const itsBytes = await readFile(handedOver).catch(() => Buffer.alloc(0));
+            const onTheBox = await lab.tell('hashof var/log/syslog');
+            const same = createHash('sha256').update(itsBytes).digest('hex') === onTheBox['sha256'];
+            check('the press hands main a number, and main hands the system the file it chose: in the download folder, under the name it gave it, holding what the box holds', handed && saidSo && handedOver.startsWith(ctx.downloads) && path.basename(handedOver).startsWith('syslog') && same && ctx.dragsAsked() === asked + 1, [handedOver.replace(ctx.downloads, '<downloads>'), saidSo, same]);
+            // The download folder is his, so a file can be moved or deleted between landing and the hand
+            // reaching for it. Main looks for it again before handing it over, and the window says so.
+            {
+              const gone = handedOver;
+              handedOver = '';
+              await rm(gone, { force: true });
+              const askedBefore = ctx.dragsAsked();
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+              const toldHim = await until(async () => (await foot()).includes('not in the download folder any more'), 6000);
+              const rowStopped = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') !== 'true'`), 6000);
+              check('a file that has left the download folder is not handed to the system: the window says so and stops offering it', toldHim && rowStopped && handedOver === '' && ctx.dragsAsked() === askedBefore, [toldHim, rowStopped, handedOver, ctx.dragsAsked() - askedBefore]);
+            }
+            // A download that failed leaves nothing to drag: there is no file to hand over, so the row and the
+            // line must not offer one.
+            {
+              // The strip is not asked whether this failed: an earlier probe's line says the same words, and a
+              // probe that reads them would pass however this was written. What is asked is main's own count of
+              // what this tab may drag, which cannot be anything but this download's own answer.
+              const couldDrag = ctx.canDrag(front.id);
+              const lines = (): Promise<number> => js<number>(front.view, `document.querySelectorAll('#fb-moving .fb-moving-one').length`);
+              const linesBefore = await lines();
+              await lab.tell('failreads 1');
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+              const went = await until(async () => (await lines()) > linesBefore, 10_000);
+              const settled = await until(async () => (await js<number>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one')].filter((e) => e.querySelector('.fb-stop')).length`)) === 0, 40_000);
+              await lab.tell('failreads 0');
+              const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') === 'true'`);
+              check('a download that failed leaves nothing to drag', went && settled && !offered && ctx.canDrag(front.id) === couldDrag, [went, settled, offered, ctx.canDrag(front.id) - couldDrag]);
+            }
+            // A number this tab never had, another tab's number, and a number that is not one: each is dropped
+            // and nothing is handed over. This is the whole of what a taken-over view could try.
+            handedOver = '';
+            const droppedBefore = ctx.dropped();
+            const other = [...ctx.tabs.values()].find((t) => t.id !== front.id);
+            await js(front.view, `(window.tabPort.drag(987654), window.tabPort.drag(0), window.tabPort.drag(-1), window.tabPort.drag('a'))`);
+            if (other) await js(other.view, `window.tabPort.drag(1)`);
+            await sleep(400);
+            refusedByTheLock += other ? 5 : 4;
+            check('a view can drag out nothing it was not given: every made-up number is dropped and nothing is handed over', handedOver === '' && ctx.dropped() === droppedBefore + (other ? 5 : 4) && ctx.dragsAsked() === asked + 1, [handedOver, ctx.dropped() - droppedBefore, ctx.dragsAsked() - asked]);
+            // A tab that closes takes what it could drag with it, so a number cannot outlive its tab. The spare
+            // tab has to bring a file over for this to be about anything: a tab that never fetched one would
+            // hold nothing either way, and the probe would pass however the closing was written.
+            const spare = ctx.openTab(front.box!.id, 'logs')!;
+            await until(() => spare.engine.link.phase === 'up', 25_000);
+            await until(async () => (await js<number>(spare.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 0, 20_000);
+            await js(spare.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            const spareGotOne = await until(() => ctx.canDrag(spare.id) > 0, 30_000);
+            const hadSpare = ctx.canDrag(spare.id);
+            const hadFront = ctx.canDrag(front.id);
+            ctx.closeTab(spare.id);
+            check('a tab that closes takes what it could drag with it, and leaves every other tab whole', spareGotOne && hadSpare > 0 && ctx.canDrag(spare.id) === 0 && ctx.canDrag(front.id) === hadFront, [spareGotOne, hadSpare, ctx.canDrag(spare.id), hadFront, ctx.canDrag(front.id)]);
+            ctx.watchDrags(null);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
+            await until(() => ctx.shellState().active === front.id, 3000);
+          }
           // Sending a file from the PC to the box. Which file leaves this PC is answered in the system's own
           // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
           // part is only naming the folder it is looking at.
@@ -1930,7 +2019,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

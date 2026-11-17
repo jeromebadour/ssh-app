@@ -24,6 +24,7 @@ export const CH = {
   // a page at a time, so a folder of thousands of files is drawn as it is read.
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
+  tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -284,6 +285,7 @@ export interface TabPort {
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   files(ask: FileAsk): void; // ask the box's files for something
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
+  drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
   resize(cols: number, rows: number): void;
   copy(text: string): void;
   link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
@@ -376,4 +378,6 @@ export interface FilePage {
   waiting?: number; // more than one file was chosen: how many are still waiting their turn
   tooMany?: number; // more than one chooser may hand over was chosen: how many were left behind
   unqueued?: number; // what was waiting to be sent was dropped: how many were dropped
+  draggable?: boolean; // a download that landed: this ask's file is on the PC and can be dragged out of the window
+  dragGone?: boolean; // a drag was asked for a file that is no longer in the download folder
 }
