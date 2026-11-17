@@ -38,22 +38,23 @@ type Config struct {
 
 // Box is a running server.
 type Box struct {
-	ln     net.Listener
-	closed chan struct{}
-	wg     sync.WaitGroup
-	once   sync.Once
-	mu     sync.Mutex
-	conns  []net.Conn
-	seen   []*Session
-	tries  int // sign-in attempts of any kind, "none" included
-	users  []string
-	accept ssh.PublicKey // set by Accept: the key let in from then on
-	live   []*out        // the sessions that are open now: each one's way out
-	quiet  bool          // Quiet: the shells send nothing back by themselves
-	stall  bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
-	got    []byte        // every byte the shells were given since the last Received
-	files  string        // the folder its file subsystem answers under; empty means it has none
-	flood  atomic.Int64  // Flood: bytes the sessions took, in all
+	ln          net.Listener
+	closed      chan struct{}
+	wg          sync.WaitGroup
+	once        sync.Once
+	mu          sync.Mutex
+	conns       []net.Conn
+	seen        []*Session
+	tries       int // sign-in attempts of any kind, "none" included
+	users       []string
+	accept      ssh.PublicKey // set by Accept: the key let in from then on
+	live        []*out        // the sessions that are open now: each one's way out
+	quiet       bool          // Quiet: the shells send nothing back by themselves
+	stall       bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
+	got         []byte        // every byte the shells were given since the last Received
+	files       string        // the folder its file subsystem answers under; empty means it has none
+	refuseFiles int           // how many more times to say no to the file subsystem, for the lab
+	flood       atomic.Int64  // Flood: bytes the sessions took, in all
 }
 
 // out is one session's way out. Its shell, Print and Flood take turns writing: the library's channel must not be
@@ -213,6 +214,13 @@ type Session struct {
 }
 
 // Sessions is a copy of what every session so far asked for.
+// RefuseFiles makes the box say no to the next n asks for its file subsystem.
+func (b *Box) RefuseFiles(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refuseFiles = n
+}
+
 func (b *Box) Sessions() []Session {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -265,7 +273,11 @@ func (b *Box) session(nc ssh.NewChannel) {
 				}
 			case "subsystem":
 				var p struct{ Name string }
-				if ssh.Unmarshal(r.Payload, &p) == nil && p.Name == "sftp" && b.files != "" && !running {
+				// A box that says no to the file subsystem this once: a real box does, when it is busy or when
+				// the link is barely up, and the app has to live through it rather than treat it as the end.
+				if b.refuseFiles > 0 {
+					b.refuseFiles--
+				} else if ssh.Unmarshal(r.Payload, &p) == nil && p.Name == "sftp" && b.files != "" && !running {
 					ok, running = true, true
 					go serveFiles(ch, b.files)
 				}

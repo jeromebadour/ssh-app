@@ -768,6 +768,96 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('going into a folder lists that folder, and the path says where it is', wentIn && path1.endsWith('/var/log/ledger'), [path1, wentIn]);
           await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
           check('and the way up comes back to the folder above', await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), 10_000), await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`));
+          // The list is reached by the keyboard as well as by a mouse (BUILD-RULES 2.16): one row carries the
+          // tab stop so Tab lands on the list once, the arrows move inside it, and Enter does what a
+          // double-click does.
+          {
+            const tap = async (keyCode: string, modifiers: ('control' | 'shift' | 'alt')[] = []): Promise<void> => {
+              front.view.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+              front.view.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+              await sleep(120);
+            };
+            const standing = (): Promise<string> => js<string>(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.dataset.name ?? ''`);
+            const focused = (): Promise<string> => js<string>(front.view, `document.activeElement?.dataset?.name ?? ''`);
+            // Read in one go, so the three say what the list was at one moment and not at three.
+            const stop = await js<{ stops: number; first: string; standing: string }>(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')]; return { stops: r.filter((e) => e.tabIndex === 0).length, first: r[0]?.dataset.name ?? '', standing: r.find((e) => e.tabIndex === 0)?.dataset.name ?? '' }; })()`);
+            const firstName = stop.first;
+            check('one row of the list carries the tab stop, so Tab reaches the list once', stop.stops === 1 && stop.standing === stop.first && stop.first !== '', stop);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+            await tap('Down');
+            const second = await standing();
+            await tap('Down');
+            const third = await standing();
+            await tap('Up');
+            check('the arrows move the place, and the row holding it is the one with the focus', second !== firstName && third !== second && (await standing()) === second && (await focused()) === second, [firstName, second, third, await focused()]);
+            await tap('End');
+            const atEnd = await standing();
+            await tap('Home');
+            check('Home and End reach the two ends of the list', atEnd !== firstName && (await standing()) === firstName, [atEnd, firstName, await standing()]);
+            // Enter on a folder goes into it; Backspace comes back out. Nothing here needs a mouse.
+            const standOn = async (name: string): Promise<boolean> => {
+              const there = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row[data-name="${name}"]').length`)) === 1, 8000);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${name}"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+              await sleep(80);
+              return there && (await standing()) === name;
+            };
+            const onLedger = await standOn('ledger');
+            await tap('Return');
+            const inFolder = await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log/ledger'), 10_000);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+            await tap('Backspace');
+            const backOut = await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), 10_000);
+            check('Enter goes into a folder and Backspace comes back out, with no mouse anywhere in it', onLedger && inFolder && backOut, [onLedger, inFolder, backOut]);
+            // A thing that is neither a file nor a folder opens nothing, and the press is answered rather than
+            // swallowed: the foot says what the thing is.
+            const onLink = await standOn('current');
+            await tap('Return');
+            await sleep(200);
+            const footSaid = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            check('Enter on something that is neither a file nor a folder opens nothing and says what it is', onLink && footSaid.includes('current is a link') && (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), [onLink, footSaid]);
+            // Ctrl with a key is not the list's: it belongs to the window or to the box, and the place stays.
+            const before = await standing();
+            await tap('Down', ['control']);
+            check('a press with Ctrl held is not the list\'s, and the place does not move', (await standing()) === before, [before, await standing()]);
+            // And the window's own keys work from in here: the focus is on a file, which is where it is while
+            // a file is being picked, and Ctrl+Tab still moves between tabs rather than being swallowed.
+            {
+              // A second tab for this one probe, so there is somewhere for the press to go, and it is closed
+              // again straight after.
+              const spare = ctx.openTab()!;
+              await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
+              await until(() => ctx.shellState().active === front.id, 3000);
+              ctx.win.focus();
+              await until(() => ctx.win.isFocused(), 4000);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
+              const onAFile = await js<boolean>(front.view, `document.activeElement?.classList.contains('fb-row') === true`);
+              await tap('Tab', ['control']);
+              const switched = await until(() => ctx.shellState().active === spare.id, 3000);
+              const stayedPut = (await standing()) === before;
+              ctx.closeTab(spare.id);
+              await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
+              await until(() => ctx.shellState().active === front.id, 3000);
+              check('Ctrl+Tab works with the focus on a file in the list, and the place in the list does not move', onAFile && switched && stayedPut, [onAFile, switched, stayedPut]);
+            }
+          }
+          // A box that says no to the file subsystem the first time it is asked. A real box does, when it is
+          // busy or when the link is barely up. One refusal used to leave that tab's browser dead for as long
+          // as the tab lived, with nothing a person could do but close it: the engine asked once and never
+          // again. Now the window says it is trying and asks again, and the folder arrives.
+          {
+            const refusing = await lab.tell('nofiles 1');
+            check('the lab box is set to refuse the file subsystem once', refusing['refusing'] === 1, refusing);
+            const later = ctx.openTab(front.box!.id, 'logs')!;
+            await until(() => later.engine.link.phase === 'up', 25_000);
+            const saidTrying = await until(async () => (await js<string>(later.view, `document.getElementById('fb-list')?.textContent ?? ''`)).includes('Trying again'), 20_000);
+            const cameBack = await until(async () => (await js<number>(later.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 0, 20_000);
+            const itsFolder = await js<string>(later.view, `document.querySelector('.fb-path')?.textContent ?? ''`);
+            ctx.closeTab(later.id);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
+            await until(() => ctx.shellState().active === front.id, 3000);
+            check('a box that says no to the file subsystem once is asked again, and the folder arrives', saidTrying && cameBack && itsFolder.endsWith('/var/log'), [saidTrying, cameBack, itsFolder]);
+          }
           // A folder with thousands of things in it, left part-read: moving away must abandon it, and its
           // pages, still arriving, must not be drawn over the folder now on screen. Without that, a person
           // moving quickly ends up looking at a folder they have already left.
@@ -1616,7 +1706,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await type(t, 'typed-into-the-box-5b2');
       check('typed bytes reach the box\'s shell and its output comes back to this tab', await until(async () => (await shown(t)).includes('typed-into-the-box-5b2'), 5000), await shown(t));
       check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
-      const seenNow = await lab.tell('seen');
+      // The file channel is opened the first time the tab's browser wants it, which is a moment after the tab
+      // comes up: the box is given that moment rather than being asked while it is still one session short.
+      let seenNow = await lab.tell('seen');
+      await until(async () => {
+        seenNow = await lab.tell('seen');
+        return ((seenNow['sessions'] ?? []) as unknown[]).length >= 2;
+      }, 15_000);
       const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
       // What Berth asks a box for, in full, and nothing beyond it (plan B10). A tab opens two sessions and no
       // more: the terminal, and the file subsystem for its own file browser. The second asks for one thing,
@@ -1913,7 +2009,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const moved = await until(() => ctx.shellState().active === nextAlong, 2000);
       const keyToBox = await boxGot();
       const pageSaw = await js<string[]>(t.view, `window.__keysSeen`);
-      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', moved && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
+      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', moved && ids.length > 1 && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [ids.length, ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
       press(t.view.webContents, 'Tab', ['control', 'shift']);
       check('and Ctrl+Shift+Tab moves back the other way', await until(() => ctx.shellState().active === t.id, 2000), [ctx.shellState().active, t.id]);
       press(t.view.webContents, '1', ['control', 'alt']);

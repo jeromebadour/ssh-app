@@ -1,6 +1,7 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -35,8 +36,14 @@ if (app.isPackaged && process.argv.length > 1 && !LAB) refuse();
 app.setName('Berth');
 // A lab or development run keeps its files apart from a real profile: in the folder it is given, or in a fresh
 // one. A release build never reads this.
+//
+// Fresh has to mean fresh. A folder named after the process alone is not: process numbers come round again,
+// on a machine that has been running a while and on every container that starts counting from the beginning,
+// and a self-test that lands on the folder an earlier run left behind starts with that run's boxes already in
+// its list. Then it fails on a name that is taken, and the fault looks like the app's. The name carries
+// something random as well, so each run begins with nothing.
 const LAB_RUN = !app.isPackaged || LAB;
-const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SSHAPP_SELFTEST'] ? path.join(os.tmpdir(), `berth-lab-${process.pid}`) : '')) : '';
+const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SSHAPP_SELFTEST'] ? path.join(os.tmpdir(), `berth-lab-${process.pid}-${randomBytes(6).toString('hex')}`) : '')) : '';
 if (LAB_PROFILE) app.setPath('userData', path.join(LAB_PROFILE, 'profile'));
 
 const DIST = __dirname;
