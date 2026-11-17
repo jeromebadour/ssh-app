@@ -1051,29 +1051,37 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
             let handedOver = '';
             ctx.watchDrags((file) => void (handedOver = file));
-            // This one file has not been brought over, so its row is not draggable, whatever else this tab has
-            // fetched already.
+            // This one file has not been brought over, so its row is not draggable. A file of its own is made
+            // for it, because a file another probe has already pressed would be draggable before this begins
+            // (a press fetches a small file: plan B4.5) and this probe would then be about nothing.
+            await lab.tell('bigfile /var/log/dragme.log 40000');
+            // The folder is listed again so the new file is in it: the pane shows what it was given, and a file
+            // made behind its back is not in that.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            const itIsThere = await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('dragme.log'), 10_000);
+            check('the lab box made a file of this probe\'s own, and the pane lists it', itIsThere, itIsThere);
             const canDragBefore = ctx.canDrag(front.id);
-            const rowBefore = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') === 'true'`);
+            const rowBefore = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') === 'true'`);
             // Bring it over, and it becomes draggable: a line in the strip and the row itself.
-            await lab.tell('read var/log/syslog');
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
             const there = await until(async () => (await foot()).includes('is in the download folder'), 30_000);
-            const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"].fb-here')?.getAttribute('draggable') === 'true'`), 5000);
-            const lineNow = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('syslog'))`);
+            const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"].fb-here')?.getAttribute('draggable') === 'true'`), 5000);
+            const lineNow = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('dragme.log'))`);
             check('a file this tab brought over becomes draggable, from its line and from its row; before it was not', there && rowNow && lineNow && !rowBefore && ctx.canDrag(front.id) === canDragBefore + 1, [there, rowNow, lineNow, rowBefore, ctx.canDrag(front.id) - canDragBefore]);
             // The press hands main the number of the ask, and main hands the system the file it decided on. The
             // row is pressed rather than a line of the strip, because the row names one file and no other.
             const asked = ctx.dragsAsked();
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
             const handed = await until(() => handedOver !== '', 5000);
             const saidSo = await until(async () => (await foot()).includes('being dragged out'), 5000);
             // What was handed over is the file itself: in the download folder, under the name main gave it
             // (which is not always the box's, B4.2), and holding what the box holds.
             const itsBytes = await readFile(handedOver).catch(() => Buffer.alloc(0));
-            const onTheBox = await lab.tell('hashof var/log/syslog');
+            const onTheBox = await lab.tell('hashof var/log/dragme.log');
             const same = createHash('sha256').update(itsBytes).digest('hex') === onTheBox['sha256'];
-            check('the press hands main a number, and main hands the system the file it chose: in the download folder, under the name it gave it, holding what the box holds', handed && saidSo && handedOver.startsWith(ctx.downloads) && path.basename(handedOver).startsWith('syslog') && same && ctx.dragsAsked() === asked + 1, [handedOver.replace(ctx.downloads, '<downloads>'), saidSo, same]);
+            check('the press hands main a number, and main hands the system the file it chose: in the download folder, under the name it gave it, holding what the box holds', handed && saidSo && handedOver.startsWith(ctx.downloads) && path.basename(handedOver).startsWith('dragme.log') && same && ctx.dragsAsked() === asked + 1, [handedOver.replace(ctx.downloads, '<downloads>'), saidSo, same]);
             // The download folder is his, so a file can be moved or deleted between landing and the hand
             // reaching for it. Main looks for it again before handing it over, and the window says so.
             {
@@ -1081,9 +1089,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               handedOver = '';
               await rm(gone, { force: true });
               const askedBefore = ctx.dragsAsked();
-              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
               const toldHim = await until(async () => (await foot()).includes('not in the download folder any more'), 6000);
-              const rowStopped = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') !== 'true'`), 6000);
+              const rowStopped = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') !== 'true'`), 6000);
               check('a file that has left the download folder is not handed to the system: the window says so and stops offering it', toldHim && rowStopped && handedOver === '' && ctx.dragsAsked() === askedBefore, [toldHim, rowStopped, handedOver, ctx.dragsAsked() - askedBefore]);
             }
             // A download that failed leaves nothing to drag: there is no file to hand over, so the row and the
@@ -1096,11 +1104,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const lines = (): Promise<number> => js<number>(front.view, `document.querySelectorAll('#fb-moving .fb-moving-one').length`);
               const linesBefore = await lines();
               await lab.tell('failreads 1');
-              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
               const went = await until(async () => (await lines()) > linesBefore, 10_000);
               const settled = await until(async () => (await js<number>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one')].filter((e) => e.querySelector('.fb-stop')).length`)) === 0, 40_000);
               await lab.tell('failreads 0');
-              const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.getAttribute('draggable') === 'true'`);
+              const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') === 'true'`);
               check('a download that failed leaves nothing to drag', went && settled && !offered && ctx.canDrag(front.id) === couldDrag, [went, settled, offered, ctx.canDrag(front.id) - couldDrag]);
             }
             // A number this tab never had, another tab's number, and a number that is not one: each is dropped
@@ -1119,12 +1127,62 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const spare = ctx.openTab(front.box!.id, 'logs')!;
             await until(() => spare.engine.link.phase === 'up', 25_000);
             await until(async () => (await js<number>(spare.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 0, 20_000);
-            await js(spare.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(spare.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
             const spareGotOne = await until(() => ctx.canDrag(spare.id) > 0, 30_000);
             const hadSpare = ctx.canDrag(spare.id);
             const hadFront = ctx.canDrag(front.id);
             ctx.closeTab(spare.id);
             check('a tab that closes takes what it could drag with it, and leaves every other tab whole', spareGotOne && hadSpare > 0 && ctx.canDrag(spare.id) === 0 && ctx.canDrag(front.id) === hadFront, [spareGotOne, hadSpare, ctx.canDrag(spare.id), hadFront, ctx.canDrag(front.id)]);
+            // A small file nobody has brought over: a press on its row fetches it, into Berth's own folder and
+            // never his, so that a drag begun a moment later has something to carry (plan B4.5).
+            {
+              await lab.tell('bigfile /var/log/carry-me.txt 2000');
+              await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+              await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('carry-me.txt'), 10_000);
+              const notYet = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="carry-me.txt"]')?.getAttribute('draggable') === 'true'`);
+              const inDownloads = (await readdir(ctx.downloads).catch(() => [] as string[])).length;
+              handedOver = '';
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="carry-me.txt"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+              const ready = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="carry-me.txt"]')?.getAttribute('draggable') === 'true'`), 30_000);
+              const saidReady = (await foot()).includes('ready to drag');
+              // It is carried, not downloaded: his download folder is untouched, and what is handed over is a
+              // copy in Berth's own folder holding exactly what the box holds.
+              const stillSoMany = (await readdir(ctx.downloads).catch(() => [] as string[])).length;
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="carry-me.txt"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+              const handed = await until(() => handedOver !== '', 5000);
+              const its = createHash('sha256').update(await readFile(handedOver).catch(() => Buffer.alloc(0))).digest('hex');
+              const onTheBox = await lab.tell('hashof var/log/carry-me.txt');
+              check('a press on a small file fetches it so it can be dragged, into Berth\'s own folder and not his download folder', !notYet && ready && saidReady && handed && !handedOver.startsWith(ctx.downloads) && its === onTheBox['sha256'] && stillSoMany === inDownloads, [notYet, ready, saidReady, handedOver.replace(ctx.downloads, '<downloads>'), its === onTheBox['sha256'], inDownloads, stillSoMany]);
+              // A second press changes nothing: it is already here, so no second fetch is started.
+              const held = ctx.canDrag(front.id);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="carry-me.txt"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+              await sleep(600);
+              const fetchingAgain = (await foot()).includes('Fetching carry-me');
+              check('a file already here is not fetched again by another press', !fetchingAgain && ctx.canDrag(front.id) === held, [fetchingAgain, ctx.canDrag(front.id) - held]);
+              await lab.tell('forget var/log/carry-me.txt');
+            }
+            // A file too big to pick up by hand is not fetched by a press: the window says so and leaves it to
+            // the download button, rather than quietly fetching hundreds of megabytes because a row was touched.
+            {
+              await lab.tell('bigfile /var/log/heavy.bin 5000000');
+              await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+              await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('heavy.bin'), 10_000);
+              const couldDrag = ctx.canDrag(front.id);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="heavy.bin"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+              await sleep(1500);
+              const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="heavy.bin"]')?.getAttribute('draggable') === 'true'`);
+              check('a file too big to pick up by hand is not fetched by a press, and is left to the download button', !offered && ctx.canDrag(front.id) === couldDrag, [offered, ctx.canDrag(front.id) - couldDrag]);
+              // And the limit is main's, not the window's. A view that has been taken over does not press rows:
+              // it asks. So the ask is made directly, past everything the window would have checked first.
+              await js(front.view, `window.tabPort.files({ id: 500001, do: 'grab', path: '/var/log/heavy.bin' })`);
+              const refused = await until(async () => (await foot()).includes('too big to pick up by hand'), 20_000);
+              check('the size a press may fetch is main\'s own limit: an ask that goes straight to it is refused', refused && ctx.canDrag(front.id) === couldDrag, [refused, ctx.canDrag(front.id) - couldDrag]);
+              await lab.tell('forget var/log/heavy.bin');
+            }
             ctx.watchDrags(null);
             await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
             await until(() => ctx.shellState().active === front.id, 3000);
