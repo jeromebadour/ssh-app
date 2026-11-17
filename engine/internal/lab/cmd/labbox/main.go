@@ -14,6 +14,7 @@
 //	seen                            {"tries":N,"users":[...],"sessions":[...]}: every sign-in try and session so far
 //	manyfiles <folder> <count>      make a folder with that many things in it, under the box's own files
 //	filepace <ms>                   wait this long before answering each page of a listing
+//	bigfile <path> <bytes>          write a file of that many bytes of real text, under the box's own files
 //	pages                           {"pages":N}: how many pages of a listing it has been asked for in all
 //	keyfile <path> [passphrase]     write a private key file where a person's own would be, in the format
 //	                                OpenSSH writes, and say its public half and fingerprint
@@ -143,6 +144,37 @@ func main() {
 				continue
 			}
 			say(map[string]any{"wrote": where, "publicKey": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), "fingerprint": ssh.FingerprintSHA256(signer.PublicKey())})
+		case "bigfile":
+			// A file larger than the viewer will read, made of real text, so the cap can be driven.
+			where, n, _ := strings.Cut(rest, " ")
+			want := 0
+			for _, c := range n {
+				if c < '0' || c > '9' {
+					want = -1
+					break
+				}
+				want = want*10 + int(c-'0')
+			}
+			if want < 1 || want > 64<<20 {
+				say(map[string]any{"error": "a size between 1 and 67108864"})
+				continue
+			}
+			line := []byte("a line of a file that is larger than the viewer will read\n")
+			var body []byte
+			for len(body) < want {
+				body = append(body, line...)
+			}
+			body = body[:want]
+			full := filepath.Join(files, filepath.FromSlash(strings.TrimPrefix(where, "/")))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			if err := os.WriteFile(full, body, 0o644); err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			say(map[string]any{"wrote": where, "bytes": len(body)})
 		case "pages":
 			say(map[string]any{"pages": hostile.Pages()})
 		case "filepace":

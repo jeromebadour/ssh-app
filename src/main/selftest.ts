@@ -807,6 +807,65 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await lab.tell('filepace 0');
           }
 
+          // Double-click a file: the read-only viewer, with its text, a search through it and zoom. Nothing
+          // in it edits and nothing is ever written back to a box.
+          {
+            await lab.tell('filepace 0');
+            await js(front.view, `document.querySelector('[data-name="syslog"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            const opened = await until(async () => (await js<string>(front.view, `document.getElementById('vw-body')?.textContent ?? ''`)).includes("the box's own log"), 10_000);
+            check('double-clicking a file opens it in the viewer, with the file\'s own text', opened, await js<string>(front.view, `document.getElementById('vw-body')?.textContent ?? ''`));
+            check('and the viewer names the file and says how big it is', (await js<string>(front.view, `document.getElementById('vw-title')?.textContent ?? ''`)) === 'syslog' && (await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`)).includes('lines'), await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`));
+
+            // The search marks what it finds and says how many.
+            await js(front.view, `(() => { const s = document.getElementById('vw-search'); s.value = 'log'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            const marked = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#vw-body .vw-hit').length`)) > 0, 4000);
+            check('the search marks every match and says which one is in view', marked && /\d+ of \d+/.test(await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`)), await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`));
+
+            // Zoom changes the size of what is drawn, and nothing else.
+            const was = await js<string>(front.view, `getComputedStyle(document.getElementById('vw-body')).fontSize`);
+            await clickOn('#vw-in', front);
+            const now = await js<string>(front.view, `getComputedStyle(document.getElementById('vw-body')).fontSize`);
+            check('zoom makes the file bigger', parseFloat(now) > parseFloat(was), [was, now]);
+            await shot('viewer', 'a file from the box, read-only, with a search through it', front);
+
+            // Nothing about the file on the box changed: the viewer only ever reads.
+            const after = await lab.tell('pages');
+            check('the box was never asked to change anything by the viewer', typeof after['pages'] === 'number', after);
+            await clickOn('#vw-close', front);
+            check('the viewer closes and leaves the folder as it was', await until(async () => !(await js<boolean>(front.view, `document.getElementById('viewer') !== null`)), 4000), '');
+
+            // A file larger than the viewer reads: what is past the cap is never read at all, and the viewer
+            // says so rather than pretending it has the whole file.
+            {
+              const big = await lab.tell('bigfile /var/log/huge.log 3145728');
+              check('the lab wrote a file larger than the viewer will read', big['bytes'] === 3_145_728, big);
+              await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 8000);
+              await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('huge.log'), 8000);
+              await js(front.view, `document.querySelector('[data-name="huge.log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              const read = await until(async () => (await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`)).includes('only'), 25_000);
+              const foot = await js<string>(front.view, `document.getElementById('vw-foot')?.textContent ?? ''`);
+              const drawn = await js<number>(front.view, `document.getElementById('vw-body')?.textContent?.length ?? 0`);
+              check('a file larger than the viewer reads is cut, and the viewer says so', read && foot.includes('2.1 MB only') && drawn > 1_000_000 && drawn < 2_300_000, [foot, drawn]);
+              await clickOn('#vw-close', front);
+            }
+
+            // A file that is not text says so rather than drawing a screenful of nonsense.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 8000);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('kit.tar.gz'), 8000);
+            await js(front.view, `document.querySelector('[data-name="kit.tar.gz"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            check('a file that is not text says so, and is not drawn', await until(async () => has('#vw-not-text', front), 10_000), (await js<string>(front.view, `(document.getElementById('vw-body')?.textContent ?? '').slice(0, 120)`)));
+            await clickOn('#vw-close', front);
+            // Back where the rest of this expects to be.
+            await js(front.view, `document.querySelector('[data-name="var"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 8000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), 8000);
+          }
+
           // And the terminal on the same link is untouched by any of it.
           await type(front, 'echo files-did-not-block\n');
           check('the terminal on the same link is untouched by the file browser', await until(async () => (await shown(front)).includes('files-did-not-block'), 10_000), '');
