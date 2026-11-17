@@ -260,6 +260,10 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		w.bytes(buf[:n])
 		return fxpData, w.b
 	case fxpWrite:
+		// A box that takes bytes slowly, so a transfer has a middle to be watched or stopped in.
+		if ms := pace.Load(); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 		key := string(r.str())
 		at := r.u64()
 		data := r.str()
@@ -273,10 +277,33 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			return fxpStatus, status(fxFailure, err.Error())
 		}
 		return fxpStatus, status(fxOK, "")
-	case fxpClose, fxpFsetstat:
+	case fxpFsetstat:
+		// Really done, not merely answered. A lab box that says yes and changes nothing would hide the very
+		// bug this is here to catch: a transfer that thinks it put a file's permissions back and did not.
+		key := string(r.str())
+		flags := r.u32()
+		if flags&0x1 != 0 {
+			_ = r.u64() // a size we are not asked to set
+		}
+		if flags&0x2 != 0 {
+			_, _ = r.u32(), r.u32() // an owner we are not asked to set
+		}
+		s.mu.Lock()
+		f := s.files[key]
+		s.mu.Unlock()
+		if f == nil {
+			return fxpStatus, status(fxFailure, "no such handle")
+		}
+		if flags&0x4 != 0 {
+			if err := f.Chmod(os.FileMode(r.u32() & 0o7777)); err != nil {
+				return fxpStatus, status(codeOf(err), err.Error())
+			}
+		}
+		return fxpStatus, status(fxOK, "")
+	case fxpClose:
 		key := string(r.str())
 		s.mu.Lock()
-		if f := s.files[key]; f != nil && kind == fxpClose {
+		if f := s.files[key]; f != nil {
 			_ = f.Close()
 			delete(s.files, key)
 		}

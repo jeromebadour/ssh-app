@@ -24,7 +24,7 @@ import (
 // an ask that is given up is stopped here rather than read to its end for nobody.
 type fileAsk struct {
 	ID   uint64 `json:"id"`
-	Do   string `json:"do"`   // "list", "stat", "space", "read", "get", "cancel"
+	Do   string `json:"do"`   // "list", "stat", "space", "read", "get", "put", "cancel"
 	Path string `json:"path"` // the folder or file it is about
 	// "get" only, and main's own: a tab's view never names a place on the PC (plan B2.7). Main works out the
 	// folder everything lands in and the one name this file may land under, and the engine takes both as
@@ -32,6 +32,8 @@ type fileAsk struct {
 	Into    string `json:"into,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Replace bool   `json:"replace,omitempty"`
+	// "put" only, and main's own: the whole path of the file on the PC to send. A view never names one.
+	From string `json:"from,omitempty"`
 }
 
 type filePage struct {
@@ -45,11 +47,12 @@ type filePage struct {
 	Space *spaceShown `json:"space,omitempty"`
 	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
 	// "get": how it is going and how it ended.
-	Got     uint64 `json:"got,omitempty"`     // bytes written to the PC so far
-	Of      uint64 `json:"of,omitempty"`      // how big the box said the file is
-	Landed  string `json:"landed,omitempty"`  // the name it was given on the PC, once it is really there
-	Mark    string `json:"mark,omitempty"`    // "checked", "changed" or "not-checked": what its hash proved
-	MarkWhy string `json:"markWhy,omitempty"` // why it could not be checked, where it could not
+	Got      uint64 `json:"got,omitempty"`      // bytes written to the PC so far
+	Of       uint64 `json:"of,omitempty"`       // how big the box said the file is
+	Landed   string `json:"landed,omitempty"`   // the name it was given on the PC, once it is really there
+	Mark     string `json:"mark,omitempty"`     // "checked", "changed" or "not-checked": what its hash proved
+	MarkWhy  string `json:"markWhy,omitempty"`  // why it could not be checked, where it could not
+	Replaced bool   `json:"replaced,omitempty"` // "put": it went in over a file that was already there
 }
 
 type fileRow struct {
@@ -255,6 +258,8 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		return nil
 	case "get":
 		return f.get(ctx, c, a)
+	case "put":
+		return f.put(ctx, c, a)
 	case "stat":
 		at, err := c.Stat(ctx, a.Path)
 		if err != nil {
@@ -298,6 +303,12 @@ func say(err error) string {
 		return "already-there"
 	case errors.Is(err, errNotTheSame):
 		return "not-the-same"
+	case errors.Is(err, errNotAFolder):
+		return "not-a-folder"
+	case errors.Is(err, errInTheWay):
+		return "in-the-way"
+	case errors.Is(err, errNoRoomOnBox):
+		return "box-full"
 	case errors.Is(err, os.ErrPermission):
 		return "pc-denied"
 	}
