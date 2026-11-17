@@ -428,6 +428,75 @@ func TestOpenSSH(t *testing.T) {
 
 			// The one thing this app runs on a box for a transfer (plan B2.5, entry 3): a file's hash, on a
 			// channel of its own, never in the terminal.
+			// The heart of a download, against a real box: the bytes our own file client reads back are the
+			// bytes the box has, and the box's own hash of them is the hash of what we read. The engine does
+			// exactly this and then renames the file into place; what could differ between a lab box and a
+			// real one is this part, which is why it is proved here on both supported server versions.
+			t.Run("a real file read back matches the box's own hash of it", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				dir := "/tmp/berth-get-" + box.name
+				// Three megabytes of a box's own random bytes: more than one read, and nothing this test
+				// could have written through the protocol it is testing.
+				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && head -c 3145728 /dev/urandom > "+dir+"/blob.bin && echo done", 30*time.Second)
+
+				files, err := l.OpenFiles()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+				defer cancel()
+				c, err := sshappsftp.Start(ctx, files)
+				if err != nil {
+					t.Fatalf("the file protocol did not start: %v", err)
+				}
+				defer c.Close()
+
+				at, err := c.Stat(ctx, dir+"/blob.bin")
+				if err != nil || at.Size != 3145728 {
+					t.Fatalf("stat: %v, %d", err, at.Size)
+				}
+				f, err := c.Open(ctx, dir+"/blob.bin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.New()
+				buf := make([]byte, sshappsftp.Block)
+				var got uint64
+				for {
+					n, err := f.ReadAt(ctx, buf, got)
+					if n > 0 {
+						sum.Write(buf[:n])
+						got += uint64(n)
+					}
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						t.Fatalf("reading it back: %v", err)
+					}
+					if n == 0 {
+						break
+					}
+				}
+				_ = f.Close(ctx)
+				if got != at.Size {
+					t.Fatalf("read %d bytes of %d", got, at.Size)
+				}
+				here := hex.EncodeToString(sum.Sum(nil))
+				there, err := l.Hash(ctx, SHA256, dir+"/blob.bin")
+				if err != nil {
+					t.Fatalf("the box did not give a hash: %v", err)
+				}
+				if here != there {
+					t.Fatalf("what came back is not what the box has: read %s, box says %s", here, there)
+				}
+				run(t, l, "rm -rf "+dir+" && echo done", 15*time.Second)
+			})
+
 			t.Run("a file's hash, asked of a real box, matches what it really is", func(t *testing.T) {
 				l, err := Dial(context.Background(), honest, lab.user, Options{})
 				if err != nil {

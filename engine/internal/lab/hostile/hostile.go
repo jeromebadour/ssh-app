@@ -4,9 +4,15 @@
 package hostile
 
 import (
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,23 +44,24 @@ type Config struct {
 
 // Box is a running server.
 type Box struct {
-	ln          net.Listener
-	closed      chan struct{}
-	wg          sync.WaitGroup
-	once        sync.Once
-	mu          sync.Mutex
-	conns       []net.Conn
-	seen        []*Session
-	tries       int // sign-in attempts of any kind, "none" included
-	users       []string
-	accept      ssh.PublicKey // set by Accept: the key let in from then on
-	live        []*out        // the sessions that are open now: each one's way out
-	quiet       bool          // Quiet: the shells send nothing back by themselves
-	stall       bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
-	got         []byte        // every byte the shells were given since the last Received
-	files       string        // the folder its file subsystem answers under; empty means it has none
-	refuseFiles int           // how many more times to say no to the file subsystem, for the lab
-	flood       atomic.Int64  // Flood: bytes the sessions took, in all
+	ln             net.Listener
+	closed         chan struct{}
+	wg             sync.WaitGroup
+	once           sync.Once
+	mu             sync.Mutex
+	conns          []net.Conn
+	seen           []*Session
+	tries          int // sign-in attempts of any kind, "none" included
+	users          []string
+	accept         ssh.PublicKey // set by Accept: the key let in from then on
+	live           []*out        // the sessions that are open now: each one's way out
+	quiet          bool          // Quiet: the shells send nothing back by themselves
+	stall          bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
+	got            []byte        // every byte the shells were given since the last Received
+	files          string        // the folder its file subsystem answers under; empty means it has none
+	refuseFiles    int           // how many more times to say no to the file subsystem, for the lab
+	answerCommands string        // what every command prints instead of the box's own answer, for the lab
+	flood          atomic.Int64  // Flood: bytes the sessions took, in all
 }
 
 // out is one session's way out. Its shell, Print and Flood take turns writing: the library's channel must not be
@@ -214,6 +221,47 @@ type Session struct {
 }
 
 // Sessions is a copy of what every session so far asked for.
+// AnswerCommandsWith makes every command run on this box print this and nothing else. Empty puts back the
+// box's own answer, which is a real hash of a real file for the two hash commands.
+func (b *Box) AnswerCommandsWith(text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.answerCommands = text
+}
+
+// hashOfItsOwn answers the two hash commands the app may run (plan B2.5, entry 3) the way a box does: the real
+// hash of the real file, then two spaces and the path it was asked about. Anything else gets nothing.
+func hashOfItsOwn(cmd, files string) string {
+	var which string
+	switch {
+	case strings.HasPrefix(cmd, "sha256sum -- '"):
+		which = "sha256sum"
+	case strings.HasPrefix(cmd, "md5sum -- '"):
+		which = "md5sum"
+	default:
+		return ""
+	}
+	rest := strings.TrimPrefix(cmd, which+" -- '")
+	if !strings.HasSuffix(rest, "'") {
+		return ""
+	}
+	// Undo the one way out of single quotes a shell has, which is how the app writes a name holding a quote.
+	path := strings.ReplaceAll(strings.TrimSuffix(rest, "'"), `'\''`, "'")
+	if files == "" {
+		return "sh: " + which + ": not found\n"
+	}
+	b, err := os.ReadFile(filepath.Join(files, filepath.FromSlash(path)))
+	if err != nil {
+		return "sh: " + which + ": no such file or directory\n"
+	}
+	if which == "md5sum" {
+		sum := md5.Sum(b)
+		return hex.EncodeToString(sum[:]) + "  " + path + "\n"
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]) + "  " + path + "\n"
+}
+
 // RefuseFiles makes the box say no to the next n asks for its file subsystem.
 func (b *Box) RefuseFiles(n int) {
 	b.mu.Lock()
@@ -298,6 +346,25 @@ func (b *Box) session(nc ssh.NewChannel) {
 	case <-started:
 	case <-b.closed:
 		return
+	}
+	// A command run on its own channel is answered and the channel closed, as a real box does. By default the
+	// box works out a real hash of its own file, so that what a download compares is a box's own answer about
+	// its own bytes and not something a test wrote down; AnswerCommandsWith replaces that with whatever is
+	// wanted, which is how a wrong or shapeless answer is put in front of the app.
+	b.mu.Lock()
+	cmd, instead, files := s.Command, b.answerCommands, b.files
+	b.mu.Unlock()
+	if cmd != "" {
+		answer := instead
+		if answer == "" {
+			answer = hashOfItsOwn(cmd, files)
+		}
+		if answer != "" {
+			_, _ = ch.Write([]byte(answer))
+			_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+			_ = ch.Close()
+			return
+		}
 	}
 	way := &out{ch: ch}
 	b.mu.Lock()

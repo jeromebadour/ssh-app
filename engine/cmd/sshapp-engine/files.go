@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"sshapp/engine/internal/frame"
@@ -22,8 +24,14 @@ import (
 // an ask that is given up is stopped here rather than read to its end for nobody.
 type fileAsk struct {
 	ID   uint64 `json:"id"`
-	Do   string `json:"do"`   // "list", "stat", "space", "read", "cancel"
+	Do   string `json:"do"`   // "list", "stat", "space", "read", "get", "cancel"
 	Path string `json:"path"` // the folder or file it is about
+	// "get" only, and main's own: a tab's view never names a place on the PC (plan B2.7). Main works out the
+	// folder everything lands in and the one name this file may land under, and the engine takes both as
+	// given, checking only that the name really is a name and nothing else.
+	Into    string `json:"into,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Replace bool   `json:"replace,omitempty"`
 }
 
 type filePage struct {
@@ -36,6 +44,11 @@ type filePage struct {
 	Where string      `json:"where,omitempty"` // "list": the folder as the box itself names it
 	Space *spaceShown `json:"space,omitempty"`
 	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
+	// "get": how it is going and how it ended.
+	Got    uint64 `json:"got,omitempty"`    // bytes written to the PC so far
+	Of     uint64 `json:"of,omitempty"`     // how big the box said the file is
+	Landed string `json:"landed,omitempty"` // the name it was given on the PC, once it is really there
+	Mark   string `json:"mark,omitempty"`   // "checked", "changed" or "not-checked": what its hash proved
 }
 
 type fileRow struct {
@@ -239,6 +252,8 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 			f.page(filePage{ID: a.ID, More: true})
 		}
 		return nil
+	case "get":
+		return f.get(ctx, c, a)
 	case "stat":
 		at, err := c.Stat(ctx, a.Path)
 		if err != nil {
@@ -276,6 +291,17 @@ func say(err error) string {
 		return "unsupported"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "no-answer"
+	case errors.Is(err, errNotAName):
+		return "not-a-name"
+	case errors.Is(err, errAlreadyThere):
+		return "already-there"
+	case errors.Is(err, errNotTheSame):
+		return "not-the-same"
+	case errors.Is(err, os.ErrPermission):
+		return "pc-denied"
+	}
+	if errors.Is(err, syscall.ENOSPC) {
+		return "pc-full"
 	}
 	return "failed"
 }
