@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,7 +123,14 @@ type fileServer struct {
 
 // serveFiles answers the file protocol on one channel, under this folder.
 func serveFiles(ch io.ReadWriteCloser, root string) {
-	s := &fileServer{root: root, dirs: map[string][]os.DirEntry{}, files: map[string]*os.File{}}
+	// The root is resolved once, here, and every path is compared against that one. Windows hands the same
+	// folder out under two names (C:\Users\RUNNER~1\... and C:\Users\runneradmin\...), and a path that
+	// came back resolved then matched none of the root, so the whole of a machine path was handed on as if
+	// it were a path on the box: the box was asked to open its own root with a PC path stuck on the end.
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	s := &fileServer{root: filepath.Clean(root), dirs: map[string][]os.DirEntry{}, files: map[string]*os.File{}}
 	defer func() {
 		s.mu.Lock()
 		for _, f := range s.files {
@@ -170,16 +178,33 @@ func serveFiles(ch io.ReadWriteCloser, root string) {
 func (s *fileServer) asBox(p string) string {
 	here := filepath.ToSlash(p)
 	root := filepath.ToSlash(s.root)
-	cut := strings.TrimPrefix(here, root)
-	if cut == "" || cut == "/" {
+	cut, ok := without(here, root)
+	if !ok || cut == "" || cut == "/" {
 		return "/"
 	}
 	return path.Clean("/" + strings.TrimPrefix(cut, "/"))
 }
 
+// without takes the root off the front of a path on this machine. Windows names the same folder in more than
+// one way and does not care about case, so the comparison there is made without case; anywhere else it is
+// exact, as the filesystem is.
+func without(here, root string) (string, bool) {
+	if runtime.GOOS == "windows" {
+		if len(here) >= len(root) && strings.EqualFold(here[:len(root)], root) {
+			return here[len(root):], true
+		}
+		return here, false
+	}
+	if strings.HasPrefix(here, root) {
+		return strings.TrimPrefix(here, root), true
+	}
+	return here, false
+}
+
 func (s *fileServer) under(raw []byte) string {
 	asked := filepath.ToSlash(string(raw))
-	clean := path.Clean("/" + strings.TrimPrefix(asked, filepath.ToSlash(s.root)))
+	cut, _ := without(asked, filepath.ToSlash(s.root))
+	clean := path.Clean("/" + strings.TrimPrefix(cut, "/"))
 	return filepath.Join(s.root, filepath.FromSlash(clean))
 }
 
