@@ -53,7 +53,8 @@ const (
 	fxFailure
 )
 
-// pace is how long the lab box waits before answering each page of a listing. It is a lab knob: it makes a
+// pace is how long the lab box waits before answering each page of a listing, and each piece of a file read.
+// It is a lab knob: it makes a
 // listing take a known amount of time without needing a folder with a hundred thousand things in it, so what
 // the window does with a listing still arriving can be driven and proven.
 var pace atomic.Int64
@@ -216,6 +217,10 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		w.str(key)
 		return fxpHandle, w.b
 	case fxpRead:
+		// A box that answers slowly, so that a transfer has a middle to be stopped in or watched during.
+		if ms := pace.Load(); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 		key := string(r.str())
 		at := r.u64()
 		want := r.u32()
