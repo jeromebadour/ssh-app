@@ -299,7 +299,7 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'cancel';
   path: string;
 }
 
@@ -319,4 +319,6 @@ export interface FilePage {
   where?: string; // a listing: the folder as the box itself names it
   space?: { total: number; free: number };
   attrs?: FileRow;
+  data?: string; // a file being read: a piece of it, base64, in order from its start
+  more?: boolean; // a file being read: it goes on past what Berth will read into a viewer
 }

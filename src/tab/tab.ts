@@ -4,7 +4,8 @@ import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
 import { drawChrome, folded, type Chrome } from './chrome';
-import { startFiles } from './files';
+import { makeAsker, startFiles } from './files';
+import { startViewer } from './viewer';
 import { clock } from './states';
 import { openTerminal, type Term } from './term';
 
@@ -124,7 +125,9 @@ const draw = (): void => drawChrome(chromeAt, signInAt, chrome);
 let last = '';
 // The tab's file browser, on its own channel to the box. It is asked for a folder once the link is up: before
 // that there is nothing to ask.
-const files = startFiles(document.getElementById('files') as HTMLDivElement, port);
+const asker = makeAsker(port);
+const viewer = startViewer(document.body, port, asker);
+const files = startFiles(document.getElementById('files') as HTMLDivElement, port, asker, (p, n, b) => viewer.open(p, n, b));
 let askedFor = '';
 
 port.onState((info) => {

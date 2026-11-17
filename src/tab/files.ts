@@ -17,6 +17,23 @@ const WHY: Record<string, string> = {
   failed: 'That folder could not be read',
 };
 
+// Every ask on the tab's one file channel takes a number from here, so the browser and the viewer can both
+// use it and each knows which pages are its own.
+export interface Asker {
+  ask(a: Omit<FileAsk, 'id'> & { id?: number }): number;
+}
+
+export function makeAsker(port: TabPort): Asker {
+  let next = 1;
+  return {
+    ask(a) {
+      const id = a.id && a.id > 0 ? a.id : next++;
+      port.files({ id, do: a.do, path: a.path });
+      return id;
+    },
+  };
+}
+
 export interface Files {
   open(path: string): void; // list this folder
   shown(): string; // the folder on screen now, as the box names it
@@ -24,9 +41,8 @@ export interface Files {
   draw(): void;
 }
 
-export function startFiles(at: HTMLElement, port: TabPort): Files {
+export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFile: (path: string, name: string, bytes: number) => void): Files {
   let asking = 0; // the number of the listing being drawn; pages of any other are dropped
-  let next = 1;
   let where = ''; // the folder as the box itself names it
   let asked = ''; // what was asked for, until the box says what it really is
   let rows: FileRow[] = [];
@@ -46,11 +62,11 @@ export function startFiles(at: HTMLElement, port: TabPort): Files {
   el.foot.id = 'fb-foot';
   at.append(el.path, el.list, el.foot);
 
-  const ask = (a: FileAsk) => port.files(a);
+  const ask = (a: FileAsk) => asker.ask(a);
 
   const open = (path: string) => {
     if (asking !== 0) ask({ id: asking, do: 'cancel', path: '' }); // the one running is abandoned, not read on
-    asking = next++;
+    asking = asker.ask({ do: 'list', path });
     asked = path;
     where = '';
     rows = [];
@@ -58,7 +74,6 @@ export function startFiles(at: HTMLElement, port: TabPort): Files {
     space = null;
     busy = true;
     draw();
-    ask({ id: asking, do: 'list', path });
   };
 
   port.onFilePage((p: FilePage) => {
@@ -113,7 +128,10 @@ export function startFiles(at: HTMLElement, port: TabPort): Files {
         frag.append(row({ name: '..', kind: 'folder', size: 0, mode: 0, mtime: 0 }, () => open(up), 'fb-up'));
       }
       for (const r of rows) {
-        frag.append(row(r, r.kind === 'folder' ? () => open(join(here, r.name)) : undefined));
+        // A folder is gone into; a file is opened in the viewer, read-only. Anything else is neither, and is
+        // shown with what it is rather than opened at all (plan B4.1).
+        const enter = r.kind === 'folder' ? () => open(join(here, r.name)) : r.kind === 'file' ? () => openFile(join(here, r.name), r.name, r.size) : undefined;
+        frag.append(row(r, enter));
       }
       el.list.append(frag);
     }
@@ -201,7 +219,7 @@ export function shorten(p: string, most: number): string {
 // The app's own glyphs, drawn for this pane: each kind of thing in a folder says what it is without reading
 // (BUILD-RULES 2.1). They are built here rather than taken from the window's set, because a tab's page holds
 // no part of the window.
-const SHAPES: Record<string, string> = {
+export const SHAPES: Record<string, string> = {
   folder: 'M2.5 4.5h4l1.5 1.5h5.5v7h-11z',
   file: 'M4 2.5h5l3 3v8H4zM9 2.5v3h3',
   link: 'M6.5 9.5l3-3M5.5 7.5l-1 1a2.1 2.1 0 0 0 3 3l1-1M10.5 8.5l1-1a2.1 2.1 0 0 0-3-3l-1 1',
@@ -210,9 +228,14 @@ const SHAPES: Record<string, string> = {
   socket: 'M8 2.5v4M4.5 6.5h7v3a3.5 3.5 0 0 1-7 0zM8 13v1.5',
   unknown: 'M8 11.5v.25M6.2 6a1.8 1.8 0 1 1 1.8 2.2v1',
   up: 'M8 12.5V4M4.5 7.5L8 4l3.5 3.5',
+  down: 'M8 3.5V12M4.5 8.5L8 12l3.5-3.5',
+  find: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5',
+  zoomIn: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5M5.2 7H8.8M7 5.2v3.6',
+  zoomOut: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5M5.2 7H8.8',
+  close: 'M4.5 4.5l7 7M11.5 4.5l-7 7',
 };
 
-function glyph(kind: string): SVGSVGElement {
+export function glyph(kind: string): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('class', 'fb-glyph');
   svg.setAttribute('viewBox', '0 0 16 16');
