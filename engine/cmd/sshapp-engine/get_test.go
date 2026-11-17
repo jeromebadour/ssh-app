@@ -338,3 +338,79 @@ func TestAFileThatChangedOnTheBoxWhileItWasReadIsDeliveredAndSaidToHaveChanged(t
 		t.Fatalf("it was not delivered: %v", err)
 	}
 }
+
+// A download that broke leaves what it had, and the next try reads on from there rather than starting again.
+// What is checked at the end still covers the whole file, so one put together from two tries is only
+// delivered if the box agrees about all of it.
+func TestADownloadThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
+	r, box := withFiles(t)
+	want := writeOnTheBox(t, box, "half.bin", 600_000)
+	onto := t.TempDir()
+	// Half of it is already there, under the name a half-written download has.
+	part := filepath.Join(onto, ".berth-half.bin.part")
+	if err := os.WriteFile(part, want[:300_000], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 81, "do": "get", "path": "/half.bin", "into": onto, "name": "half.bin", "resume": true})
+	ps := pages(r.wait("the download to end", ended(81)), 81)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v", e)
+	}
+	if last(ps, "resumedAt") != float64(300_000) {
+		t.Fatalf("it did not say where it was taken up: %v", ps)
+	}
+	if last(ps, "mark") != "checked" {
+		t.Fatalf("a file put together from two tries was not checked: %v", ps)
+	}
+	got, err := os.ReadFile(filepath.Join(onto, "half.bin"))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("what arrived is not what the box has (%v, %d of %d)", err, len(got), len(want))
+	}
+	if left, _ := os.ReadDir(onto); len(left) != 1 {
+		t.Fatalf("the half-written file was left behind: %v", names(left))
+	}
+}
+
+// Half of something else, under the same name: the hash covers the whole file, so it cannot be delivered.
+// Nothing is kept, because what is there is known to be wrong rather than merely unfinished.
+func TestADownloadTakenUpFromTheWrongBytesIsNeverDelivered(t *testing.T) {
+	r, box := withFiles(t)
+	writeOnTheBox(t, box, "half.bin", 400_000)
+	onto := t.TempDir()
+	part := filepath.Join(onto, ".berth-half.bin.part")
+	if err := os.WriteFile(part, make([]byte, 200_000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 82, "do": "get", "path": "/half.bin", "into": onto, "name": "half.bin", "resume": true})
+	ps := pages(r.wait("the refusal", ended(82)), 82)
+	if last(ps, "error") != "not-the-same" {
+		t.Fatalf("a file taken up from the wrong bytes was delivered: %v", ps)
+	}
+	if left, _ := os.ReadDir(onto); len(left) != 0 {
+		t.Fatalf("bytes known to be wrong were kept: %v", names(left))
+	}
+}
+
+// A download that is not taking anything up starts from nothing, whatever is lying there.
+func TestADownloadThatIsNotTakingAnythingUpStartsFromNothing(t *testing.T) {
+	r, box := withFiles(t)
+	want := writeOnTheBox(t, box, "half.bin", 50_000)
+	onto := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onto, ".berth-half.bin.part"), make([]byte, 40_000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 83, "do": "get", "path": "/half.bin", "into": onto, "name": "half.bin"})
+	ps := pages(r.wait("the download to end", ended(83)), 83)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v", e)
+	}
+	if last(ps, "resumedAt") != nil {
+		t.Fatalf("it took something up without being asked to: %v", ps)
+	}
+	if got, _ := os.ReadFile(filepath.Join(onto, "half.bin")); string(got) != string(want) {
+		t.Fatalf("what arrived is not what the box has")
+	}
+}

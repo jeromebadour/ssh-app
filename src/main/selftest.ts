@@ -997,6 +997,36 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await lab.tell('filepace 0');
             check('a transfer under way can be stopped, and nothing of it is left on the PC', partWay && stops === 1 && clicked && stopped && back && !after.includes('wide.log'), [partWay, stops, clicked, ctx.filesAsked(), await foot(), before.length, after]);
           }
+          // A download that breaks part way, and the next try taking it up where it stopped. This is the one
+          // that matters on a link that drops: the bytes already here are kept, the rest is asked for, and
+          // what is checked at the end still covers the whole file.
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            const made = await lab.tell('bigfile var/log/broken.log 3000000');
+            check('the lab made a file to break a download in the middle of', made['bytes'] === 3000000, made);
+            // The box stops answering a third of the way in, which is what a link going down looks like.
+            await lab.tell('failreads 1000000');
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('broken.log'), 10_000);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-get:not(.fb-sum)')?.click()`);
+            const brokeSaid = await until(async () => (await foot()).includes('could not be brought over'), 30_000);
+            // What it had is still there, under the name a half-written download has, and the file itself is
+            // not in the folder under its own name.
+            const halfWay = await readdir(ctx.downloads).catch(() => [] as string[]);
+            check('a download that breaks says so, keeps what it had, and nothing is there under the file\'s own name', brokeSaid && halfWay.includes('.berth-broken.log.part') && !halfWay.includes('broken.log'), [await foot(), halfWay]);
+            // The box answers again, and the same press takes it up where it stopped.
+            await lab.tell('failreads 0');
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-get:not(.fb-sum)')?.click()`);
+            const done = await until(async () => (await foot()).includes('is in the download folder'), 40_000);
+            const said = await foot();
+            const after = await readdir(ctx.downloads).catch(() => [] as string[]);
+            const itsHash = createHash('sha256').update(await readFile(path.join(ctx.downloads, 'broken.log')).catch(() => Buffer.alloc(0))).digest('hex');
+            const onTheBox = await lab.tell('hashof var/log/broken.log');
+            check('the next try takes it up where it stopped, and the whole file is what the box has', done && said.includes('taken up where it broke') && said.includes('checked against the box') && !after.includes('.berth-broken.log.part') && itsHash === onTheBox['sha256'], [said, after, itsHash === onTheBox['sha256']]);
+            await lab.tell('forget var/log/broken.log');
+          }
           // Sending a file from the PC to the box. Which file leaves this PC is answered in the system's own
           // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
           // part is only naming the folder it is looking at.

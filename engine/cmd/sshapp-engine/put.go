@@ -21,7 +21,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -116,41 +115,82 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		return errNoRoomOnBox
 	}
 
-	temp := path.Join(into, fmt.Sprintf(".berth-%d.part", a.ID))
-	_ = c.Remove(ctx, temp) // one left by a run of ours that was killed outright
-	to, err := c.Create(ctx, temp, 0o600)
+	// The same half-written name every time, taken from the name the file will have, so a send that broke can
+	// be taken up where it stopped rather than started again from nothing.
+	temp := path.Join(into, partName(a.Name))
+	var sent uint64
+	if a.Resume {
+		if had, err := c.Lstat(ctx, temp); err == nil && had.IsFile() && had.Size <= size {
+			sent = had.Size
+		}
+	}
+	if sent == 0 {
+		_ = c.Remove(ctx, temp) // one left by a try of ours that will not be taken up
+	}
+	var to *sftp.File
+	if sent > 0 {
+		to, err = c.WriteOn(ctx, temp)
+		if err != nil {
+			sent = 0 // it cannot be written on after all: start again from nothing
+		}
+	}
+	if sent == 0 {
+		_ = c.Remove(ctx, temp)
+		to, err = c.Create(ctx, temp, 0o600)
+	}
 	if err != nil {
 		return err
 	}
-	moved := false
+	if sent > 0 {
+		f.page(filePage{ID: a.ID, Got: sent, Of: size, ResumedAt: sent})
+	}
+	// A clean finish moves it into place. One given up on by hand, or one the box disagrees with, takes its
+	// half-written file with it; anything else leaves it for the next try to read on from.
+	moved, binIt := false, false
 	defer func() {
 		done, stop := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer stop()
 		_ = to.Close(done)
-		if !moved {
+		if moved {
+			return
+		}
+		if binIt || ctx.Err() != nil {
 			_ = c.Remove(done, temp)
 		}
 	}()
 
+	// The whole of the file on the PC is read and hashed, however much of it has already gone over: what is
+	// compared at the end covers the whole file, so one put together from two tries is checked as one file.
 	sum := sha256.New()
 	buf := make([]byte, sftp.Block)
-	var sent uint64
+	var read uint64
 	said := time.Now()
-	f.page(filePage{ID: a.ID, Got: 0, Of: size})
+	if sent == 0 {
+		f.page(filePage{ID: a.ID, Got: 0, Of: size})
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		n, err := from.Read(buf)
 		if n > 0 {
-			if _, werr := to.WriteAt(ctx, buf[:n], sent); werr != nil {
-				return werr
+			if read+uint64(n) > sent {
+				begin := uint64(0)
+				if read < sent {
+					begin = sent - read
+				}
+				if _, werr := to.WriteAt(ctx, buf[begin:n], read+begin); werr != nil {
+					return werr
+				}
+				if read+uint64(n) > sent {
+					sent = read + uint64(n)
+				}
 			}
 			sum.Write(buf[:n])
-			sent += uint64(n)
+			read += uint64(n)
 			if time.Since(said) >= sayEvery {
 				said = time.Now()
-				f.page(filePage{ID: a.ID, Got: sent, Of: size})
+				f.page(filePage{ID: a.ID, Got: read, Of: size})
 			}
 		}
 		if errors.Is(err, io.EOF) {
@@ -193,6 +233,7 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		if serr == nil && (now.Size() != was.Size() || !now.ModTime().Equal(was.ModTime())) {
 			mark = "changed"
 		} else {
+			binIt = true
 			return errNotTheSame
 		}
 	}
@@ -201,6 +242,6 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		return err
 	}
 	moved = true
-	f.page(filePage{ID: a.ID, Got: sent, Of: size, Landed: a.Name, Mark: mark, MarkWhy: why, Replaced: replacing})
+	f.page(filePage{ID: a.ID, Got: read, Of: size, Landed: a.Name, Mark: mark, MarkWhy: why, Replaced: replacing})
 	return nil
 }

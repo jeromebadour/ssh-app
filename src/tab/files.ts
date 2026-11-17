@@ -106,7 +106,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
   // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
   // more than one at a time, and the strip at the foot says what each is doing.
-  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; ended: string };
+  type Bringing = { name: string; way: 'in' | 'out'; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; replaced: boolean; asking: string; tookUpAt: number; ended: string };
   const bringing = new Map<number, Bringing>();
 
   const el = {
@@ -202,6 +202,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (typeof p.renamed === 'string') down.renamed = p.renamed;
       if (p.replaced === true) down.replaced = true;
       if (typeof p.asking === 'string') down.asking = p.asking;
+      if (typeof p.resumedAt === 'number' && p.resumedAt > 0) down.tookUpAt = p.resumedAt;
       if (p.done) {
         down.asking = '';
         const words = down.way === 'in' ? DOWNLOAD_WHY : SEND_WHY;
@@ -210,8 +211,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
           : down.landed === ''
             ? 'It was stopped'
             : down.way === 'in'
-              ? `${down.landed} is in the download folder, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
-              : `${down.landed} is on the box${down.replaced ? ', over the file that was there' : ''}, ${SENT_MARK[down.mark] ?? 'but it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}`;
+              ? `${down.landed} is in the download folder${down.tookUpAt > 0 ? ', taken up where it broke' : ''}, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
+              : `${down.landed} is on the box${down.replaced ? ', over the file that was there' : ''}${down.tookUpAt > 0 ? ', taken up where it broke' : ''}, ${SENT_MARK[down.mark] ?? 'but it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}`;
         down.at = performance.now();
       }
       draw();
@@ -321,7 +322,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       const name = shorten(b.landed === '' ? b.name : b.landed, 28);
       // Until the other end has said how big it is there is nothing worth counting, so nothing is counted.
       const far = b.of > 0 ? ` ${size(b.got)} of ${size(b.of)}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}` : '';
-      lines.push(`${b.way === 'out' ? 'Sending ' : ''}${name}${far}`);
+      const tookUp = b.tookUpAt > 0 ? `, taken up at ${size(b.tookUpAt)}` : '';
+      lines.push(`${b.way === 'out' ? 'Sending ' : ''}${name}${far}${tookUp}`);
     }
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
@@ -563,7 +565,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (b.name === name && b.ended === '') return; // already on its way
     }
     const id = asker.ask({ do: 'get', path: join(where || asked, name) });
-    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', ended: '' });
+    bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
     draw();
   };
 
@@ -588,7 +590,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const here = where || asked;
     if (here === '' || busy) return;
     const id = asker.ask({ do: 'put', path: here });
-    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', ended: '' });
+    bringing.set(id, { name: 'a file from the PC', way: 'out', got: 0, of: 0, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '' });
     draw();
   };
 
