@@ -57,6 +57,7 @@ export class Boxes {
   settings: AppSettings = { ...SETTINGS_DEFAULT };
   loaded = false;
   fault = ''; // the list opened but its boxes could not be read: said, and nothing is overwritten
+  faultId = ''; // the id of that fault's line in the local log, so the window can say which failure it is
   private readonly checks = new Map<string, Checking>();
   private saving: Promise<unknown> = Promise.resolve();
 
@@ -66,16 +67,27 @@ export class Boxes {
     private readonly blockTemplate: string,
     private readonly changed: () => void,
     private readonly now: () => Date = () => new Date(),
+    // How a failure of the list itself is written down. It is given from outside so this class knows nothing
+    // of files, and it is handed the app's own words and a box's id, never a box's name: the log is read by
+    // whoever can read that folder (src/main/faultlog.ts says why).
+    private readonly writeDown: (f: { what: string; detail: string; box?: string }) => string = () => '',
   ) {}
+
+  // One failure of the list itself: said in the window, and written down with an id the window can say.
+  private wentWrong(said: string, logged: string, box?: string): void {
+    this.fault = said;
+    this.faultId = this.writeDown({ what: 'boxes', detail: logged, ...(box ? { box } : {}) });
+  }
 
   // After unlock: what the key process opened. The key names it holds must be the boxes' own, one each.
   load(publicPart: unknown, keyInfos: unknown): void {
     this.list = [];
     this.fault = '';
+    this.faultId = '';
     this.checks.clear();
     this.settings = readSettings(publicPart);
     const boxes = readBoxes(publicPart);
-    if (!boxes) this.fault = 'the list of boxes inside the locked list cannot be read';
+    if (!boxes) this.wentWrong('the list of boxes inside the locked list cannot be read', 'the list opened but its boxes could not be read');
     else {
       const held = new Map<string, { box: string; user: string; publicKey: string }>();
       if (Array.isArray(keyInfos)) {
@@ -86,7 +98,7 @@ export class Boxes {
       for (const b of boxes) {
         const k = held.get(b.id);
         if (!k || k.box !== b.id || k.user !== b.user || k.publicKey !== b.publicKey) {
-          this.fault = `the box "${b.name}" and its key do not belong together`;
+          this.wentWrong(`the box "${b.name}" and its key do not belong together`, 'a box and its key do not belong together', b.id);
           this.list = [];
           break;
         }
@@ -132,7 +144,7 @@ export class Boxes {
         // holds a key no box knows about, and that is said here and now, not found out later.
         const undone = await this.keys.request('deleteKey', { key: id });
         const also = undone.ok ? '' : `. Its key could not be taken out again (${String(undone.detail ?? undone.error ?? '')}): a key with no box is in the list`;
-        if (!undone.ok) this.fault = `a key was made for "${d.name}" and the box could not be saved, and the key could not be taken out again`;
+        if (!undone.ok) this.wentWrong(`a key was made for "${d.name}" and the box could not be saved, and the key could not be taken out again`, 'a key was made, the box could not be saved, and the key could not be taken out again');
         return { ok: false, error: `not saved: ${String(saved.detail ?? saved.error ?? '')}${also}` };
       }
       return { ok: true, id };
@@ -173,7 +185,7 @@ export class Boxes {
         if (d.user !== was.user) {
           const back = await this.keys.request('rebind', { key: id, box: id, user: was.user });
           if (!back.ok) {
-            this.fault = `the key for "${was.name}" is bound to ${d.user} and the saved box still says ${was.user}`;
+            this.wentWrong(`the key for "${was.name}" is bound to ${d.user} and the saved box still says ${was.user}`, 'a key is bound to a user the saved box does not have', was.id);
             also = `. Its key could not be bound back to ${was.user} (${String(back.detail ?? back.error ?? '')}): the key and the saved box no longer agree`;
           }
         }

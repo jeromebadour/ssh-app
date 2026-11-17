@@ -307,8 +307,14 @@ test('what was saved is read back whole or not at all, and a box must be with it
     assert.equal(readBoxes(copy), null, what);
   }
 
-  // Loaded again as after an unlock: each box must come with the key the key process holds for it.
-  const again = new Boxes(w.keys, () => ({ done: new Promise(() => undefined), cancel: () => undefined }), '{KEY}', () => undefined);
+  // Loaded again as after an unlock: each box must come with the key the key process holds for it. The
+  // failures of the list itself are written down as they happen, and what is written down is checked here
+  // rather than in the lab: the lab cannot make a list whose keys and boxes disagree.
+  const written: { what: string; detail: string; box?: string }[] = [];
+  const again = new Boxes(w.keys, () => ({ done: new Promise(() => undefined), cancel: () => undefined }), '{KEY}', () => undefined, () => new Date(), (f) => {
+    written.push(f);
+    return `LG${String(written.length).padStart(4, '0')}`;
+  });
   again.load(saved, w.keys.infos());
   assert.deepEqual([again.fault, again.list.length], ['', 2]);
   const id = w.boxes.list[0]!.id;
@@ -319,10 +325,27 @@ test('what was saved is read back whole or not at all, and a box must be with it
     again.load(saved, k2.infos());
     assert.equal(again.list.length, 0);
     assert.match(again.fault, /do not belong together/);
+    // It was written down, with an id the window can say, and the line names the box by its id alone: the
+    // log sits in the clear beside the encrypted list, so a box's name in it would be the one thing there
+    // that is readable (src/main/faultlog.ts).
+    const last = written.at(-1)!;
+    assert.equal(again.faultId, `LG${String(written.length).padStart(4, '0')}`);
+    assert.equal(last.what, 'boxes');
+    assert.equal(last.detail, 'a box and its key do not belong together');
+    assert.equal(last.box, id);
+    assert.ok(!last.detail.includes('lab'), last.detail);
+    for (const b of w.boxes.list) assert.ok(!last.detail.includes(b.name), `${last.detail} names ${b.name}`);
     assert.equal((await again.add(draft({ name: 'third' }))).ok, false); // nothing is added on top of a list that could not be read
   }
   again.load({ v: 3 }, []);
   assert.match(again.fault, /cannot be read/);
+  assert.equal(written.at(-1)!.detail, 'the list opened but its boxes could not be read');
+  assert.equal(written.at(-1)!.box, undefined);
+  assert.notEqual(again.faultId, '');
+  // And a list that opened cleanly leaves nothing behind: no fault, no id, nothing written.
+  const wasWritten = written.length;
+  again.load(saved, w.keys.infos());
+  assert.deepEqual([again.fault, again.faultId, written.length], ['', '', wasWritten]);
 });
 
 // The settings live in the same locked list as the boxes, and are written by the same save. That matters most
