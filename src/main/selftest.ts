@@ -50,6 +50,8 @@ interface Ctx {
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
   keysRefused(): number;
+  overlayOn(): boolean;
+  windowInUse(): boolean;
   downloads: string;
   filesAsked(): Record<string, number>;
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
@@ -847,8 +849,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               await until(() => ctx.shellState().active === front.id, 3000);
               ctx.win.focus();
               await until(() => ctx.win.isFocused(), 4000);
-              await js(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus()`);
-              const onAFile = await js<boolean>(front.view, `document.activeElement?.classList.contains('fb-row') === true`);
+              // The list is drawn again whenever anything it says changes, and a row drawn again is a new row
+              // that holds no focus. So the focus is asked for until it sticks, rather than asked for once and
+              // read a moment later: otherwise this probe is about what the pane happened to be doing.
+              const onAFile = await until(async () => js<boolean>(front.view, `(document.querySelector('#fb-list .fb-row[tabindex="0"]')?.focus(), document.activeElement?.classList.contains('fb-row') === true)`), 4000);
               await tap('Tab', ['control']);
               const switched = await until(() => ctx.shellState().active === spare.id, 3000);
               const stayedPut = (await standing()) === before;
@@ -2383,6 +2387,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         w.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
         w.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
       };
+      // A window key is refused outright when the window is not the one in use, and that refusal is right.
+      // So the window is put in use and that is waited for before any of these presses: without it a probe
+      // about which tab is in front would quietly become a probe about how the machine hands out focus, and
+      // would fail saying the key did nothing when what really happened is that it was never ours to act on.
+      ctx.win.focus();
+      const inUseForKeys = await until(() => ctx.win.isFocused() && !ctx.overlayOn(), 4000);
+      // Both of the reasons main refuses a window key are said in each detail below, so a failure here names
+      // which of them it was rather than leaving it to be guessed at.
+      const keysCouldWork = (): unknown[] => [`in use: ${ctx.windowInUse()}`, `a dialog over it: ${ctx.overlayOn()}`];
       const ids = [...ctx.tabs.keys()];
       const nextAlong = ids[(ids.indexOf(t.id) + 1) % ids.length]!;
       await boxGot();
@@ -2394,20 +2407,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const moved = await until(() => ctx.shellState().active === nextAlong, 2000);
       const keyToBox = await boxGot();
       const pageSaw = await js<string[]>(t.view, `window.__keysSeen`);
-      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', moved && ids.length > 1 && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [ids.length, ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
+      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', inUseForKeys && moved && ids.length > 1 && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [inUseForKeys, ...keysCouldWork(), ids.length, ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
       press(t.view.webContents, 'Tab', ['control', 'shift']);
-      check('and Ctrl+Shift+Tab moves back the other way', await until(() => ctx.shellState().active === t.id, 2000), [ctx.shellState().active, t.id]);
+      check('and Ctrl+Shift+Tab moves back the other way', (await until(() => ctx.shellState().active === t.id, 2000)) && inUseForKeys, [inUseForKeys, ...keysCouldWork(), ctx.shellState().active, t.id]);
       press(t.view.webContents, '1', ['control', 'alt']);
       const toTheFirst = await until(() => ctx.shellState().active === ids[0], 2000);
       press(t.view.webContents, '9', ['control', 'alt']);
       const toTheLast = await until(() => ctx.shellState().active === ids[ids.length - 1], 2000);
-      check('Ctrl+Alt and a number reaches that tab, and 9 is the last one however many there are', toTheFirst && toTheLast && ids.length > 1, [toTheFirst, toTheLast, ids.length]);
+      check('Ctrl+Alt and a number reaches that tab, and 9 is the last one however many there are', inUseForKeys && toTheFirst && toTheLast && ids.length > 1, [inUseForKeys, ...keysCouldWork(), toTheFirst, toTheLast, ids.length]);
       // A number past the last tab: nothing moves, and the window says there is no such tab rather than
       // leaving the press unanswered.
       const whereItWas = ctx.shellState().active;
       press(t.view.webContents, '8', ['control', 'alt']);
       await sleep(250);
-      check('a number past the last tab moves nothing, and the window says there is no such tab', ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8, [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
+      check('a number past the last tab moves nothing, and the window says there is no such tab', inUseForKeys && ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8, [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
       // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
       // given a key that was meant for main.
       await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
