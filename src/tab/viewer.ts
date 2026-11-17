@@ -1,6 +1,6 @@
 // The read-only viewer: a file from the box, shown in the tab, with zoom and a search through it. Nothing is
 // edited and nothing is ever written back to a box (agreed 2026-11-15: hand edits on live boxes are against
-// Kami's own rules, and a viewer that can save is one slip away from being an editor).
+// the owner's own rules, and a viewer that can save is one slip away from being an editor).
 //
 // What arrives is bytes, not text, and a box chooses them. So they are shown as text only when they really are
 // text; anything else says what it is instead of drawing a screenful of nonsense. Every line is set as text, so

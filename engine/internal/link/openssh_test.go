@@ -617,7 +617,7 @@ func TestOpenSSH(t *testing.T) {
 					t.Fatalf("the folder holds %s things: something in a name was acted on", strings.TrimSpace(left))
 				}
 
-				// md5 as well, which is the one Kami asks for by hand.
+				// md5 as well, which is the one the owner asks for by hand.
 				md5Got, err := l.Hash(ctx, MD5, dir+"/plain.txt")
 				if err != nil || len(md5Got) != 32 {
 					t.Fatalf("md5 gave %q, %v", md5Got, err)
