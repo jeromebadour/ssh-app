@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,23 @@ func Pages() int64 { return pages.Load() }
 
 // Pace sets that wait, in milliseconds. Zero is no wait at all.
 func Pace(ms int64) { pace.Store(ms) }
+
+// fsidOf gives each /mnt/<name> its own filesystem id, and everything else the box's own.
+func fsidOf(p string) uint64 {
+	clean := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	if !strings.HasPrefix(clean+"/", "/mnt/") {
+		return 1
+	}
+	bits := strings.Split(strings.TrimPrefix(clean, "/mnt/"), "/")
+	if bits[0] == "" {
+		return 1
+	}
+	var n uint64 = 14695981039346656037
+	for _, c := range []byte("/mnt/" + bits[0]) {
+		n = (n ^ uint64(c)) * 1099511628211
+	}
+	return n
+}
 
 // pretend is one file the box lies about the size of, for the lab.
 type pretendSize struct {
@@ -143,6 +161,16 @@ func serveFiles(ch io.ReadWriteCloser, root string) {
 }
 
 // under keeps every path inside the lab folder, so a test cannot reach the machine's own files by mistake.
+// asBox turns a path on the machine running the lab into the path a box would call it: the box's own files
+// are the box's root.
+func (s *fileServer) asBox(p string) string {
+	cut := strings.TrimPrefix(p, s.root)
+	if cut == "" {
+		return "/"
+	}
+	return path.Clean("/" + strings.TrimPrefix(cut, "/"))
+}
+
 func (s *fileServer) under(raw []byte) string {
 	p := string(raw)
 	clean := path.Clean("/" + strings.TrimPrefix(p, s.root))
@@ -152,7 +180,16 @@ func (s *fileServer) under(raw []byte) string {
 func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 	switch kind {
 	case fxpRealpath:
-		p := s.under(r.str())
+		// As a real box answers: the path from the top of the box, not where the test happens to keep it. The
+		// app judges what it may delete on what comes back from here, so a lab that answered with its own
+		// temporary folder would let every one of those judgements pass without being tried.
+		here := s.under(r.str())
+		// A real box follows links here, and what the app may delete is judged on what comes back: a lab that
+		// did not follow them would let a link into the system through as an innocent name in a home folder.
+		if real, err := filepath.EvalSymlinks(here); err == nil {
+			here = real
+		}
+		p := s.asBox(here)
 		var w pkt
 		w.u32(1)
 		w.str(p)
@@ -368,7 +405,7 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			// mean is proven against real OpenSSH servers, which do answer from their own disks. These say
 			// 40 GB of a 100 GB disk left to this user, with less free to everyone else than to root, which
 			// is the case the app must not confuse.
-			r.str() // the path, which makes no difference here
+			where := r.str()
 			var w pkt
 			w.u64(4096)       // f_bsize
 			w.u64(4096)       // f_frsize
@@ -378,8 +415,16 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			w.u64(1_000_000)
 			w.u64(900_000)
 			w.u64(900_000)
-			w.u64(0)
-			w.u64(0)
+			// f_fsid: a box with more than one disk. Anything under /mnt/<name> is its own filesystem, so the
+			// app's own idea of which disk a path is on can be tried against a box that really has two.
+			w.u64(fsidOf(string(where)))
+			// f_flag: /mnt/stone is a filesystem that takes no writes, so a trash that cannot be made has
+			// somewhere real to happen.
+			if strings.HasPrefix(path.Clean(string(where))+"/", "/mnt/stone/") {
+				w.u64(0x1)
+			} else {
+				w.u64(0)
+			}
 			w.u64(255)
 			return fxpExtendedReply, w.b
 		}

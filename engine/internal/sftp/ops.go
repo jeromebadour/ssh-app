@@ -167,10 +167,18 @@ func (c *Client) Space(ctx context.Context, p string) (Space, error) {
 	blocks := r.u64()
 	r.u64() // f_bfree: free to root, which is not what a person may use
 	avail := r.u64()
+	r.u64() // f_files
+	r.u64() // f_ffree
+	r.u64() // f_favail
+	id := r.u64()
+	flag := r.u64()
 	if !r.ok() {
 		return Space{}, ErrShort
 	}
-	return Space{Total: times(unit, blocks), Free: times(unit, avail)}, nil
+	// The one flag this app reads: a filesystem that takes no writes. The extension's own value, which is not
+	// the operating system's: OpenSSH translates it on the way out.
+	const readOnly = 0x1
+	return Space{Total: times(unit, blocks), Free: times(unit, avail), Id: id, ReadOnly: flag&readOnly != 0}, nil
 }
 
 // Rename moves a file. It uses OpenSSH's own rename when the box offers it, which replaces the target in one

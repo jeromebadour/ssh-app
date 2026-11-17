@@ -49,16 +49,20 @@ type filePage struct {
 	Space *spaceShown `json:"space,omitempty"`
 	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
 	// "get": how it is going and how it ended.
-	Got       uint64   `json:"got,omitempty"`       // bytes written to the PC so far
-	Of        uint64   `json:"of,omitempty"`        // how big the box said the file is
-	Landed    string   `json:"landed,omitempty"`    // the name it was given on the PC, once it is really there
-	Mark      string   `json:"mark,omitempty"`      // "checked", "changed" or "not-checked": what its hash proved
-	MarkWhy   string   `json:"markWhy,omitempty"`   // why it could not be checked, where it could not
-	Replaced  bool     `json:"replaced,omitempty"`  // "put": it went in over a file that was already there
-	There     *fileRow `json:"there,omitempty"`     // "put": what is already at that name on the box
-	Hash      string   `json:"hash,omitempty"`      // "hash": the box's own hash of the file, as it printed it
-	Which     string   `json:"which,omitempty"`     // "hash": which hash it is
-	ResumedAt uint64   `json:"resumedAt,omitempty"` // a transfer taken up again: how much was already there
+	Got       uint64    `json:"got,omitempty"`       // bytes written to the PC so far
+	Of        uint64    `json:"of,omitempty"`        // how big the box said the file is
+	Landed    string    `json:"landed,omitempty"`    // the name it was given on the PC, once it is really there
+	Mark      string    `json:"mark,omitempty"`      // "checked", "changed" or "not-checked": what its hash proved
+	MarkWhy   string    `json:"markWhy,omitempty"`   // why it could not be checked, where it could not
+	Replaced  bool      `json:"replaced,omitempty"`  // "put": it went in over a file that was already there
+	There     *fileRow  `json:"there,omitempty"`     // "put": what is already at that name on the box
+	Hash      string    `json:"hash,omitempty"`      // "hash": the box's own hash of the file, as it printed it
+	Which     string    `json:"which,omitempty"`     // "hash": which hash it is
+	ResumedAt uint64    `json:"resumedAt,omitempty"` // a transfer taken up again: how much was already there
+	Trashed   *trashed  `json:"trashed,omitempty"`   // "delete" and "restore": the one thing that moved
+	Trash     []trashed `json:"trash,omitempty"`     // "trash": what is in it now, newest first
+	Emptied   int       `json:"emptied,omitempty"`   // "empty": how many things went
+	Freed     uint64    `json:"freed,omitempty"`     // "empty": how much they were holding
 }
 
 type fileRow struct {
@@ -95,6 +99,15 @@ type files struct {
 	failedAt time.Time // when the last try to open the channel failed
 	failed   error     // and what it said, for asks inside the quiet time after it
 	jobs     map[uint64]context.CancelFunc
+	trashNo  uint64 // counts the things this engine has put in a trash, so two in one second differ
+}
+
+// nextTrash gives each thing put in a trash a number of its own within this engine.
+func (f *files) nextTrash() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trashNo++
+	return f.trashNo
 }
 
 // How long after a failed opening the same answer is given without asking the box again.
@@ -277,6 +290,50 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		}
 		f.page(filePage{ID: a.ID, Hash: sum, Which: string(which)})
 		return nil
+	case "delete":
+		// Nothing is removed: it is moved into the trash on its own disk, and what it was is said back so the
+		// window can show what the trash now holds (plan B4.4).
+		line, err := f.toTrash(ctx, c, a.Path)
+		if err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Trashed: &line})
+		return nil
+	case "trash":
+		bin, err := trashOn(ctx, c, a.Path)
+		if err != nil {
+			return err
+		}
+		lines, err := inTheTrash(ctx, c, bin)
+		if err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Where: bin, Trash: lines})
+		return nil
+	case "restore":
+		bin, err := trashOn(ctx, c, a.Path)
+		if err != nil {
+			return err
+		}
+		line, err := f.fromTrash(ctx, c, bin, a.Name)
+		if err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Trashed: &line})
+		return nil
+	case "empty":
+		// Everything older than the days this trash keeps things. It runs on connecting and can be asked for
+		// by hand; either way it only ever removes inside the trash folder itself.
+		bin, err := trashOn(ctx, c, a.Path)
+		if err != nil {
+			return err
+		}
+		took, freed, err := emptyOld(ctx, c, bin, trashDays)
+		if err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Emptied: took, Freed: freed})
+		return nil
 	case "get":
 		return f.get(ctx, c, a)
 	case "put":
@@ -330,6 +387,10 @@ func say(err error) string {
 		return "in-the-way"
 	case errors.Is(err, errNoRoomOnBox):
 		return "box-full"
+	case errors.Is(err, errNoTrash):
+		return "no-trash"
+	case errors.Is(err, errRefused):
+		return "refused"
 	case errors.Is(err, os.ErrPermission):
 		return "pc-denied"
 	}
