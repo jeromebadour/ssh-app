@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,13 @@ func TestAFileAlreadyOnTheBoxIsNotReplacedUnlessItIsAskedFor(t *testing.T) {
 // The permissions of the file being replaced are what the new one wears: a program on the box that was
 // executable stays executable, and a file that was private stays private.
 func TestWhatIsReplacedKeepsItsOwnPermissions(t *testing.T) {
+	// The one test of these that a Windows filesystem cannot hold: it has no executable bit and no owner-only
+	// bit to keep, so the lab box there can only ever answer -rw-rw-rw-. A real box is Linux, and what this
+	// claims is proven on Linux here and against real OpenSSH 8.9 and 10.5 in CI, where the file written in
+	// place is checked for the mode it had before (engine/internal/link/openssh_test.go).
+	if runtime.GOOS == "windows" {
+		t.Skip("a Windows filesystem has no permissions of this kind to keep: proven on Linux and against real OpenSSH")
+	}
 	r, box := withFiles(t)
 	script := filepath.Join(box, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
