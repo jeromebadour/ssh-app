@@ -94,9 +94,12 @@ ul { list-style: none; }
 .conn-reconnecting { background: var(--problem); }
 .conn-idle { background: var(--text-3); }
 .sig { font-size: 11.5px; color: var(--text-3); }
-.sig-running { color: var(--main); font-family: var(--mono); font-size: 11px; }
+.sig-running { color: var(--main); width: 13px; height: 13px; }
 .sig-output { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2); }
-.sig-done { color: var(--checked); width: 14px; height: 14px; }
+/* A command finished in a tab he was not looking at: the glyph that means done, and how long it took. The
+   length is on the tab because that is what he asked to be told; the words are in what the pointer shows. */
+.sig-done { display: inline-flex; align-items: center; gap: 3px; color: var(--checked); font-family: var(--mono); font-size: 11px; }
+.sig-done .sig-glyph { width: 12px; height: 12px; }
 .new-tab { align-self: center; display: grid; place-items: center; width: 28px; height: 28px; color: var(--text-2); border-radius: var(--r); }
 .bar-tools { display: flex; align-items: center; gap: 4px; }
 .tool { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-2); border-radius: var(--r); }

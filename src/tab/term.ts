@@ -89,6 +89,10 @@ export interface Term {
   spot(text: string): { x: number; y: number; hand: boolean } | null; // where these words are drawn, and whether the pointer is a hand; for the lab
   links(row: number): string[]; // what the app would treat as an address to open on this row; for the lab
   bracketedPaste(): boolean;
+  // The lines the box has printed since this was last asked, with the one the cursor sits on marked: what
+  // reads the shape of a prompt (src/tab/blocks.ts). It is given lines from the terminal's own buffer, where
+  // every escape sequence has already been acted on, so nothing reading them has to understand a terminal.
+  since(row: number): { lines: { text: string; atCursor: boolean }[]; next: number };
 }
 
 // A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
@@ -220,5 +224,15 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       return null;
     },
     bracketedPaste: () => term.modes.bracketedPasteMode,
+    since: (row) => {
+      const b = term.buffer.active;
+      const cursor = b.baseY + b.cursorY;
+      // Never more than a screenful and a bit in one go: a box that printed a hundred thousand lines while
+      // the window was busy is not a reason for the window to read a hundred thousand lines now.
+      const from = Math.max(0, Math.min(row, cursor), cursor - 400);
+      const lines: { text: string; atCursor: boolean }[] = [];
+      for (let i = from; i <= cursor; i++) lines.push({ text: b.getLine(i)?.translateToString(true) ?? '', atCursor: i === cursor });
+      return { lines, next: cursor };
+    },
   };
 }

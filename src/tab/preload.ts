@@ -37,6 +37,9 @@ const port: TabPort = {
   files(ask) {
     ipcRenderer.send(CH.tabFileAsk, ask);
   },
+  doing(doing, finishedMs) {
+    ipcRenderer.send(CH.tabDoing, String(doing), Number(finishedMs));
+  },
   onFilePage(cb) {
     ipcRenderer.on(CH.tabFilePage, (_e, page) => cb(page));
   },

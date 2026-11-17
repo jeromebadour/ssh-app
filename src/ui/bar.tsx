@@ -42,6 +42,29 @@ export function tabLook(t: TabInfo): { mark: string; words: string; sig: string 
   }
 }
 
+// How long something took, in the fewest characters that still mean it: a tab is a few letters wide, so the
+// full words ("3 minutes") go in what the pointer shows and this goes on the tab.
+export function shortLong(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h${m % 60 > 0 ? `${m % 60}m` : ''}`;
+}
+
+// The same length in the words a person says, for what the pointer shows. Main writes this for a
+// notification; the bar writes it for a tab, and the two say the same thing.
+export function howLong(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} second${s === 1 ? '' : 's'}`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'}`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return `${h} hour${h === 1 ? '' : 's'}${rest > 0 ? ` and ${rest} minute${rest === 1 ? '' : 's'}` : ''}`;
+}
+
 export function placeLabel(t: TabInfo, boxes: BoxView[]): string {
   if (!t.box) return t.state;
   if (t.box.place) return t.box.place;
@@ -153,6 +176,16 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
         <span class="tab-place">{placeLabel(t, props.s.boxes)}</span>
         <span class="tab-end">
           {look.sig === 'stopped' ? <Glyph name="identityBroken" class="sig sig-stopped" label="identity changed" /> : look.sig !== '' && <span class="sig sig-silent">{look.sig}</span>}
+          {/* What happened in this tab while he was looking at another one. A command that finished says how
+              long it took, because that is what he asked to be told; something still running says so with a
+              clock; output nobody has seen yet is a quiet dot. All three go the moment the tab is in front. */}
+          {t.finishedMs > 0 ? (
+            <span class="sig sig-done" title={`a command finished here: it took ${howLong(t.finishedMs)}`}><Glyph name="check" class="sig-glyph" />{shortLong(t.finishedMs)}</span>
+          ) : !isFront && t.doing === 'running' ? (
+            <Glyph name="running" class="sig sig-running" label="something is running here" />
+          ) : (
+            !isFront && t.unseen && <span class="sig sig-output" title="it printed while you were in another tab" />
+          )}
           {fold && (
             <button type="button" class={`fold-n ${menu === fold.key ? 'open' : ''}`} data-fold={fold.key} aria-haspopup="menu" aria-expanded={menu === fold.key} aria-label={`${fold.tabs.length} tabs on ${t.box?.name ?? ''}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); showMenu(menu === fold.key ? '' : fold.key); }}>
               {fold.tabs.length}

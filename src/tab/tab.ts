@@ -3,6 +3,7 @@ import type { TabInfo, TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
+import { Blocks } from './blocks';
 import { drawChrome, folded, type Chrome } from './chrome';
 import { makeAsker, startFiles } from './files';
 import { startViewer } from './viewer';
@@ -65,6 +66,7 @@ const feed = (): void => {
   const began = performance.now();
   term.write(bytes, () => {
     taken(bytes.byteLength);
+    readShape();
     const rest = front || share >= 1 ? 0 : Math.min(250, (performance.now() - began) * (1 / share - 1));
     if (rest < 1) return feed();
     rested++;
@@ -76,6 +78,25 @@ port.onOutput((bytes) => {
   if (!feeding) feed();
 });
 port.onPace((now) => { share = now; });
+
+// Reading this box's prompt, and from it whether something is running in this tab. It is a reading aid: the
+// lines come from the terminal's own buffer after the box's bytes have been drawn, and nothing any safety
+// question depends on is decided from them (plan A5, B3). What it is for is the marks on a tab that is not in
+// front, and the one notification when something long finishes.
+const blocks = new Blocks();
+let seenRow = 0;
+let saidDoing = '';
+const readShape = (): void => {
+  const got = term.since(seenRow);
+  seenRow = got.next;
+  for (const [i, l] of got.lines.entries()) blocks.sawLine(l.text, l.atCursor, got.next - (got.lines.length - 1 - i));
+  const done = blocks.takeFinished();
+  // Main is told only when it changes, and the finished command's length is a number and nothing else: what
+  // was typed is his own text and never leaves this view (plan B2.7).
+  if (done) port.doing(blocks.doing, done.ms);
+  else if (blocks.doing !== saidDoing) port.doing(blocks.doing, 0);
+  saidDoing = blocks.doing;
+};
 
 // The box's sign-in text, before anything else it prints. It is words, not a program's output: nothing in it
 // is obeyed or answered. It is folded into one line at the top, and written into the terminal when that line
