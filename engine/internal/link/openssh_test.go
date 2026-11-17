@@ -3,6 +3,7 @@ package link
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -493,6 +494,87 @@ func TestOpenSSH(t *testing.T) {
 				}
 				if here != there {
 					t.Fatalf("what came back is not what the box has: read %s, box says %s", here, there)
+				}
+				run(t, l, "rm -rf "+dir+" && echo done", 15*time.Second)
+			})
+
+			// The heart of an upload, against a real box: bytes written through our own file client are the
+			// bytes the box ends up with, its own hash agrees, a replaced file's permissions are put back on
+			// the new one, and the rename really is atomic replacement on a real server.
+			t.Run("a real file written to a box matches the box's own hash, and replaces one in place", func(t *testing.T) {
+				l, err := Dial(context.Background(), honest, lab.user, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+				dir := "/tmp/berth-put-" + box.name
+				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && printf 'the old one\n' > "+dir+"/live.conf && chmod 600 "+dir+"/live.conf && echo done", 20*time.Second)
+
+				files, err := l.OpenFiles()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+				defer cancel()
+				c, err := sshappsftp.Start(ctx, files)
+				if err != nil {
+					t.Fatalf("the file protocol did not start: %v", err)
+				}
+				defer c.Close()
+
+				// A megabyte of our own bytes, written the way the engine writes them.
+				body := make([]byte, 1<<20)
+				if _, err := rand.Read(body); err != nil {
+					t.Fatal(err)
+				}
+				temp := dir + "/.berth-1.part"
+				f, err := c.Create(ctx, temp, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for at := 0; at < len(body); at += sshappsftp.Block {
+					end := at + sshappsftp.Block
+					if end > len(body) {
+						end = len(body)
+					}
+					if _, err := f.WriteAt(ctx, body[at:end], uint64(at)); err != nil {
+						t.Fatalf("writing: %v", err)
+					}
+				}
+				// The permissions of what is being replaced, put on before it is in place.
+				was, err := c.Lstat(ctx, dir+"/live.conf")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Chmod(ctx, was.Mode&0o7777); err != nil {
+					t.Fatalf("permissions: %v", err)
+				}
+				if err := f.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+
+				sum := sha256.Sum256(body)
+				there, err := l.Hash(ctx, SHA256, temp)
+				if err != nil {
+					t.Fatalf("the box did not give a hash: %v", err)
+				}
+				if there != hex.EncodeToString(sum[:]) {
+					t.Fatalf("what the box holds is not what was written: box says %s", there)
+				}
+				if err := c.Rename(ctx, temp, dir+"/live.conf"); err != nil {
+					t.Fatalf("the rename into place failed: %v", err)
+				}
+				// The box's own view of the result: the right size, the right hash, the old permissions.
+				after, err := c.Lstat(ctx, dir+"/live.conf")
+				if err != nil || after.Size != uint64(len(body)) || after.Mode&0o7777 != 0o600 {
+					t.Fatalf("after the rename: %v, %d bytes, mode %o", err, after.Size, after.Mode&0o7777)
+				}
+				nowThere, err := l.Hash(ctx, SHA256, dir+"/live.conf")
+				if err != nil || nowThere != hex.EncodeToString(sum[:]) {
+					t.Fatalf("the file in place is not the one that was written: %v, %s", err, nowThere)
+				}
+				if left, err := c.Lstat(ctx, temp); err == nil {
+					t.Fatalf("the temporary name is still there: %v", left)
 				}
 				run(t, l, "rm -rf "+dir+" && echo done", 15*time.Second)
 			})
