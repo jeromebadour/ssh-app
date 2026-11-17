@@ -2032,6 +2032,34 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await js(ctx.shell, `document.querySelector('[data-tab="${behind.id}"]')?.click()`);
           const cleared = await until(() => (infoOf(behind.id)?.finishedMs ?? 0) === 0 && infoOf(behind.id)?.unseen === false, 5000);
           check('looking at the tab clears what it had to say, with no press of its own', cleared, [infoOf(behind.id)?.finishedMs, infoOf(behind.id)?.unseen]);
+          // One command and its output told from the next: the prompt in the box's own colour and a hairline
+          // where each block begins. It is the thing he said matters most about a terminal, because with
+          // everything one colour he cannot see where one command's output ends (2026-11-15 07:32).
+          {
+            await type(behind, 'first-one\n');
+            await sleep(400);
+            await type(behind, 'second-one\n');
+            const blocks = await until(async () => (await js<number>(behind.view, `document.querySelectorAll('.berth-block-line').length`)) >= 2, 10_000);
+            const howMany = await js<number>(behind.view, `document.querySelectorAll('.berth-block-line').length`);
+            // The prompt itself is drawn in the box's colour, which is what tells it from output.
+            const coloured = await js<string>(
+              behind.view,
+              `(() => { const el = [...document.querySelectorAll('.xterm-decoration')].find((e) => !e.classList.contains('berth-block-line') && getComputedStyle(e).color); return el ? getComputedStyle(el).color : 'none'; })()`,
+            );
+            const why = await js<string>(behind.view, `(document.documentElement.dataset.blocks ?? '') + ' | marks ' + (document.querySelectorAll('.xterm-decoration').length)`);
+            check('each command and its output is a block: a hairline where it begins, and the prompt in the box\u2019s own colour', blocks && howMany >= 2 && coloured !== 'none', [howMany, coloured, why]);
+            // And the one press a block answers: it copies what that command printed, and nothing else.
+            const before = await js<string>(behind.view, `document.documentElement.dataset.copied ?? ''`);
+            // The mark on the block before the last: the last one is the prompt he is sitting at, which has
+            // printed nothing yet, and a probe that presses that proves nothing about copying output.
+            await js(behind.view, `[...document.querySelectorAll('.berth-block-copy')].at(-2)?.click()`);
+            await until(async () => (await js<string>(behind.view, `document.documentElement.dataset.copied ?? ''`)) !== before, 5000);
+            const did = await js<string>(behind.view, `document.documentElement.dataset.copied ?? ''`);
+            const onClipboard = await clipboard.readText();
+            check('one press on a block copies what that command printed, and nothing of the command itself', did === 'copied' && onClipboard.includes('nothing was run') && !onClipboard.includes('demo@lab-box'), [did, onClipboard.slice(0, 120)]);
+            await shot('blocks', 'one command and its output told from the next', behind);
+          }
+
           // The one notification he asked for: something that took a while ended in a tab he is not looking
           // at, while the window itself was not in front. Whether this machine can draw one is the
           // machine's business; what is held here is main's decision to tell him, and when it does not.

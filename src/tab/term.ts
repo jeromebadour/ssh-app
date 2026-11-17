@@ -93,6 +93,13 @@ export interface Term {
   // reads the shape of a prompt (src/tab/blocks.ts). It is given lines from the terminal's own buffer, where
   // every escape sequence has already been acted on, so nothing reading them has to understand a terminal.
   since(row: number): { lines: { text: string; atCursor: boolean }[]; next: number };
+  // One block: the prompt at this row is drawn in the box's own colour, with a line above it, so one command
+  // and its output can be told from the next at a glance. It is the thing he said matters most about a
+  // terminal (2026-11-15 07:32). Returns a way to take it off again.
+  blockAt(row: number, width: number, colour: string, copy: () => void): (() => void) | null;
+  // What one block printed: the rows after the prompt at this row, up to the next prompt or the end.
+  outputAfter(row: number, until: number): string;
+  rows(): number; // how many rows the terminal holds, on screen and scrolled out
 }
 
 // A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
@@ -112,7 +119,11 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     cursorStyle: 'block',
     scrollback: 30_000,
     theme: THEME,
-    allowProposedApi: false,
+    // Was false, and is true since 2026-11-17 for one thing only: marking a row and drawing over it, which
+    // is how one command and its output are told from the next (B3). It widens what this app may call in
+    // the library, not what a box may do through the terminal: that list is in B3 and is unchanged. The
+    // library is pinned, so a proposed API changing under us happens at a version bump and not on its own.
+    allowProposedApi: true,
     altClickMovesCursor: false, // it would type arrow keys for a click
     rightClickSelectsWord: false,
     linkHandler: null,
@@ -224,6 +235,53 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       return null;
     },
     bracketedPaste: () => term.modes.bracketedPasteMode,
+    blockAt: (row, width, colour, copy) => {
+      // A marker follows its row as the terminal scrolls, which is what makes a decoration stay with the
+      // command it belongs to rather than with a place on the screen.
+      const b = term.buffer.active;
+      const at = row - b.baseY;
+      if (at < -b.length || at > term.rows) return null;
+      const marker = term.registerMarker(at - b.cursorY);
+      if (!marker) return null;
+      // Two things are drawn: the prompt in the box's colour, which is what tells a prompt from output, and
+      // a hairline above it, which is where one command ends and the next begins.
+      const text = term.registerDecoration({ marker, x: 0, width: Math.max(1, Math.min(width, term.cols)), height: 1, foregroundColor: colour });
+      const rule = term.registerDecoration({ marker, x: 0, width: term.cols, height: 1, layer: 'bottom' });
+      rule?.onRender((el) => {
+        el.classList.add('berth-block-line');
+        el.style.setProperty('--block-hue', colour);
+      });
+      // And the one press that copies what this command printed. It sits at the right-hand end of the
+      // prompt's own row, where a prompt almost never reaches, and it is the only part of a block a pointer
+      // can touch at all: everything else is drawn under the text and lets presses through to it.
+      const hand = term.registerDecoration({ marker, anchor: 'right', x: 0, width: 2, height: 1 });
+      hand?.onRender((el) => {
+        if (el.dataset['berth'] === 'copy') return;
+        el.dataset['berth'] = 'copy';
+        el.classList.add('berth-block-copy');
+        el.title = 'Copy what this command printed';
+        el.setAttribute('role', 'button');
+        el.setAttribute('aria-label', 'Copy what this command printed');
+        el.addEventListener('mousedown', (ev) => ev.stopPropagation()); // a press here is not a selection
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          copy();
+        });
+      });
+      return () => {
+        text?.dispose();
+        rule?.dispose();
+        hand?.dispose();
+        marker.dispose();
+      };
+    },
+    outputAfter: (row, until) => {
+      const b = term.buffer.active;
+      const lines: string[] = [];
+      for (let i = row + 1; i < Math.min(until, b.length); i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+      return lines.join('\n').replace(/\s+$/, '');
+    },
+    rows: () => term.buffer.active.length,
     since: (row) => {
       const b = term.buffer.active;
       const cursor = b.baseY + b.cursorY;
