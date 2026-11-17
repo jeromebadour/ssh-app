@@ -40,7 +40,7 @@ func TestAFileGoesToTheBoxWholeAndIsCheckedAgainstTheBoxsOwnHash(t *testing.T) {
 	ask(t, r, map[string]any{"id": 7, "do": "put", "path": "/var/log", "name": "sent.bin", "from": from})
 	ps := pages(r.wait("the upload to end", ended(7)), 7)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "landed") != "sent.bin" || last(ps, "mark") != "checked" {
 		t.Fatalf("landed: %v %v %v", last(ps, "landed"), last(ps, "mark"), last(ps, "markWhy"))
@@ -206,7 +206,7 @@ func TestAFileABoxCannotHashIsStillSentAndSaidToBeUnchecked(t *testing.T) {
 	ask(t, r, map[string]any{"id": 61, "do": "put", "path": "/", "name": "sent.bin", "from": from})
 	ps := pages(r.wait("the upload to end", ended(61)), 61)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "mark") != "not-checked" {
 		t.Fatalf("it was not marked as unchecked: %v", ps)
@@ -267,7 +267,7 @@ func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 	ask(t, r, map[string]any{"id": 81, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
 	ps := pages(r.wait("the upload to end", ended(81)), 81)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "resumedAt") != float64(250_000) {
 		t.Fatalf("it did not say where it was taken up: %v", ps)

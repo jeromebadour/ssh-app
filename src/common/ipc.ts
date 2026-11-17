@@ -413,6 +413,9 @@ export interface FilePage {
   done?: boolean;
   error?: string; // one word for why it stopped: no-such-file, denied, too-many, unsupported, no-answer, failed
   fault?: string; // the id of the line in the local log, for a failure that leaves nothing to act on: main's own
+  // The whole of what went wrong, in the words of whatever said so: often a box's own, so it is shown as
+  // text and never acted on, and it is capped and stripped by the engine before it ever gets here.
+  detail?: string;
   where?: string; // a listing: the folder as the box itself names it
   space?: { total: number; free: number };
   attrs?: FileRow;
