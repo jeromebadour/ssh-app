@@ -25,6 +25,7 @@ export const CH = {
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
+  tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -165,6 +166,9 @@ export interface ShellState {
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
   keyFile: KeyFileChosen | null; // a key file chosen for the box being added (plan O1)
   replacing: ReplaceAsked | null; // a file is already where one is being sent: what is there, and what is coming
+  settings: AppSettings; // what the app remembers about itself; the defaults until the list is open
+  settingsOpen: boolean; // the settings are on screen
+  downloadsNow: string; // where downloads land as things stand, default or chosen: the folder, written out
 }
 
 // Sending a file where a file of that name already is. Replacing one on a box cannot be undone from here, so
@@ -245,6 +249,10 @@ export type ShellCmd =
   | { op: 'copyBlock'; box: string }
   | { op: 'window'; do: 'minimize' | 'maximize' | 'close' } // the window's own three buttons, which Berth draws
   | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
+  | { op: 'settings'; show: boolean } // open or close the settings; nothing is changed by opening it
+  | { op: 'pickDownloads' } // choose where downloads land: main opens the system's own chooser
+  | { op: 'defaultDownloads' } // put the download folder back to Berth's own default
+  | { op: 'paneSize'; size: number } // how big the list's text starts in a new tab
   | { op: 'keepApp' } // the asking answered: keep everything open
   | { op: 'pickKeyFile' } // open the system's file chooser for a key file to bring in (plan O1)
   | { op: 'dropKeyFile' } // the chosen key file is put aside; the box gets a key Berth makes
@@ -286,6 +294,7 @@ export interface TabPort {
   files(ask: FileAsk): void; // ask the box's files for something
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
+  onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts
   resize(cols: number, rows: number): void;
   copy(text: string): void;
   link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
@@ -344,6 +353,16 @@ export interface FileRow {
 // How many files one chooser may hand over to one box at a time. A person picking a folder's worth gets them
 // all; a person who picked ten thousand by accident gets as many as this and a line saying the rest were
 // left. Main holds to it and the window names it, so it is written once, here.
+// What the app remembers about itself, beside the boxes, inside the same locked list. It is small on purpose:
+// a setting exists here only when leaving it to a default would be wrong for him, never because an app of this
+// kind usually has one (his own rule: no feature he does not use).
+export interface AppSettings {
+  downloads: string; // where everything brought over from a box lands; empty means the default folder
+  paneSize: number; // how big the list's text starts in a new tab, as a share of its own size; 0 means 1
+}
+
+export const SETTINGS_DEFAULT: AppSettings = { downloads: '', paneSize: 1 };
+
 export const MOST_AT_ONCE = 64;
 
 // How big a file may be and still be fetched by a press, so it can be dragged out of the window. Bigger than

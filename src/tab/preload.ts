@@ -43,6 +43,9 @@ const port: TabPort = {
   drag(ask) {
     ipcRenderer.send(CH.tabDrag, Number(ask));
   },
+  onSettings(cb) {
+    ipcRenderer.on(CH.tabSettings, (_e, s) => cb(s));
+  },
   resize(cols, rows) {
     ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
   },

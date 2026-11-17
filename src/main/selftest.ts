@@ -8,7 +8,7 @@ import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os, { availableParallelism } from 'node:os';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { COPY_MAX, type ShellState } from '../common/ipc';
 import { fingerprintOf, type Boxes } from './boxes';
@@ -57,6 +57,8 @@ interface Ctx {
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
+  chooseFolder(answer: (() => string | undefined) | null): void;
+  settingsNow(): { downloads: string; paneSize: number };
   dragsAsked(): number;
   canDrag(tab: number): number;
   chooseKeyFile(file: string): Promise<void>;
@@ -1042,6 +1044,63 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const onTheBox = await lab.tell('hashof var/log/broken.log');
             check('the next try takes it up where it stopped, and the whole file is what the box has', done && said.includes('taken up where it broke') && said.includes('checked against the box') && !after.includes('.berth-broken.log.part') && itsHash === onTheBox['sha256'], [said, after, itsHash === onTheBox['sha256']]);
             await lab.tell('forget var/log/broken.log');
+          }
+          // The settings: where downloads land, and how big a new tab's list starts. Both live in the same
+          // locked list as the boxes and are written by the same save, so a change to one cannot drop the other.
+          {
+            const said = (): Promise<string> => js<string>(ctx.shell, `document.getElementById('status')?.textContent ?? ''`);
+            await js(ctx.shell, `document.getElementById('boxes')?.click()`);
+            await until(() => has('#settings-open'), 5000);
+            await clickOn('#settings-open');
+            const open = await until(() => has('#settings'), 5000);
+            await shot('settings', 'the settings: where downloads land, and how big a new tab list starts', null);
+            const showsDefault = await text('#settings-downloads');
+            const canPutBack = await js<boolean>(ctx.shell, `document.getElementById('settings-downloads-default')?.disabled === true`);
+            check('the settings open from the Boxes menu, show where downloads land now, and offer no way back while that is already the default', open && showsDefault === ctx.downloads && canPutBack, [open, showsDefault === ctx.downloads, canPutBack]);
+            // Choosing a folder: the chooser is the system's own, which only a person can answer, so a view
+            // may ask for it and may never name a folder.
+            const mine = await mkdtemp(path.join(os.tmpdir(), 'berth-downloads-'));
+            ctx.chooseFolder(() => mine);
+            await clickOn('#settings-downloads-pick');
+            const took = await until(async () => (await text('#settings-downloads')) === mine, 10_000);
+            check('a folder chosen in the system\'s own chooser becomes where downloads land', took && ctx.downloads !== mine && (await said()).includes('land in the folder you chose'), [took, await text('#settings-downloads')]);
+            // And it really is where the next download lands, not only what the screen says.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            const landedThere = await until(async () => (await readdir(mine).catch(() => [] as string[])).some((n) => n.startsWith('syslog')), 30_000);
+            check('and the next file brought over really lands there', landedThere, await readdir(mine).catch(() => []));
+            // A folder that cannot be written to is refused here, where he can still be told, and not at the
+            // first download with a file already half across the network.
+            const readOnly = await mkdtemp(path.join(os.tmpdir(), 'berth-readonly-'));
+            await chmod(readOnly, 0o500);
+            ctx.chooseFolder(() => readOnly);
+            await clickOn('#settings-downloads-pick');
+            const refused = await until(async () => (await said()).includes('cannot be written to'), 10_000);
+            check('a folder that cannot be written to is refused, and downloads land where they did', refused && (await text('#settings-downloads')) === mine, [refused, await text('#settings-downloads')]);
+            await chmod(readOnly, 0o700).catch(() => undefined);
+            // Put it back: Berth's own folder again.
+            ctx.chooseFolder(null);
+            await clickOn('#settings-downloads-default');
+            const backToOwn = await until(async () => (await text('#settings-downloads')) === ctx.downloads, 10_000);
+            check('one press puts the download folder back to Berth\'s own', backToOwn, await text('#settings-downloads'));
+            // The size a new tab's list starts at is saved, and a tab opened after it really starts there.
+            await clickOn('#settings-size-130');
+            const sizeSaved = await until(() => ctx.settingsNow().paneSize === 1.3, 10_000);
+            const later = ctx.openTab(front.box!.id, 'logs')!;
+            const startedBig = await until(async () => (await js<string>(later.view, `document.getElementById('files')?.dataset.size ?? ''`)) === '130', 20_000);
+            const frontUnmoved = await js<string>(front.view, `document.getElementById('files')?.dataset.size ?? ''`);
+            ctx.closeTab(later.id);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
+            await until(() => ctx.shellState().active === front.id, 3000);
+            check('the size a new tab starts at is saved, and a tab opened after it starts there, while the tabs already open do not move', sizeSaved && startedBig && frontUnmoved === '100', [sizeSaved, startedBig, frontUnmoved]);
+            await clickOn('#settings-size-100');
+            await until(() => ctx.settingsNow().paneSize === 1, 10_000);
+            // And the boxes are still there: one list, one save, and a setting cannot drop a box.
+            const boxesStill = ctx.shellState().boxes.length;
+            await clickOn('#settings-close');
+            await until(async () => !(await has('#settings')), 5000);
+            check('changing a setting leaves every box where it was', boxesStill > 0 && ctx.shellState().boxes.length === boxesStill, [boxesStill, ctx.shellState().boxes.length]);
+            await rm(mine, { recursive: true, force: true });
+            await rm(readOnly, { recursive: true, force: true });
           }
           // How big the list's own text is. His words about MobaXterm: the terminal zooms and the file browser
           // does not. It is this pane's own size, apart from the terminal's.
@@ -2187,7 +2246,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

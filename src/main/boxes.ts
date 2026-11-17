@@ -10,6 +10,7 @@
 //      A match may be shown; a mismatch says they differ without printing what answered, and nothing is stored.
 //   3. trust(): only after a match, and only for the very identity that matched, the box is pinned.
 // A box that is not pinned cannot be connected to: there is no other way to a first sign-in.
+import { SETTINGS_DEFAULT, type AppSettings } from '../common/ipc';
 import { createHash, randomBytes } from 'node:crypto';
 import { BOXES_MAX, BOX_COLOURS, FINGERPRINT, KEY_LINE, addrOf, draftFaults, fingerprintsIn, firstConnectionBlock, folderFault, placesOf, portOf, type Box, type BoxDraft } from '../common/boxes';
 import type { KeyReply } from './keyproc';
@@ -51,6 +52,9 @@ const blank = (boxId: string): CheckView => ({ boxId, step: 'idle', phase: '', c
 
 export class Boxes {
   list: Box[] = [];
+  // The app's own settings live in the same locked list as the boxes, and are written by the same save, so a
+  // change to one can never drop the other (which is what a second writer of the same file would do).
+  settings: AppSettings = { ...SETTINGS_DEFAULT };
   loaded = false;
   fault = ''; // the list opened but its boxes could not be read: said, and nothing is overwritten
   private readonly checks = new Map<string, Checking>();
@@ -69,6 +73,7 @@ export class Boxes {
     this.list = [];
     this.fault = '';
     this.checks.clear();
+    this.settings = readSettings(publicPart);
     const boxes = readBoxes(publicPart);
     if (!boxes) this.fault = 'the list of boxes inside the locked list cannot be read';
     else {
@@ -299,13 +304,20 @@ export class Boxes {
   }
 
   // Saves a new list of boxes through the key process; memory follows only what was saved.
-  private async save(next: Box[]): Promise<KeyReply> {
-    const saved = await this.keys.request('setPublic', { public: { v: 1, boxes: next } });
+  private async save(next: Box[], settings = this.settings): Promise<KeyReply> {
+    const saved = await this.keys.request('setPublic', { public: { v: 1, boxes: next, settings } });
     if (saved.ok) {
       this.list = next;
+      this.settings = settings;
       this.changed();
     }
     return saved;
+  }
+
+  // Changing a setting: the whole list is written again, boxes and all, because the list is one file and the
+  // key process holds it whole. Nothing is kept in memory as changed until the write says it worked.
+  setSettings(next: Partial<AppSettings>): Promise<KeyReply> {
+    return this.oneAtATime(() => this.save(this.list, { ...this.settings, ...next }));
   }
 
   private oneAtATime<T>(work: () => Promise<T>): Promise<T> {
@@ -347,6 +359,16 @@ function cleanDraft(draft: unknown): BoxDraft | null {
 
 // The boxes as they were saved. Anything that is not exactly a list of boxes is refused whole: a list that
 // cannot be read is said, never guessed at and never overwritten.
+// The settings as they were saved, with anything missing or of the wrong shape left at its default: a list
+// written by an older build, or one damaged in a way the seal did not catch, must still open.
+export function readSettings(publicPart: unknown): AppSettings {
+  const p = publicPart as Record<string, unknown> | null;
+  const raw = (p?.['settings'] ?? {}) as Record<string, unknown>;
+  const downloads = typeof raw['downloads'] === 'string' && raw['downloads'].length <= 4096 ? raw['downloads'] : '';
+  const size = typeof raw['paneSize'] === 'number' && raw['paneSize'] >= 0.5 && raw['paneSize'] <= 3 ? raw['paneSize'] : 1;
+  return { downloads, paneSize: size };
+}
+
 export function readBoxes(publicPart: unknown): Box[] | null {
   const p = publicPart as { v?: unknown; boxes?: unknown } | null;
   if (!p || typeof p !== 'object') return null;

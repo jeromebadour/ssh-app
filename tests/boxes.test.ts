@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import test from 'node:test';
 
 import { addrOf, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, fingerprintsIn, firstConnectionBlock, isV6, portOf, type BoxDraft } from '../src/common/boxes';
-import { Boxes, fingerprintOf, readBoxes, type Identify, type Reached } from '../src/main/boxes';
+import { Boxes, fingerprintOf, readBoxes, type Identify, type Reached, readSettings } from '../src/main/boxes';
 import type { KeyReply } from '../src/main/keyproc';
 
 // A real ed25519 public key as one authorized-keys line, and its fingerprint worked out apart from the app's code.
@@ -323,4 +323,39 @@ test('what was saved is read back whole or not at all, and a box must be with it
   }
   again.load({ v: 3 }, []);
   assert.match(again.fault, /cannot be read/);
+});
+
+// The settings live in the same locked list as the boxes, and are written by the same save. That matters most
+// where it cannot be seen: a save that dropped them would look right all day and come back empty at the next
+// start, because what the app shows between saves is what it holds in memory. So what is asked of the key
+// process is read, not what the app believes afterwards.
+test('a setting is written into the list, and a later save of the boxes carries it with them', async () => {
+  const w = world();
+  assert.deepEqual(w.boxes.settings, { downloads: '', paneSize: 1 });
+
+  const saved = await w.boxes.setSettings({ downloads: '/srv/downloads', paneSize: 1.3 });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3 });
+
+  // Adding a box writes the whole list again: the settings must still be in what is written.
+  await w.boxes.add(draft());
+  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3 });
+  assert.equal(readBoxes(w.keys.saved)?.length, 1);
+
+  // And a save that fails changes nothing the app holds.
+  w.keys.failOn = 'setPublic';
+  const refused = await w.boxes.setSettings({ downloads: '/somewhere/else' });
+  assert.equal(refused.ok, false);
+  assert.deepEqual(w.boxes.settings, { downloads: '/srv/downloads', paneSize: 1.3 });
+});
+
+// A list written by an older build has no settings in it at all, and one damaged in a way the seal did not
+// catch may have nonsense where they should be. Either must open, at the defaults, rather than refusing.
+test('settings that are missing, or not what they should be, come back as the defaults', () => {
+  assert.deepEqual(readSettings({ v: 1, boxes: [] }), { downloads: '', paneSize: 1 });
+  assert.deepEqual(readSettings(null), { downloads: '', paneSize: 1 });
+  assert.deepEqual(readSettings({ settings: { downloads: 7, paneSize: 'big' } }), { downloads: '', paneSize: 1 });
+  assert.deepEqual(readSettings({ settings: { paneSize: 99 } }), { downloads: '', paneSize: 1 });
+  assert.deepEqual(readSettings({ settings: { downloads: 'x'.repeat(9000) } }), { downloads: '', paneSize: 1 });
+  assert.deepEqual(readSettings({ settings: { downloads: '/a', paneSize: 1.5 } }), { downloads: '/a', paneSize: 1.5 });
 });

@@ -18,6 +18,7 @@ export interface BarActions {
   editBox(box: string): void;
   removeBox(box: string): void;
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
+  settings(): void; // open the settings
   window(what: 'minimize' | 'maximize' | 'close'): void; // the window's own three buttons
 }
 
@@ -263,7 +264,10 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
           </div>
         );
       })}
-      <div class="bm-foot"><button type="button" class="bm-add" id="add-box-open" onClick={() => { props.done(); props.act.addBox(); }}><Glyph name="plus" />Add box</button></div>
+      <div class="bm-foot">
+        <button type="button" class="bm-add" id="add-box-open" onClick={() => { props.done(); props.act.addBox(); }}><Glyph name="plus" />Add box</button>
+        <button type="button" class="bm-add bm-settings" id="settings-open" onClick={() => { props.done(); props.act.settings(); }}><Glyph name="settings" />Settings</button>
+      </div>
     </div>
   );
 }

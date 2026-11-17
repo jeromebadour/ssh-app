@@ -57,7 +57,7 @@ function HuePick(props: { colour: number; open: boolean; toggle(): void; pick(n:
   );
 }
 
-function SectionHead(props: { glyph: string; title: string; aside?: string }) {
+export function SectionHead(props: { glyph: string; title: string; aside?: string }) {
   return <div class="sect-head"><Glyph name={props.glyph} />{props.title}{props.aside && <span class="sect-aside">{props.aside}</span>}</div>;
 }
 

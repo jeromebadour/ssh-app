@@ -327,6 +327,22 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .sect-head { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
 .sect-head .glyph { width: 14px; height: 14px; color: var(--text-3); }
 .sect-aside { margin-left: auto; font-weight: 400; color: var(--text-3); }
+/* The settings: the same dialog as everywhere else, with its sections one under another. The first section
+   keeps the top border off, because the dialog's own title is already above it. */
+.dlg-settings { width: 480px; }
+.dlg-settings .sect:first-of-type { margin-top: 10px; padding-top: 0; border-top: 0; }
+.dlg-settings .said { margin: 0 0 8px; font-size: 12px; color: var(--text-2); word-break: break-all; }
+.dlg-settings .said.quiet { color: var(--text-3); }
+.settings-actions { margin-top: 10px; justify-content: flex-start; }
+.size-row { display: flex; gap: 6px; }
+.size-btn { padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+/* The one in use carries the app's own colour, as every other chosen thing in this window does: --hue is a
+   tab's colour and there is no tab behind a dialog, so it would have fallen back to nothing here. */
+.size-btn:hover { color: var(--text-1); border-color: color-mix(in srgb, var(--main) 40%, var(--line)); }
+.size-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--main) 70%, var(--text-1)); outline-offset: 1px; }
+.size-btn.on { color: var(--text-1); border-color: color-mix(in srgb, var(--main) 70%, var(--line)); background: color-mix(in srgb, var(--main) 20%, transparent); }
+.bm-foot { display: flex; gap: 6px; }
+.bm-settings { margin-left: auto; }
 .place-row { display: grid; grid-template-columns: 120px 1fr 16px; align-items: center; gap: 10px; height: 32px; padding: 0 10px; margin-bottom: 4px; border-radius: var(--r); background: var(--bg); }
 .pl-name { font-weight: 500; }
 .pl-path { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); }

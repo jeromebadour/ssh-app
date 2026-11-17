@@ -2,11 +2,12 @@
 // and which tabs exist come from main, and everything it asks goes through the few messages in common/ipc.ts.
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
-import type { GateState, ShellPort, ShellState, TabInfo } from '../common/ipc';
+import { SETTINGS_DEFAULT, type GateState, type ShellPort, type ShellState, type TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, WindowStrip, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialog, ReplaceDialog } from '../ui/boxdialogs';
 import { LinkDialog } from '../ui/linkdialog';
+import { SettingsDialog } from '../ui/settings';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateFoot, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
@@ -24,7 +25,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '' };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -45,6 +46,7 @@ const noBar = {
   editBox: () => undefined,
   removeBox: () => undefined,
   menu: () => undefined,
+  settings: () => undefined,
   window: () => undefined,
 };
 
@@ -84,6 +86,7 @@ function Unlocked(props: { s: ShellState }) {
     if (stopped && dialog.kind === 'none' && !s.check) setDialog({ kind: 'changed', tab: stopped.id });
   }, [stopped?.id, dialog.kind, s.check === null]);
   const act: BarActions = {
+    settings: () => port.cmd({ op: 'settings', show: true }),
     select: (id) => port.cmd({ op: 'select', id }),
     close: (id) => {
       // Closing a tab ends its session, so it asks first, the same as closing the window does. A tab whose
@@ -181,6 +184,17 @@ function Unlocked(props: { s: ShellState }) {
           asked={s.replacing}
           onReplace={() => port.cmd({ op: 'replaceFile' })}
           onKeep={() => port.cmd({ op: 'keepFile' })}
+        />
+      )}
+      {/* The settings, opened from the Boxes menu. Opening it changes nothing. */}
+      {s.settingsOpen && (
+        <SettingsDialog
+          settings={s.settings}
+          downloadsNow={s.downloadsNow}
+          onPick={() => port.cmd({ op: 'pickDownloads' })}
+          onDefault={() => port.cmd({ op: 'defaultDownloads' })}
+          onSize={(size) => port.cmd({ op: 'paneSize', size })}
+          onClose={() => port.cmd({ op: 'settings', show: false })}
         />
       )}
       {/* Closing the window: main asked, naming every session that would end. */}

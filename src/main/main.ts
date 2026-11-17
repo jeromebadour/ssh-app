@@ -2,14 +2,14 @@
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
+import { constants as fsConstants, appendFileSync, statSync } from 'node:fs';
+import { access, mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes, fingerprintOf } from './boxes';
@@ -276,7 +276,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked };
+  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ?? '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -754,6 +754,10 @@ function openTab(boxId = '', place = ''): Tab | null {
     sendTo(view, CH.tabState, info(tab));
     sendTo(view, CH.tabShown, id === active);
     sendTo(view, CH.tabPace, pace.share);
+    // How big this tab's list starts. It is sent once, as the view comes up: changing it later is about the
+    // next tab, not about this one, because a list that resized itself under a reading hand would be worse
+    // than one that waits (BUILD-RULES 2.4).
+    sendTo(view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1 });
   });
   void view.webContents.loadURL(`${origin}/index.html`);
   if (box) setTimeout(() => begin(120, 40), 2000).unref();
@@ -955,7 +959,16 @@ const filesAsked = new Map<string, number>();
 // One folder holds everything brought over from a box, so a download can never land anywhere else and a person
 // has one place to look. The name is worked out from the box's name for the file (common/landing.ts) and then
 // made free of whatever is already in the folder: a download never writes over a file that is already there.
-const downloadsInto = (): string => (LAB_PROFILE ? path.join(LAB_PROFILE, 'downloads') : path.join(app.getPath('downloads'), 'Berth'));
+// Where everything brought over from a box lands. His own choice when he has made one, and Berth's own folder
+// under his downloads when he has not. It is read fresh every time rather than kept, so a change takes hold on
+// the next download and not on the next start.
+const downloadsInto = (): string => {
+  const chosen = boxes?.settings.downloads ?? '';
+  if (chosen !== '') return chosen;
+  return LAB_PROFILE ? path.join(LAB_PROFILE, 'downloads') : path.join(app.getPath('downloads'), 'Berth');
+};
+// The settings are on screen. Opening them changes nothing: it is a screen, not an action.
+let settingsOpen = false;
 // Space to leave on the disk beyond the file itself, so a download cannot be the thing that fills it.
 const spareOnDisk = 64 * 1024 * 1024;
 type Coming = { tab: number; into: string; name: string; why: string };
@@ -1226,6 +1239,43 @@ const brokeKey = (way: string, box: string, where: string): string => `${way}:${
 // known to be wrong, and the engine has already taken its half-written file away.
 const WORTH_TAKING_UP = new Set(['no-answer', 'no-link', 'failed', 'denied']);
 
+// Where downloads land is his to choose, and the choosing is the system's own: a view may ask for the chooser
+// and may never name a folder (plan B2.7). The folder is checked for being one, and for being somewhere this
+// app can really write, before it is saved: a setting that is wrong is found here and not at the first
+// download, when a file is already half across the network.
+let choosingDownloads = false;
+async function pickDownloads(): Promise<void> {
+  if (!win || !gate?.unlocked || choosingDownloads) return;
+  choosingDownloads = true;
+  let picked: string | undefined;
+  try {
+    if (labChoosesAFolder) picked = labChoosesAFolder();
+    else {
+      const answer = await dialog.showOpenDialog(win, { title: 'Where files brought over from a box should land', buttonLabel: 'Use this folder', properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'] });
+      picked = answer.canceled ? undefined : answer.filePaths[0];
+    }
+  } finally {
+    choosingDownloads = false;
+  }
+  if (picked === undefined) {
+    done = 'No folder was chosen; downloads land where they did';
+    return tellShell();
+  }
+  try {
+    const f = await stat(picked);
+    if (!f.isDirectory()) throw new Error('not a folder');
+    await access(picked, fsConstants.W_OK);
+  } catch {
+    done = 'That folder cannot be written to, so downloads land where they did';
+    return tellShell();
+  }
+  const saved = await boxes?.setSettings({ downloads: picked });
+  done = saved?.ok === false ? `The list could not be written: ${saved.error}` : 'Downloads will land in the folder you chose';
+  tellShell();
+}
+// The lab cannot answer the system's own chooser, so the self-test answers it here instead.
+let labChoosesAFolder: (() => string | undefined) | null = null;
+
 // ---- Fetching a small file so it can be dragged (plan B4.5) ----
 // A file on a box cannot be dragged into anything until it is on this PC, because Windows takes hold of a
 // file and not of an idea of one. So a press on a small file fetches it, into a folder of Berth's own that
@@ -1491,6 +1541,27 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     closingAsked = null;
     closingForReal = true;
     win?.close();
+  } else if (c?.op === 'settings') {
+    // A screen, not an action: opening it changes nothing and closing it changes nothing back.
+    settingsOpen = c.show === true;
+    overlay = settingsOpen;
+    stack();
+    tellShell();
+  } else if (c?.op === 'pickDownloads') {
+    void pickDownloads();
+  } else if (c?.op === 'defaultDownloads') {
+    void (async () => {
+      const saved = await boxes?.setSettings({ downloads: '' });
+      done = saved?.ok === false ? `The list could not be written: ${saved.error}` : 'Downloads land in Berth\'s own folder again';
+      tellShell();
+    })();
+  } else if (c?.op === 'paneSize') {
+    const size = typeof c.size === 'number' && c.size >= 0.5 && c.size <= 3 ? c.size : 1;
+    void (async () => {
+      const saved = await boxes?.setSettings({ paneSize: size });
+      done = saved?.ok === false ? `The list could not be written: ${saved.error}` : `A new tab's list starts at ${Math.round(size * 100)}%`;
+      tellShell();
+    })();
   } else if (c?.op === 'pickKeyFile') {
     // Which file it is stays main's own, from the system's chooser: a view may type a passphrase, never name a
     // file (the same rule the way back from a damaged list follows).
@@ -1702,7 +1773,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');
