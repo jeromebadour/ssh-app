@@ -69,6 +69,27 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-stop:hover { background: color-mix(in srgb, #c3ccd3 12%, transparent); color: #d7dee4; }
 .fb-stop:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 
+/* Deleting asks first, in the pane, because it is about this tab's own folder. The way out comes first and
+   holds the focus; the one that deletes carries the colour that means it (BUILD-RULES 2.20). */
+.fb-ask { padding: 8px 0 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.fb-ask-head { color: #d7dee4; font-weight: 500; }
+.fb-ask-said { margin-top: 4px; color: #96a3ae; }
+.fb-ask-acts { display: flex; gap: 8px; margin-top: 8px; }
+.fb-ask-keep, .fb-ask-go { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 0; border-radius: 3px; font: inherit; font-size: 11px; cursor: pointer; }
+.fb-ask-keep { background: color-mix(in srgb, #c3ccd3 10%, transparent); color: #d7dee4; }
+.fb-ask-keep:hover { background: color-mix(in srgb, #c3ccd3 16%, transparent); }
+.fb-ask-go { background: #8c5048; color: #f2e4e1; }
+.fb-ask-go:hover { background: #9b5950; }
+.fb-ask-keep:focus-visible, .fb-ask-go:focus-visible, .fb-bin-empty:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: 2px; }
+/* What has been deleted on this disk. */
+.fb-bin-empty { display: inline-flex; align-items: center; gap: 5px; margin: 2px 10px 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 3px; background: none; color: #96a3ae; font: inherit; font-size: 11px; cursor: pointer; }
+.fb-bin-empty:hover { background: color-mix(in srgb, #c3ccd3 10%, transparent); color: #d7dee4; }
+/* In the trash, putting something back is the only thing a row does, so it is always there to be pressed
+   rather than appearing under the hand. */
+.fb-back { color: #8fb58c; opacity: 1; }
+/* The trash is open: its button says so, the way a pressed thing does. */
+.fb-send[data-open='yes'] { background: color-mix(in srgb, var(--hue) 22%, transparent); color: #d7dee4; }
+
 /* A hash a person asked the box for: what it is, a way to copy it, and a place to paste what it should be. */
 .fb-hash { padding: 7px 0 9px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .fb-hash-top { display: flex; align-items: center; gap: 6px; }

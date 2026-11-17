@@ -315,9 +315,20 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel';
+  name?: string; // restore: which thing in the trash to put back. Never a path, and never a name of a view's own making elsewhere
   which?: 'sha256' | 'md5'; // a hash asked for: which one. Only these two may ever be asked of a box
   path: string;
+}
+
+// One thing in a box's trash. The record lives on the box, inside the trash itself, so it survives this app
+// being reinstalled: what a view is told here is only what to draw.
+export interface Trashed {
+  name: string; // what it is called inside the trash
+  from: string; // the whole path it was deleted from
+  when: number; // when it was deleted
+  size: number;
+  kind: string;
 }
 
 export interface FileRow {
@@ -352,4 +363,8 @@ export interface FilePage {
   hash?: string; // a hash asked for: the box's own hash of the file
   which?: string; // a hash asked for: which one it is
   resumedAt?: number; // a transfer taken up again: how much of it was already there
+  trashed?: Trashed; // a delete or a restore: the one thing that moved
+  trash?: Trashed[]; // what is in the trash now, newest first
+  emptied?: number; // an emptying: how many things went
+  freed?: number; // an emptying: how much they were holding
 }
