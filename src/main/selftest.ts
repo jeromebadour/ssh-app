@@ -779,6 +779,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             };
             const standing = (): Promise<string> => js<string>(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.dataset.name ?? ''`);
             const focused = (): Promise<string> => js<string>(front.view, `document.activeElement?.dataset?.name ?? ''`);
+            // The folder above was asked for again on the way up, and the path says where it is as soon as the
+            // box names it, which is before any row of it has arrived: the list is waited for, so what is
+            // read below is a list that is really on screen.
+            const backWithRows = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 1, 15_000);
+            check('the folder above is on screen again, rows and all', backWithRows, backWithRows);
             // Read in one go, so the three say what the list was at one moment and not at three.
             const stop = await js<{ stops: number; first: string; standing: string }>(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')]; return { stops: r.filter((e) => e.tabIndex === 0).length, first: r[0]?.dataset.name ?? '', standing: r.find((e) => e.tabIndex === 0)?.dataset.name ?? '' }; })()`);
             const firstName = stop.first;
