@@ -17,6 +17,29 @@ const WHY: Record<string, string> = {
   failed: 'That folder could not be read',
 };
 
+// What the window says for each way a download can end. As with a listing, a box's own words are never shown.
+const DOWNLOAD_WHY: Record<string, string> = {
+  'not-a-name': 'That file cannot be given a name on this PC',
+  'already-there': 'A file of that name is already here',
+  'not-the-same': 'What arrived is not what the box has, so it was not kept',
+  'pc-denied': 'The download folder could not be written to',
+  'pc-full': 'There is not enough room on this disk',
+  'no-such-file': 'That file is not there any more',
+  denied: 'This account may not read that file',
+  unsupported: 'This box has no file subsystem',
+  'no-answer': 'The box did not answer',
+  'no-link': 'There is no link to the box',
+  failed: 'It could not be brought over',
+};
+
+// What a mark on a finished download means, in words.
+const MARK: Record<string, string> = {
+  checked: 'checked against the box',
+  changed: 'it changed on the box while it was read, so it could not be checked',
+  'not-checked': 'the box could not check it',
+  '': 'it was not checked',
+};
+
 // Every ask on the tab's one file channel takes a number from here, so the browser and the viewer can both
 // use it and each knows which pages are its own.
 export interface Asker {
@@ -53,6 +76,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // arriving and the sort moves rows about, and a person's place should not move with them.
   let standing = '';
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
+  // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
+  // more than one at a time, and the strip at the foot says what each is doing.
+  type Bringing = { name: string; got: number; of: number; began: number; at: number; rate: number; landed: string; mark: string; markWhy: string; renamed: string; ended: string };
+  const bringing = new Map<number, Bringing>();
 
   const el = {
     path: document.createElement('div'),
@@ -76,6 +103,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       trying = null;
     }
     tried = keepTries;
+    for (const [id, b] of [...bringing]) {
+      if (b.ended !== '') bringing.delete(id); // what has finished has been read; what is still coming goes on
+    }
     if (asking !== 0) ask({ id: asking, do: 'cancel', path: '' }); // the one running is abandoned, not read on
     asking = asker.ask({ do: 'list', path });
     asked = path;
@@ -100,6 +130,33 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let trying: ReturnType<typeof setTimeout> | null = null;
 
   port.onFilePage((p: FilePage) => {
+    const down = bringing.get(p.id);
+    if (down) {
+      if (typeof p.of === 'number' && p.of > 0) down.of = p.of;
+      if (typeof p.got === 'number') {
+        // The speed is of the last stretch, not of the whole download, so a link that slows is seen slowing.
+        const now = performance.now();
+        if (now > down.at) down.rate = ((p.got - down.got) * 1000) / (now - down.at);
+        down.got = p.got;
+        down.at = now;
+      }
+      // Where it landed is said on its own page, a moment before the one that says the ask is finished: what
+      // each page carries is kept, and the end is written from all of it together.
+      if (typeof p.landed === 'string') down.landed = p.landed;
+      if (typeof p.mark === 'string') down.mark = p.mark;
+      if (typeof p.markWhy === 'string') down.markWhy = p.markWhy;
+      if (typeof p.renamed === 'string') down.renamed = p.renamed;
+      if (p.done) {
+        down.ended = p.error
+          ? (DOWNLOAD_WHY[p.error] ?? DOWNLOAD_WHY['failed']!)
+          : down.landed !== ''
+            ? `${down.landed} is in the download folder, ${MARK[down.mark] ?? 'it was not checked'}${down.markWhy === '' ? '' : ` (${down.markWhy})`}${down.renamed === '' ? '' : ` (renamed: ${down.renamed})`}`
+            : 'It was stopped';
+        down.at = performance.now();
+      }
+      draw();
+      return;
+    }
     if (p.id !== asking) return; // a page of a listing already left behind
     if (typeof p.where === 'string') where = p.where;
     if (p.space) space = p.space;
@@ -186,6 +243,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const bits: string[] = [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
     if (space) bits.push(`${size(space.free)} free of ${size(space.total)}`);
     if (said !== '') bits.push(said);
+    // What is being brought over, one line each: how far it has got, how fast, and how long is left. A
+    // finished one says where it went and whether it could be checked, and stays until the next move.
+    for (const b of bringing.values()) {
+      if (b.ended !== '') {
+        bits.push(b.ended);
+        continue;
+      }
+      const left = b.rate > 1 && b.of > b.got ? `, ${howLong((b.of - b.got) / b.rate)} left` : '';
+      bits.push(`${shorten(b.name, 28)} ${size(b.got)} of ${size(b.of)}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}`);
+    }
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
         const sep = document.createElement('span');
@@ -221,6 +288,23 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (enter) {
       e.classList.add('fb-can-enter');
       e.addEventListener('dblclick', enter);
+    }
+    if (r.kind === 'file') {
+      // Bringing the file over, by hand. The button is on the row rather than in a menu, and it says what it
+      // does with a glyph before a word (BUILD-RULES 2.1); the keyboard's way to the same thing is Ctrl+S.
+      const get = document.createElement('button');
+      get.className = 'fb-get';
+      get.type = 'button';
+      get.title = 'Bring this file to the PC (Ctrl+S)';
+      get.setAttribute('aria-label', `Bring ${r.name} to the PC`);
+      get.tabIndex = -1;
+      get.append(glyph('bring'));
+      get.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        place(r.name);
+        bring(r.name);
+      });
+      e.append(get);
     }
     return e;
   };
@@ -274,10 +358,35 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
+  // Bringing a file over to the PC. The view says which file on its own box, and nothing else: where it lands
+  // and what it is called there are main's (plan B2.7). One file can be brought over once at a time.
+  const bring = (name: string): void => {
+    const r = rows.find((x) => x.name === name);
+    if (!r) return;
+    if (r.kind !== 'file') {
+      said = `${name} is a ${r.kind === 'folder' ? 'folder' : r.kind}, and only a file can be brought over`;
+      draw();
+      return;
+    }
+    for (const b of bringing.values()) {
+      if (b.name === name && b.ended === '') return; // already on its way
+    }
+    const id = asker.ask({ do: 'get', path: join(where || asked, name) });
+    bringing.set(id, { name, got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', ended: '' });
+    draw();
+  };
+
   // The list is reached by the keyboard, not only by a mouse: Tab lands on it, the arrows move inside it, and
   // Enter opens what a double-click would. Anything with Ctrl, Alt or the Windows key is not the list's: those
   // belong to the window itself or to the box.
   el.list.addEventListener('keydown', (e: KeyboardEvent) => {
+    // The one press with Ctrl the list answers: bringing the file it is standing on over to the PC. It is the
+    // save key, it is not a key a window or a box has any use for here, and the list is not a terminal.
+    if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 's' || e.key === 'S')) {
+      bring(standing);
+      e.preventDefault();
+      return;
+    }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const all = names();
     if (e.key === 'ArrowDown') step(1);
@@ -304,6 +413,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     rows: () => rows.length,
     draw,
   };
+}
+
+// A length of time in the words a person uses for it, never more exactly than it is worth saying.
+function howLong(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 360) / 10}h`;
 }
 
 // The folder above this one, or nothing at the very top.
@@ -357,6 +474,7 @@ export const SHAPES: Record<string, string> = {
   zoomIn: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5M5.2 7H8.8M7 5.2v3.6',
   zoomOut: 'M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M10 10l3.5 3.5M5.2 7H8.8',
   close: 'M4.5 4.5l7 7M11.5 4.5l-7 7',
+  bring: 'M8 2.5v7M5 6.5L8 9.5l3-3M3.5 12.5h9',
 };
 
 export function glyph(kind: string): SVGSVGElement {

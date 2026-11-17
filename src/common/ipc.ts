@@ -299,7 +299,7 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'cancel';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'cancel';
   path: string;
 }
 
@@ -321,4 +321,12 @@ export interface FilePage {
   attrs?: FileRow;
   data?: string; // a file being read: a piece of it, base64, in order from its start
   more?: boolean; // a file being read: it goes on past what Berth will read into a viewer
+  // A file being brought over to the PC.
+  got?: number; // bytes written to the PC so far
+  of?: number; // how big the box says the file is
+  landed?: string; // the name it was given on the PC, once it is really there
+  mark?: string; // "checked", "changed" or "not-checked": what its hash proved
+  markWhy?: string; // why it could not be checked, where it could not
+  into?: string; // the folder everything brought over lands in; main's word, never a view's
+  renamed?: string; // why the name it landed under is not the box's name for it
 }
