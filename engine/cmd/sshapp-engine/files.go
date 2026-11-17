@@ -65,40 +65,50 @@ const (
 // files is the engine's side of a tab's files: one channel, opened the first time anything is asked, and the
 // asks running on it.
 type files struct {
-	o    *out
-	l    *link.Link
-	mu   sync.Mutex
-	c    *sftp.Client
-	open bool
-	jobs map[uint64]context.CancelFunc
+	o        *out
+	l        *link.Link
+	mu       sync.Mutex
+	c        *sftp.Client
+	failedAt time.Time // when the last try to open the channel failed
+	failed   error     // and what it said, for asks inside the quiet time after it
+	jobs     map[uint64]context.CancelFunc
 }
+
+// How long after a failed opening the same answer is given without asking the box again.
+const quietAfterFail = 2 * time.Second
 
 func newFiles(o *out, l *link.Link) *files {
 	return &files{o: o, l: l, jobs: map[uint64]context.CancelFunc{}}
 }
 
-// client opens the file channel the first time it is wanted, and keeps it. A box that offers no file
-// subsystem is said once and not asked again.
+// client opens the file channel the first time it is wanted, and keeps it.
+//
+// A try that fails is not the end of it. The first ask can land in the moment before the link is really ready,
+// and a box can be busy; treating one failure as final leaves the browser dead for as long as that tab lives,
+// with nothing a person can do but close it. So the next ask tries again. What a failure does buy is a short
+// quiet time, so a run of asks cannot turn one refusal into a storm of channel openings at a box.
 func (f *files) client(ctx context.Context) (*sftp.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.c != nil {
 		return f.c, nil
 	}
-	if f.open {
-		return nil, errors.New("this box has no file subsystem")
+	if !f.failedAt.IsZero() && time.Since(f.failedAt) < quietAfterFail {
+		return nil, f.failed
 	}
-	f.open = true
 	ch, err := f.l.OpenFiles()
 	if err != nil {
+		f.failedAt, f.failed = time.Now(), err
 		return nil, err
 	}
 	c, err := sftp.Start(ctx, ch)
 	if err != nil {
 		_ = ch.Close()
+		f.failedAt, f.failed = time.Now(), err
 		return nil, err
 	}
 	f.c = c
+	f.failedAt, f.failed = time.Time{}, nil
 	return c, nil
 }
 

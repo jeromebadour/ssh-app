@@ -19,6 +19,7 @@
 //	keyfile <path> [passphrase]     write a private key file where a person's own would be, in the format
 //	                                OpenSSH writes, and say its public half and fingerprint
 //	rekey                           become another box at the same address: a new identity, nothing else changed
+//	nofiles <n>                     say no to the next n asks for the file subsystem, as a busy box does
 //	quiet on|off                    the shells stop (or start again) sending back what they are given
 //	print <hex>                     print these bytes in every open session, as a program on the box would
 //	received                        {"hex":"..."}: every byte the shells were given since this was last asked
@@ -42,6 +43,7 @@ import (
 	"os"
 	"path/filepath"
 	"sshapp/engine/internal/lab/hostile"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +94,9 @@ func main() {
 	_ = os.WriteFile(filepath.Join(files, "kit.tar.gz"), make([]byte, 23_400), 0o644)
 	_ = os.WriteFile(filepath.Join(files, "logs", "today.log"), []byte("line one\nline two\n"), 0o644)
 	_ = os.Symlink("notes.txt", filepath.Join(files, "latest"))
+	// A link inside a listed folder, so the window can be shown something that is neither a file nor a folder
+	// in the same place it shows the rest.
+	_ = os.Symlink("syslog", filepath.Join(files, "var", "log", "current"))
 
 	box, err := hostile.Start(hostile.Config{HostSigner: host, Sessions: true, FilesUnder: files, Banner: "Welcome to the lab box\n\x1b[c\x1b]52;c;aGlkZGVu\x07\x1b[31msecond line\n*** System restart required ***\n"})
 	if err != nil {
@@ -225,6 +230,14 @@ func main() {
 		case "seen":
 			tries, users := box.SignInTries()
 			say(map[string]any{"tries": tries, "users": users, "sessions": box.Sessions()})
+		case "nofiles":
+			n, err := strconv.Atoi(rest)
+			if err != nil || n < 0 {
+				say(map[string]any{"error": "a count"})
+				continue
+			}
+			box.RefuseFiles(n)
+			say(map[string]any{"refusing": n})
 		case "quiet":
 			box.Quiet(rest == "on")
 			say(map[string]any{"quiet": rest == "on"})

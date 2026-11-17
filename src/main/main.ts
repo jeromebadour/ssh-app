@@ -1,6 +1,7 @@
 // The main process: the window, the views, the engines, and the few messages that cross between them.
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
+import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -35,8 +36,14 @@ if (app.isPackaged && process.argv.length > 1 && !LAB) refuse();
 app.setName('Berth');
 // A lab or development run keeps its files apart from a real profile: in the folder it is given, or in a fresh
 // one. A release build never reads this.
+//
+// Fresh has to mean fresh. A folder named after the process alone is not: process numbers come round again,
+// on a machine that has been running a while and on every container that starts counting from the beginning,
+// and a self-test that lands on the folder an earlier run left behind starts with that run's boxes already in
+// its list. Then it fails on a name that is taken, and the fault looks like the app's. The name carries
+// something random as well, so each run begins with nothing.
 const LAB_RUN = !app.isPackaged || LAB;
-const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SSHAPP_SELFTEST'] ? path.join(os.tmpdir(), `berth-lab-${process.pid}`) : '')) : '';
+const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SSHAPP_SELFTEST'] ? path.join(os.tmpdir(), `berth-lab-${process.pid}-${randomBytes(6).toString('hex')}`) : '')) : '';
 if (LAB_PROFILE) app.setPath('userData', path.join(LAB_PROFILE, 'profile'));
 
 const DIST = __dirname;
@@ -659,7 +666,11 @@ function openTab(boxId = '', place = ''): Tab | null {
   win.contentView.addChildView(view);
   // A paste is a person's own doing, and main must have seen it: these two events reach main before the page
   // sees anything. The view is never asked, and never asks.
-  view.webContents.on('before-input-event', (_e, input) => {
+  view.webContents.on('before-input-event', (e, input) => {
+    if (windowKey(input)) {
+      e.preventDefault();
+      return;
+    }
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
     const paste = (input.control && input.shift && key === 'v') || (input.control && key === 'v') || (input.shift && key === 'insert');
@@ -681,6 +692,64 @@ function openTab(boxId = '', place = ''): Tab | null {
   layout();
   tellShell();
   return tab;
+}
+
+// ---- The window's own keys ----
+// Which tab is in front is the window's business, not a box's, so these presses are taken here in main, before
+// any view is given them. That is what makes them work the same wherever the focus happens to be: the
+// terminal, the row of files, a file open in the viewer, or a file held ready to be dragged. A page cannot
+// swallow them and a box is never sent them.
+//
+// Only presses no box can want are taken. Ctrl+Tab and Ctrl+Shift+Tab cannot be written as bytes to a box at
+// all, and Ctrl+Alt+a number is nobody's: Ctrl with a number alone is not free (Ctrl+2 is a zero byte to a
+// terminal, Ctrl+6 and Ctrl+8 are bytes too), and neither are Ctrl+PageUp and Ctrl+PageDown, which real
+// programs on a box use to move between their own windows. Those stay the box's.
+let keysRefused = 0; // a window key pressed where the window is not the person's to drive: counted, never acted on
+
+function goToTab(id: number): void {
+  if (!tabs.has(id)) return;
+  active = id;
+  meter.tabSwitchBegins(id);
+  frontTold.delete(id); // told again even if it was in front already: its frame ends the switch
+  layout();
+  tellShell();
+}
+
+// Answers the press, and says whether it was this window's to answer. True means no view ever sees it.
+function windowKey(input: { type: string; key: string; control: boolean; shift: boolean; alt: boolean; meta: boolean }): boolean {
+  if (input.type !== 'keyDown' || !input.control || input.meta) return false;
+  const digit = input.alt && input.key.length === 1 && input.key >= '1' && input.key <= '9';
+  const step = !input.alt && input.key === 'Tab';
+  if (!digit && !step) return false;
+  // A dialog of the window's own is in front, or the window is not the one being typed into: the press is not
+  // this person's doing here, so nothing moves. It is still taken, so no view is given a key meant for main.
+  if (overlay || !win?.isFocused()) {
+    keysRefused++;
+    return true;
+  }
+  const ids = [...tabs.keys()];
+  if (step) {
+    if (ids.length < 2) {
+      done = 'This is the only tab';
+      tellShell();
+      return true;
+    }
+    const at = ids.indexOf(active);
+    const next = ids[(at + (input.shift ? ids.length - 1 : 1) + ids.length) % ids.length]!;
+    goToTab(next);
+    return true;
+  }
+  // Ctrl+Alt and a number: that tab, counting from the left. 9 is the last one, however many there are, which
+  // is what every tabbed window does and what a person reaches for when there are more than nine.
+  const want = Number(input.key);
+  const id = want === 9 ? ids[ids.length - 1] : ids[want - 1];
+  if (id === undefined) {
+    done = `There is no tab ${want}`;
+    tellShell();
+    return true;
+  }
+  goToTab(id);
+  return true;
 }
 
 function closeTab(id: number): void {
@@ -887,11 +956,7 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     done = `Copied the block for ${boxes!.get(c.box)!.name}`;
     tellShell();
   } else if (c?.op === 'select' && typeof c.id === 'number' && tabs.has(c.id)) {
-    active = c.id;
-    meter.tabSwitchBegins(c.id);
-    frontTold.delete(c.id); // told again even if it was in front already: its frame ends the switch
-    layout();
-    tellShell();
+    goToTab(c.id);
   } else if (c?.op === 'openLink' && waitingLink) closeLink(true);
   else if (c?.op === 'dropLink' && waitingLink) closeLink(false);
   else if (c?.op === 'sendPaste' && waitingPaste) closePaste(true);
@@ -1071,6 +1136,10 @@ if (!app.requestSingleInstanceLock()) {
       tellShell();
       tellGate();
     });
+    // The same keys when the focus is on the shell itself: the row of tabs, a menu, the status line.
+    shell.webContents.on('before-input-event', (e, input) => {
+      if (windowKey(input)) e.preventDefault();
+    });
     // The key process, and the lock in front of everything else.
     const listFile = path.join(app.getPath('userData'), 'list.berth');
     listOnDisk = listFile;
@@ -1118,7 +1187,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], chooseKeyFile, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, chooseKeyFile, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

@@ -49,6 +49,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let why = '';
   let busy = false;
   let space: { total: number; free: number } | null = null;
+  // Where the keyboard stands in the list, held by the name of the row rather than by its number: pages keep
+  // arriving and the sort moves rows about, and a person's place should not move with them.
+  let standing = '';
+  let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
 
   const el = {
     path: document.createElement('div'),
@@ -58,13 +62,20 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   el.path.className = 'fb-path';
   el.list.className = 'fb-list';
   el.list.id = 'fb-list';
+  el.list.setAttribute('role', 'listbox');
+  el.list.setAttribute('aria-label', 'Files on the box');
   el.foot.className = 'fb-foot';
   el.foot.id = 'fb-foot';
   at.append(el.path, el.list, el.foot);
 
   const ask = (a: FileAsk) => asker.ask(a);
 
-  const open = (path: string) => {
+  const open = (path: string, keepTries = 0) => {
+    if (trying) {
+      clearTimeout(trying);
+      trying = null;
+    }
+    tried = keepTries;
     if (asking !== 0) ask({ id: asking, do: 'cancel', path: '' }); // the one running is abandoned, not read on
     asking = asker.ask({ do: 'list', path });
     asked = path;
@@ -73,8 +84,20 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     why = '';
     space = null;
     busy = true;
+    standing = '';
+    said = '';
     draw();
   };
+
+  // A listing can fail for a reason that is nothing to do with the folder: the first ask can land in the
+  // moment before the link is ready, or the box can be busy. Those are tried again, a few times, a moment
+  // apart, and the window says it is trying rather than leaving a person looking at a dead list with no way
+  // to ask again. A reason that is the folder's own (it is not there, this account may not read it) is the
+  // answer, and is not tried again.
+  const WORTH_ANOTHER_TRY = new Set(['unsupported', 'no-link', 'no-answer', 'failed']);
+  const TRIES = 3;
+  let tried = 0;
+  let trying: ReturnType<typeof setTimeout> | null = null;
 
   port.onFilePage((p: FilePage) => {
     if (p.id !== asking) return; // a page of a listing already left behind
@@ -86,6 +109,15 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     if (p.error) why = WHY[p.error] ?? WHY['failed']!;
     if (p.done) busy = false;
+    if (p.error && WORTH_ANOTHER_TRY.has(p.error) && rows.length === 0 && tried < TRIES) {
+      tried++;
+      why = `${why}. Trying again (${tried} of ${TRIES})`;
+      const folder = asked;
+      trying = setTimeout(() => {
+        trying = null;
+        if (asked === folder) open(folder, tried);
+      }, 1200);
+    }
     draw();
   });
 
@@ -101,6 +133,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   const draw = () => {
     const here = where || asked;
+    const hadFocus = el.list.contains(document.activeElement);
     // A long path is cut in the middle, keeping its start and its end: the end says which folder this is and
     // the start says which disk it is on. It is cut here rather than by the stylesheet, because leaning on a
     // text direction to cut from the left moves the leading "/" to the other end of the line.
@@ -136,9 +169,23 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       el.list.append(frag);
     }
 
+    // Where the keyboard stands is settled from the rows that are really on screen, and from nothing else.
+    // Working it out twice, once here and once from the list the rows came from, is how the two come to
+    // disagree: pages keep arriving and the sort moves rows about, and a list with no tab stop in it cannot be
+    // reached by Tab at all. A name that has gone falls back to the first row.
+    const drawn = [...el.list.querySelectorAll<HTMLElement>('.fb-row')];
+    if (!drawn.some((e) => e.dataset['name'] === standing)) standing = drawn[0]?.dataset['name'] ?? '';
+    for (const e of drawn) {
+      const holds = e.dataset['name'] === standing;
+      e.tabIndex = holds ? 0 : -1;
+      e.setAttribute('aria-selected', String(holds));
+    }
+    if (hadFocus) drawn.find((e) => e.tabIndex === 0)?.focus();
+
     el.foot.replaceChildren();
     const bits: string[] = [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
     if (space) bits.push(`${size(space.free)} free of ${size(space.total)}`);
+    if (said !== '') bits.push(said);
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
         const sep = document.createElement('span');
@@ -157,6 +204,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (id) e.id = id;
     e.dataset['name'] = r.name;
     e.dataset['kind'] = r.kind;
+    // Every row is a place the keyboard can stand. Which one holds the tab stop is settled after the whole
+    // list is on screen, not here.
+    e.setAttribute('role', 'option');
+    e.addEventListener('mousedown', () => place(r.name));
     e.append(glyph(id === 'fb-up' ? 'up' : r.kind));
     const name = document.createElement('span');
     name.className = 'fb-name';
@@ -173,6 +224,79 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     return e;
   };
+
+  // What a row is for, found from its name: the same thing a double-click on it does.
+  const opener = (name: string): (() => void) | undefined => {
+    const here = where || asked;
+    if (name === '..') {
+      const up = parent(here);
+      return up === '' ? undefined : () => open(up);
+    }
+    const r = rows.find((x) => x.name === name);
+    if (!r) return undefined;
+    if (r.kind === 'folder') return () => open(join(here, r.name));
+    if (r.kind === 'file') return () => openFile(join(here, r.name), r.name, r.size);
+    return undefined;
+  };
+
+  // The names on screen now, in the order they are drawn, which is the order the arrows move through.
+  const names = (): string[] => [...el.list.querySelectorAll<HTMLElement>('.fb-row')].map((e) => e.dataset['name'] ?? '');
+
+  // Moving the place redraws the list, and the drawing is what carries the focus to the row that now holds
+  // the tab stop: one way of doing it, used by the arrows, by a click and by every page that arrives, rather
+  // than a second one here that only some of those would go through.
+  const place = (name: string): void => {
+    if (name === '' || standing === name) return;
+    standing = name;
+    said = '';
+    draw();
+  };
+
+  const step = (by: number): void => {
+    const all = names();
+    if (all.length === 0) return;
+    const now = all.indexOf(standing);
+    const want = now < 0 ? (by > 0 ? 0 : all.length - 1) : Math.min(all.length - 1, Math.max(0, now + by));
+    place(all[want]!);
+  };
+
+  // Enter on a row does what a double-click does. A row that is neither a file nor a folder opens nothing and
+  // says what it is, rather than leaving the press unanswered.
+  const enterHere = (): void => {
+    if (standing === '') return;
+    const go = opener(standing);
+    if (go) {
+      go();
+      return;
+    }
+    const r = rows.find((x) => x.name === standing);
+    said = r ? `${r.name} is a ${r.kind === 'unknown' ? 'thing Berth does not know' : r.kind}, so it does not open` : 'that row is no longer there';
+    draw();
+  };
+
+  // The list is reached by the keyboard, not only by a mouse: Tab lands on it, the arrows move inside it, and
+  // Enter opens what a double-click would. Anything with Ctrl, Alt or the Windows key is not the list's: those
+  // belong to the window itself or to the box.
+  el.list.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const all = names();
+    if (e.key === 'ArrowDown') step(1);
+    else if (e.key === 'ArrowUp') step(-1);
+    else if (e.key === 'Home') place(all[0] ?? '');
+    else if (e.key === 'End') place(all[all.length - 1] ?? '');
+    else if (e.key === 'PageDown') step(10);
+    else if (e.key === 'PageUp') step(-10);
+    else if (e.key === 'Enter' || e.key === ' ') enterHere();
+    else if (e.key === 'ArrowRight') {
+      if (rows.find((x) => x.name === standing)?.kind !== 'folder') return;
+      enterHere();
+    } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+      const up = parent(where || asked);
+      if (up === '') return;
+      open(up);
+    } else return;
+    e.preventDefault();
+  });
 
   return {
     open,
