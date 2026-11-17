@@ -85,7 +85,10 @@ jobs:
           files=""
           if [ -n "$NUMBER" ]; then files="$(gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename')"; fi
           if grep -qx 'toolchain/windows-run' <<<"$files"; then windows=true; fi
-          if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$)' <<<"$files"; then openssh=true; fi
+          # The workflow itself counts: the step that runs these tests, and the names it runs, live here, and a
+          # change to them that cannot be run is a change nobody has proved. (Found the hard way: the filter
+          # was corrected, the job skipped, and the correction went in unproven.)
+          if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$|\.github/workflows/ci\.yml$)' <<<"$files"; then openssh=true; fi
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
           echo "openssh=$openssh" >> "$GITHUB_OUTPUT"
           echo "the Windows run: $windows; the real OpenSSH servers: $openssh"
