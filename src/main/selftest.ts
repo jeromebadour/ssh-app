@@ -1101,7 +1101,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('wide.log'), 10_000);
             const before = await readdir(ctx.downloads).catch(() => [] as string[]);
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="wide.log"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="wide.log"] .fb-bring')?.click()`);
             // It has to be really under way before it is stopped, or this proves nothing: the line has to be
             // counting bytes of a file it has not finished.
             const partWay = await until(async () => /wide\.log [0-9.]+ [KM]?B of 8\.0 MB/.test(await foot()), 25_000);
@@ -1128,7 +1128,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('broken.log'), 10_000);
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-bring')?.click()`);
             const brokeSaid = await until(async () => (await foot()).includes('could not be brought over'), 30_000);
             // What it had is still there, under the name a half-written download has, and the file itself is
             // not in the folder under its own name.
@@ -1136,7 +1136,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('a download that breaks says so, keeps what it had, and nothing is there under the file\'s own name', brokeSaid && halfWay.includes('.berth-broken.log.part') && !halfWay.includes('broken.log'), [await foot(), halfWay]);
             // The box answers again, and the same press takes it up where it stopped.
             await lab.tell('failreads 0');
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="broken.log"] .fb-bring')?.click()`);
             const done = await until(async () => (await foot()).includes('is in the download folder'), 40_000);
             const said = await foot();
             const after = await readdir(ctx.downloads).catch(() => [] as string[]);
@@ -1165,7 +1165,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const took = await until(async () => (await text('#settings-downloads')) === mine, 10_000);
             check('a folder chosen in the system\'s own chooser becomes where downloads land', took && ctx.downloads !== mine && (await said()).includes('land in the folder you chose'), [took, await text('#settings-downloads')]);
             // And it really is where the next download lands, not only what the screen says.
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-bring')?.click()`);
             const landedThere = await until(async () => (await readdir(mine).catch(() => [] as string[])).some((n) => n.startsWith('syslog')), 30_000);
             check('and the next file brought over really lands there', landedThere, await readdir(mine).catch(() => []));
             // A folder that cannot be written to is refused here, where he can still be told, and not at the
@@ -1334,7 +1334,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const canDragBefore = ctx.canDrag(front.id);
             const rowBefore = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') === 'true'`);
             // Bring it over, and it becomes draggable: a line in the strip and the row itself.
-            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-bring')?.click()`);
             const there = await until(async () => (await foot()).includes('is in the download folder'), 30_000);
             const rowNow = await until(async () => js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"].fb-on-pc')?.getAttribute('draggable') === 'true'`), 5000);
             const lineNow = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('dragme.log'))`);
@@ -1373,7 +1373,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const lines = (): Promise<number> => js<number>(front.view, `document.querySelectorAll('#fb-moving .fb-moving-one').length`);
               const linesBefore = await lines();
               await lab.tell('failreads 1');
-              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-bring')?.click()`);
               const went = await until(async () => (await lines()) > linesBefore, 10_000);
               const settled = await until(async () => (await js<number>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one')].filter((e) => e.querySelector('.fb-stop')).length`)) === 0, 40_000);
               await lab.tell('failreads 0');
@@ -1396,7 +1396,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const spare = ctx.openTab(front.box!.id, 'logs')!;
             await until(() => spare.engine.link.phase === 'up', 25_000);
             await until(async () => (await js<number>(spare.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 0, 20_000);
-            await js(spare.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-get:not(.fb-sum)')?.click()`);
+            await js(spare.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-bring')?.click()`);
             const spareGotOne = await until(() => ctx.canDrag(spare.id) > 0, 30_000);
             const hadSpare = ctx.canDrag(spare.id);
             const hadFront = ctx.canDrag(front.id);
@@ -1645,6 +1645,125 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await until(async () => (await names()).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await names()).includes('syslog'), 10_000);
+          }
+          // Naming things on a box: a new name for what is there, and a new folder. Both are one name typed and
+          // one press, and what a box would refuse the window says first (plan B4.1).
+          {
+            const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            const names = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+            const field = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-name-field')?.value ?? ''`);
+            const panelSays = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-name-said')?.textContent ?? ''`);
+            const type = (v: string): Promise<unknown> =>
+              js(front.view, `(() => { const f = document.getElementById('fb-name-field'); f.value = ${JSON.stringify(v)}; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+
+            // F2 on the row the list stands on opens it, with the name in the field and the part before the
+            // last dot picked out, which is the part a rename almost always changes.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+            await js(front.view, `document.getElementById('fb-list')?.focus()`);
+            await js(front.view, `document.getElementById('fb-list')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))`);
+            const openedByKey = await until(() => has('#fb-name-field', front), 5000);
+            await until(async () => (await js<string>(front.view, `document.activeElement?.id ?? ''`)) === 'fb-name-field', 5000);
+            const held = await field();
+            const onTheField = await js<string>(front.view, `document.activeElement?.id ?? ''`);
+            check('F2 opens the naming panel on the row the list stands on, with that name in the field and the field in hand', openedByKey && held === 'syslog' && onTheField === 'fb-name-field', [openedByKey, held, onTheField]);
+            await shot('rename-asks', 'giving something on a box a new name', front);
+
+            // Escape leaves it alone, and the row keeps its name.
+            await js(front.view, `document.getElementById('fb-name-field')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            await sleep(150);
+            check('Escape leaves the name as it was', !(await has('#fb-name-field', front)) && (await names()).includes('syslog'), await names());
+
+            // What a box would refuse is refused here, before anything leaves the window: a name holding a
+            // slash, an empty one, and a name something in this folder already has.
+            const asksBefore = { ...ctx.filesAsked() };
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-rename')?.click()`);
+            await until(() => has('#fb-name-field', front), 5000);
+            await type('../passwd');
+            await js(front.view, `document.getElementById('fb-name-go')?.click()`);
+            await sleep(150);
+            const slashSaid = await panelSays();
+            await type('');
+            await js(front.view, `document.getElementById('fb-name-go')?.click()`);
+            await sleep(150);
+            const emptySaid = await panelSays();
+            // The name of something this folder really holds, found from the listing itself rather than
+            // guessed: a guess that is not there renames the file instead of being refused.
+            const sibling = (await names()).find((n) => n !== '..' && n !== 'syslog') ?? '';
+            await type(sibling);
+            await js(front.view, `document.getElementById('fb-name-go')?.click()`);
+            await sleep(150);
+            const takenSaid = await panelSays();
+            const askedNothing = JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore);
+            check('a name with a slash, an empty one, and one already in this folder are each refused in the window, and the box is asked nothing', sibling !== '' && slashSaid.includes('slash') && emptySaid.includes('Type a name') && takenSaid.includes('already called that') && askedNothing && (await names()).includes('syslog'), [sibling, slashSaid, emptySaid, takenSaid, ctx.filesAsked(), asksBefore]);
+
+            // And a real one: the row is called the new name, the list stands on it, and the box itself has
+            // the file under that name with its own bytes and nothing under the old one.
+            await type('syslog.kept');
+            await js(front.view, `document.getElementById('fb-name-go')?.click()`);
+            const renamed = await until(async () => (await names()).includes('syslog.kept'), 15_000);
+            const saidSo = await until(async () => (await foot()).includes('is now called'), 15_000);
+            const standsOn = await js<string>(front.view, `document.querySelector('#fb-list .fb-row[aria-selected="true"]')?.dataset?.name ?? ''`);
+            const onTheBox = await lab.tell('read var/log/syslog.kept');
+            const oldGone = await lab.tell('read var/log/syslog');
+            check('a new name is the name on the box as well: the bytes are under it, nothing is under the old one, and the list stands on it', renamed && saidSo && onTheBox['text'] === "a line of the box's own log\n" && oldGone['error'] === 'no such file' && standsOn === 'syslog.kept' && !(await names()).includes('syslog'), [await foot(), onTheBox, oldGone, standsOn]);
+
+            // Back to the name the probes after this one expect.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog.kept"] .fb-rename')?.click()`);
+            await until(() => has('#fb-name-field', front), 5000);
+            await type('syslog');
+            await js(front.view, `document.getElementById('fb-name-field')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+            const backAgain = await until(async () => (await names()).includes('syslog'), 15_000);
+            check('Enter in the field does it too, and the name is back as it was', backAgain && (await lab.tell('read var/log/syslog'))['text'] === "a line of the box's own log\n", await names());
+
+            // A pane is redrawn whenever anything arrives from the box, and a person naming something is
+            // typing into it while that happens. What they have typed, where the caret is and which element
+            // holds it all have to survive a redraw, or a name ends up half typed into the middle of itself.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="syslog"] .fb-rename')?.click()`);
+            await until(() => has('#fb-name-field', front), 5000);
+            await type('half-typed');
+            await js(front.view, `(() => { const f = document.getElementById('fb-name-field'); f.focus(); f.setSelectionRange(4, 4); })()`);
+            // The redraw is made to happen by a press that redraws the whole pane and asks the box for
+            // nothing: ordering the list another way. That it really happened is proved by the order itself
+            // changing, so this probe cannot pass by nothing having been drawn at all.
+            const orderWas = (await names()).join();
+            await clickOn('#fb-by-size', front);
+            await until(async () => (await names()).join() !== orderWas, 5000);
+            const orderNow = (await names()).join();
+            await clickOn('#fb-by-name', front);
+            await sleep(200);
+            const kept = await field();
+            const caret = await js<number>(front.view, `document.getElementById('fb-name-field')?.selectionStart ?? -1`);
+            const stillOnIt = await js<string>(front.view, `document.activeElement?.id ?? ''`);
+            check('a redraw while a name is being typed keeps the letters and the caret where they were', kept === 'half-typed' && caret === 4 && stillOnIt !== '' && orderNow !== orderWas, [kept, caret, stillOnIt, orderWas === orderNow]);
+            await js(front.view, `document.getElementById('fb-name-drop')?.click()`);
+            await sleep(150);
+
+            // A new folder: it is in the list, and the box itself has a folder there.
+            await js(front.view, `document.getElementById('fb-newfolder')?.click()`);
+            await until(() => has('#fb-name-field', front), 5000);
+            const emptyToStart = await field();
+            await type('kept logs');
+            await js(front.view, `document.getElementById('fb-name-go')?.click()`);
+            const made = await until(async () => (await names()).includes('kept logs'), 15_000);
+            const boxHasIt = await lab.tell('look var/log/kept logs');
+            const madeSaid = await foot();
+            check('a new folder is made where it was asked for, and it is a folder on the box', made && emptyToStart === '' && boxHasIt['kind'] === 'folder' && madeSaid.includes('made'), [made, emptyToStart, boxHasIt, madeSaid]);
+            await shot('new-folder', 'a folder made on a box from the window', front);
+
+            // The same name again is refused, and by the box's own answer and not only by the window: the
+            // window is made to ask for it, so what comes back is the box's.
+            const beforeTaken = ctx.filesAsked()['folder'] ?? 0;
+            await js(front.view, `window.tabPort.files({ id: 92001, do: 'folder', path: '/var/log', name: 'kept logs' })`);
+            await sleep(600);
+            const stillOne = (await names()).filter((n) => n === 'kept logs').length;
+            check('the box refuses a folder whose name is taken, and the one that is there is left alone', (ctx.filesAsked()['folder'] ?? 0) === beforeTaken + 1 && stillOne === 1 && (await lab.tell('look var/log/kept logs'))['kind'] === 'folder', [ctx.filesAsked()['folder'], beforeTaken, stillOne]);
+
+            // A view may name one name and nothing path-shaped, for either ask: main drops the rest.
+            const droppedBefore = ctx.dropped();
+            await js(front.view, `(window.tabPort.files({ id: 92010, do: 'rename', path: '/var/log/syslog', name: '../passwd' }), window.tabPort.files({ id: 92011, do: 'rename', path: '/var/log/syslog', name: '' }), window.tabPort.files({ id: 92012, do: 'rename', path: '/var/log/syslog' }), window.tabPort.files({ id: 92013, do: 'folder', path: '/var/log', name: 'a/b' }), window.tabPort.files({ id: 92014, do: 'folder', path: '/var/log', name: '..' }))`);
+            await sleep(400);
+            const stillThere = await lab.tell('read var/log/syslog');
+            check('a view naming a path, or nothing at all, is dropped by main for both asks', ctx.dropped() === droppedBefore + 5 && typeof stillThere['text'] === 'string' && (await lab.tell('look var/passwd'))['error'] === 'no such file', [ctx.dropped() - droppedBefore, stillThere]);
           }
           // A box that says no to the file subsystem the first time it is asked. A real box does, when it is
           // busy or when the link is barely up. One refusal used to leave that tab's browser dead for as long

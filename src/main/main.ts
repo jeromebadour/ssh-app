@@ -890,7 +890,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel' || what === 'unqueue' || what === 'grab';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel' || what === 'unqueue' || what === 'grab' || what === 'rename' || what === 'folder';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -949,10 +949,32 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
     filesAsked.set('restore', (filesAsked.get('restore') ?? 0) + 1);
     return;
   }
+  // A new name for something, or one new folder. The name is one name and never a path: main holds to that
+  // here, and the engine holds to it again on the other side, because a name that can hold a slash is a name
+  // that can move a file anywhere on the box (plan B2.7).
+  if (what === 'rename' || what === 'folder') {
+    const name = a['name'];
+    if (typeof name !== 'string' || !aName(name)) return drop('tab:file-ask', e);
+    if (!tab.engine.askFiles({ id, do: what, path: where, name })) return drop('tab:file-ask', e);
+    filesAsked.set(what, (filesAsked.get(what) ?? 0) + 1);
+    return;
+  }
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
   filesAsked.set(what, (filesAsked.get(what) ?? 0) + 1);
 
 });
+// One name a person typed for something on a box: a name on its own. A slash would make it a path, and a
+// control character would let it lie in anything drawn or written as lines; the length is what boxes hold to.
+const aName = (name: string): boolean => {
+  if (name === '' || name.length > 255 || name === '.' || name === '..') return false;
+  if (name.includes('/')) return false;
+  for (const ch of name) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+};
+
 // What a view has asked of its box's files, by kind, for the lab to say which asks really left main.
 const filesAsked = new Map<string, number>();
 

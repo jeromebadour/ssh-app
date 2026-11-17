@@ -268,6 +268,22 @@ func main() {
 				continue
 			}
 			say(map[string]any{"text": string(b)})
+		case "look":
+			// What the box itself holds at one path: whether it is there at all, and what kind of thing it is.
+			// A folder cannot be read, so this is how a test sees that one a window says it made is really on
+			// the box, and not only drawn.
+			st, err := os.Lstat(filepath.Join(files, filepath.FromSlash(rest)))
+			if err != nil {
+				say(map[string]any{"error": "no such file"})
+				continue
+			}
+			kind := "file"
+			if st.IsDir() {
+				kind = "folder"
+			} else if st.Mode()&os.ModeSymlink != 0 {
+				kind = "link"
+			}
+			say(map[string]any{"kind": kind, "size": st.Size(), "mode": fmt.Sprintf("%o", st.Mode().Perm())})
 		case "forget":
 			// Take one of the box's own files away again, so a test can run twice.
 			say(map[string]any{"gone": os.Remove(filepath.Join(files, filepath.FromSlash(rest))) == nil})
