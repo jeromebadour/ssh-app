@@ -20,6 +20,8 @@ export interface BarActions {
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
   settings(): void; // open the settings
   window(what: 'minimize' | 'maximize' | 'close'): void; // the window's own three buttons
+  reopen(which: number[]): void; // the morning: open these of the last session's tabs again
+  dropReopen(): void; // put the morning's offer away, and forget what was open
 }
 
 const TAB_MIN = 168 + 10; // a tab's width and the room beside it, while there is room

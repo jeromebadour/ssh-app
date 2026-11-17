@@ -55,6 +55,8 @@ export class Boxes {
   // The app's own settings live in the same locked list as the boxes, and are written by the same save, so a
   // change to one can never drop the other (which is what a second writer of the same file would do).
   settings: AppSettings = { ...SETTINGS_DEFAULT };
+  // The tabs that were open when the app was last used, in the order they were in: what Reopen offers.
+  lastTabs: { box: string; place: string }[] = [];
   loaded = false;
   fault = ''; // the list opened but its boxes could not be read: said, and nothing is overwritten
   faultId = ''; // the id of that fault's line in the local log, so the window can say which failure it is
@@ -86,6 +88,7 @@ export class Boxes {
     this.faultId = '';
     this.checks.clear();
     this.settings = readSettings(publicPart);
+    this.lastTabs = readLastTabs(publicPart);
     const boxes = readBoxes(publicPart);
     if (!boxes) this.wentWrong('the list of boxes inside the locked list cannot be read', 'the list opened but its boxes could not be read');
     else {
@@ -316,14 +319,25 @@ export class Boxes {
   }
 
   // Saves a new list of boxes through the key process; memory follows only what was saved.
-  private async save(next: Box[], settings = this.settings): Promise<KeyReply> {
-    const saved = await this.keys.request('setPublic', { public: { v: 1, boxes: next, settings } });
+  private async save(next: Box[], settings = this.settings, lastTabs = this.lastTabs): Promise<KeyReply> {
+    const saved = await this.keys.request('setPublic', { public: { v: 1, boxes: next, settings, lastTabs } });
     if (saved.ok) {
       this.list = next;
       this.settings = settings;
+      this.lastTabs = lastTabs;
       this.changed();
     }
     return saved;
+  }
+
+  // What was open when he last used the app: a box and a place each, and nothing else. It is kept inside the
+  // locked list like everything else, because which boxes he works on and what he calls those places is as
+  // much his as the boxes themselves, and a plain file beside the list would be the one readable thing
+  // saying where he works (plan B2.4).
+  setLastTabs(next: { box: string; place: string }[]): Promise<KeyReply> {
+    const want = next.slice(0, TABS_REMEMBERED);
+    if (JSON.stringify(want) === JSON.stringify(this.lastTabs)) return Promise.resolve({ ok: true });
+    return this.oneAtATime(() => this.save(this.list, this.settings, want));
   }
 
   // Changing a setting: the whole list is written again, boxes and all, because the list is one file and the
@@ -373,6 +387,28 @@ function cleanDraft(draft: unknown): BoxDraft | null {
 // cannot be read is said, never guessed at and never overwritten.
 // The settings as they were saved, with anything missing or of the wrong shape left at its default: a list
 // written by an older build, or one damaged in a way the seal did not catch, must still open.
+// How many tabs are remembered for the morning. He opens one to seven; a list longer than this is not his
+// and is cut rather than trusted.
+export const TABS_REMEMBERED = 16;
+
+// The tabs of the last session as they were saved. Anything of the wrong shape is left out rather than
+// refused whole: a list that cannot be read must still open, and a Reopen with one line missing is better
+// than a lock that will not open over it.
+export function readLastTabs(publicPart: unknown): { box: string; place: string }[] {
+  const p = publicPart as Record<string, unknown> | null;
+  const raw = p?.['lastTabs'];
+  if (!Array.isArray(raw)) return [];
+  const out: { box: string; place: string }[] = [];
+  for (const one of raw.slice(0, TABS_REMEMBERED) as Record<string, unknown>[]) {
+    const box = one?.['box'];
+    const place = one?.['place'];
+    if (typeof box !== 'string' || !/^b[0-9a-f]{16}$/.test(box)) continue;
+    if (typeof place !== 'string' || place.length > 256) continue;
+    out.push({ box, place });
+  }
+  return out;
+}
+
 export function readSettings(publicPart: unknown): AppSettings {
   const p = publicPart as Record<string, unknown> | null;
   const raw = (p?.['settings'] ?? {}) as Record<string, unknown>;
