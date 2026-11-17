@@ -113,6 +113,15 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-ask-go { background: #8c5048; color: #f2e4e1; }
 .fb-ask-go:hover { background: #9b5950; }
 .fb-ask-keep:focus-visible, .fb-ask-go:focus-visible, .fb-bin-empty:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: 2px; }
+/* Naming something: a new name for what is there, or one new folder. The field is the whole of the panel's
+   middle, because a name is all it asks for. The button that does it carries the app's own colour for an
+   action that makes something, never the red that means a thing is about to go. */
+.fb-name-field { display: block; width: 100%; box-sizing: border-box; margin-top: 7px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 3px; background: color-mix(in srgb, #0f1419 55%, transparent); color: #cfd6db; font: inherit; font-size: 11px; }
+.fb-name-field:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -1px; }
+.fb-name-field:disabled { color: #6d7781; }
+.fb-naming .fb-name-go { background: color-mix(in srgb, #5a9a8c 78%, #000); color: #eef2f1; }
+.fb-naming .fb-name-go:hover { background: color-mix(in srgb, #5a9a8c 88%, #000); }
+.fb-naming .fb-name-go:disabled { background: color-mix(in srgb, #5a9a8c 40%, #000); color: #b9c6c2; cursor: default; }
 /* What has been deleted on this disk. */
 .fb-bin-empty { display: inline-flex; align-items: center; gap: 5px; margin: 2px 10px 6px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 3px; background: none; color: #96a3ae; font: inherit; font-size: 11px; cursor: pointer; }
 .fb-bin-empty:hover { background: color-mix(in srgb, #c3ccd3 10%, transparent); color: #d7dee4; }

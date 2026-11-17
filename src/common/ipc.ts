@@ -344,8 +344,8 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel' | 'unqueue' | 'grab';
-  name?: string; // restore: which thing in the trash to put back. Never a path, and never a name of a view's own making elsewhere
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel' | 'unqueue' | 'grab' | 'rename' | 'folder';
+  name?: string; // restore: which thing in the trash to put back; rename and folder: the one name a person typed. Never a path
   which?: 'sha256' | 'md5'; // a hash asked for: which one. Only these two may ever be asked of a box
   path: string;
 }

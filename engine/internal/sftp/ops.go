@@ -206,6 +206,20 @@ func (c *Client) Rename(ctx context.Context, from, to string) error {
 	return statusOf(a)
 }
 
+// RenameNew gives a thing a new name and refuses to replace anything at that name. It is what a person's own
+// rename uses: the protocol's own rename, which a box must fail when the new name is taken, and never
+// OpenSSH's replacing one. A transfer's rename into place is the other kind and stays as it is.
+func (c *Client) RenameNew(ctx context.Context, from, to string) error {
+	a, err := c.ask(ctx, fxpRename, func(w *writer) {
+		w.string(from)
+		w.string(to)
+	})
+	if err != nil {
+		return err
+	}
+	return statusOf(a)
+}
+
 // Mkdir makes one folder.
 func (c *Client) Mkdir(ctx context.Context, p string) error {
 	a, err := c.ask(ctx, fxpMkdir, func(w *writer) {

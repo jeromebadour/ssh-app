@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -338,6 +340,62 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		return f.get(ctx, c, a)
 	case "put":
 		return f.put(ctx, c, a)
+	case "rename":
+		// A new name for one thing, in the folder it is already in. The name arrives on its own and the path
+		// it goes to is worked out here, so nothing a view sends can move a thing into another folder.
+		// Nothing is ever replaced: the name is looked at first, and the rename itself is the kind a box must
+		// refuse when the name is taken, so the gap between the two cannot cost a file either.
+		if err := boxName(a.Name); err != nil {
+			return err
+		}
+		// The path is tidied first and has to be a whole path from the box's root. A folder named with a
+		// slash on the end would otherwise have its parent read as itself, and the rename would make a folder
+		// inside the very thing being renamed.
+		from := path.Clean(a.Path)
+		if !path.IsAbs(from) || from == "/" {
+			return errNotAName
+		}
+		to := path.Join(path.Dir(from), a.Name)
+		if to == from {
+			return errNotAName
+		}
+		if _, err := c.Lstat(ctx, to); err == nil {
+			return errAlreadyThere
+		} else if !errors.Is(err, sftp.ErrNoSuchFile) {
+			return err
+		}
+		if err := c.RenameNew(ctx, from, to); err != nil {
+			return err
+		}
+		at, err := c.Lstat(ctx, to)
+		if err != nil {
+			return err
+		}
+		r := row(to, at)
+		f.page(filePage{ID: a.ID, Attrs: &r})
+		return nil
+	case "folder":
+		// One new folder inside the folder named. Its permissions are the box's own: the same as a person
+		// typing mkdir there, because a folder Berth makes must be no different from one they made.
+		if err := boxName(a.Name); err != nil {
+			return err
+		}
+		made := path.Join(a.Path, a.Name)
+		if _, err := c.Lstat(ctx, made); err == nil {
+			return errAlreadyThere
+		} else if !errors.Is(err, sftp.ErrNoSuchFile) {
+			return err
+		}
+		if err := c.Mkdir(ctx, made); err != nil {
+			return err
+		}
+		at, err := c.Lstat(ctx, made)
+		if err != nil {
+			return err
+		}
+		r := row(made, at)
+		f.page(filePage{ID: a.ID, Attrs: &r})
+		return nil
 	case "stat":
 		at, err := c.Stat(ctx, a.Path)
 		if err != nil {
@@ -355,6 +413,24 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		return nil
 	}
 	return errors.New("the engine was asked something it does not do with files")
+}
+
+// boxName is what a thing on a box may be called when a person names it here: one plain name, and not a path.
+// A slash would make it a step into another folder, and a control character would let a name lie in anything
+// that is ever drawn or written as lines. The length is the one every box this app meets holds to.
+func boxName(name string) error {
+	if name == "" || len(name) > longestName || name == "." || name == ".." {
+		return errNotAName
+	}
+	if strings.ContainsRune(name, '/') {
+		return errNotAName
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return errNotAName
+		}
+	}
+	return nil
 }
 
 func row(name string, a sftp.Attrs) fileRow {

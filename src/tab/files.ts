@@ -85,6 +85,18 @@ const TRASH_WHY: Record<string, string> = {
   failed: 'It could not be done',
 };
 
+// What the window says for each way a new name, or a new folder, can end.
+const NAME_WHY: Record<string, string> = {
+  'already-there': 'Something here is already called that',
+  'not-a-name': 'That name cannot be used on a box',
+  'no-such-file': 'That is not there any more',
+  denied: 'This account may not do that here',
+  unsupported: 'This box has no file subsystem',
+  'no-answer': 'The box did not answer',
+  'no-link': 'There is no link to the box',
+  failed: 'The box would not do it',
+};
+
 // Every ask on the tab's one file channel takes a number from here, so the browser and the viewer can both
 // use it and each knows which pages are its own.
 export interface Asker {
@@ -182,6 +194,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     openTrash();
   });
+  // A new folder in the folder on screen. It sits with the other two that act on this folder, and like them
+  // it says what it does with a glyph alone, because all three are the same size and sit side by side.
+  const newBtn = document.createElement('button');
+  newBtn.className = 'fb-send';
+  newBtn.id = 'fb-newfolder';
+  newBtn.type = 'button';
+  newBtn.title = 'Make a new folder in this folder';
+  newBtn.setAttribute('aria-label', 'Make a new folder in this folder');
+  newBtn.append(glyph('newfolder'));
+  newBtn.addEventListener('click', () => askForFolder());
   // Narrowing the list to what is being looked for, and saying what the list is ordered by. Both sit on a
   // strip of their own under the folder's name: putting them beside it would push the folder's name about as
   // the order changed, and the folder's name is the one thing on this pane that must not move.
@@ -251,7 +273,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     return { what, btn };
   });
   tools.append(find, ...byBtns.map((b) => b.btn));
-  here.append(el.path, binBtn, sendBtn);
+  here.append(el.path, binBtn, newBtn, sendBtn);
   at.append(here, tools, el.list, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
@@ -429,6 +451,33 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       draw();
       return;
     }
+    // A new name, or a new folder: the one ask whose answer this panel is waiting for, found by its own
+    // number so nothing else that carries a thing's attributes can be mistaken for it.
+    if (naming && naming.id !== 0 && p.id === naming.id) {
+      const n = naming;
+      if (p.attrs) {
+        const made = p.attrs.name.split('/').pop() ?? '';
+        sayNext = n.mode === 'rename' ? `${shorten(n.was, 24)} is now called ${shorten(made, 24)}` : `${shorten(made, 24)} made`;
+        naming = null;
+        standNext = made;
+        open(where || asked); // the folder is listed again, so the row shows what it is called now
+        draw();
+        return;
+      }
+      if (p.error) {
+        n.busy = false;
+        n.said = NAME_WHY[p.error] ?? NAME_WHY['failed']!;
+        draw();
+        return;
+      }
+      if (p.done) {
+        // An answer that said nothing at all: the panel stays open rather than closing on a silence.
+        n.busy = false;
+        n.said = NAME_WHY['failed']!;
+        draw();
+        return;
+      }
+    }
     // The trash: what a delete, a restore or an emptying did, and what is in it now.
     if (p.trash !== undefined || p.trashed !== undefined || p.emptied !== undefined || (bin.busy && p.done)) {
       if (p.trash !== undefined) {
@@ -499,7 +548,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       sort(rows);
     }
     if (p.error) why = WHY[p.error] ?? WHY['failed']!;
-    if (p.done) busy = false;
+    if (p.done) {
+      busy = false;
+      // Whatever was just renamed or just made is what the list stands on, if it is in this listing at all.
+      if (standNext !== '') {
+        const want = standNext;
+        standNext = '';
+        if (rows.some((x) => x.name === want)) standing = want;
+      }
+      if (sayNext !== '') {
+        said = sayNext;
+        sayNext = '';
+      }
+    }
     if (p.error && WORTH_ANOTHER_TRY.has(p.error) && rows.length === 0 && tried < TRIES) {
       tried++;
       why = `${why}. Trying again (${tried} of ${TRIES})`;
@@ -764,6 +825,100 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       el.moving.append(ask);
       setTimeout(() => (document.getElementById('fb-ask-keep') as HTMLButtonElement | null)?.focus(), 0);
     }
+    // Naming: one field and one press. The field has the focus and holds what the thing is called now, with
+    // the part before any last dot picked out, because a rename is most often a change to the name and not to
+    // what kind of file it is. Enter does it, Escape leaves it alone, and the field is kept as it was typed:
+    // a panel that is redrawn under a person's hands must not take their letters back.
+    if (naming) {
+      const n = naming;
+      const panel = document.createElement('div');
+      panel.className = 'fb-ask fb-naming';
+      panel.id = 'fb-naming';
+      const head = document.createElement('div');
+      head.className = 'fb-ask-head';
+      head.textContent = n.mode === 'rename' ? `Rename ${shorten(n.was, 26)}` : `New folder in ${shorten((where || asked).split('/').pop() || '/', 22)}`;
+      // The field is made once for the panel and then kept, redraw after redraw. A field built afresh each
+      // time is a field whose caret goes back to the end of the name whenever anything arrives from the box,
+      // and a person typing in the middle of a name would lose their place without touching anything.
+      const field = nameField ?? document.createElement('input');
+      const fresh = nameField === null;
+      nameField = field;
+      field.type = 'text';
+      field.className = 'fb-name-field';
+      field.id = 'fb-name-field';
+      if (fresh) field.value = n.name;
+      field.spellcheck = false;
+      field.autocomplete = 'off';
+      field.disabled = n.busy;
+      field.setAttribute('aria-label', n.mode === 'rename' ? 'The new name' : 'What the new folder is called');
+      if (fresh) field.addEventListener('input', () => {
+        n.name = field.value;
+        if (n.said !== '') {
+          n.said = '';
+          const saidEl = document.getElementById('fb-name-said');
+          if (saidEl) saidEl.textContent = '';
+        }
+      });
+      if (fresh) field.addEventListener('keydown', (ev: KeyboardEvent) => {
+        if (ev.key === 'Enter') {
+          n.name = field.value;
+          reallyName();
+          ev.preventDefault();
+        } else if (ev.key === 'Escape') {
+          naming = null;
+          draw();
+          el.list.focus();
+          ev.preventDefault();
+        }
+        ev.stopPropagation();
+      });
+      const saidLine = document.createElement('div');
+      saidLine.className = 'fb-ask-said';
+      saidLine.id = 'fb-name-said';
+      saidLine.textContent = n.busy ? 'Asking the box' : n.said;
+      const acts = document.createElement('div');
+      acts.className = 'fb-ask-acts';
+      const drop = document.createElement('button');
+      drop.className = 'fb-ask-keep';
+      drop.id = 'fb-name-drop';
+      drop.type = 'button';
+      drop.append(glyph('close'));
+      const dropWord = document.createElement('span');
+      dropWord.textContent = 'Leave it';
+      drop.append(dropWord);
+      drop.addEventListener('click', () => {
+        naming = null;
+        draw();
+        el.list.focus();
+      });
+      const go = document.createElement('button');
+      go.className = 'fb-ask-go fb-name-go';
+      go.id = 'fb-name-go';
+      go.type = 'button';
+      go.disabled = n.busy;
+      go.append(glyph(n.mode === 'rename' ? 'rename' : 'newfolder'));
+      const goWord = document.createElement('span');
+      goWord.textContent = n.mode === 'rename' ? 'Rename it' : 'Make it';
+      go.append(goWord);
+      go.addEventListener('click', () => reallyName());
+      acts.append(drop, go);
+      panel.append(head, field, saidLine, acts);
+      el.moving.append(panel);
+      // The focus goes to the field once, when the panel appears, and the caret sits on the part of the name
+      // a person is most likely to be changing. A redraw while they are typing must not move either.
+      if (fresh) {
+        setTimeout(() => {
+          const f = document.getElementById('fb-name-field') as HTMLInputElement | null;
+          if (!f) return;
+          f.focus();
+          const dot = n.mode === 'rename' ? n.was.lastIndexOf('.') : -1;
+          if (dot > 0) f.setSelectionRange(0, dot);
+          else f.select();
+        }, 0);
+      }
+    } else {
+      nameField = null;
+    }
     // A hash a person asked for: what it is, a way to copy it, and a place to paste what it should be.
     if (hashing) {
       const h = document.createElement('div');
@@ -997,7 +1152,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // Bringing the file over, by hand. The button is on the row rather than in a menu, and it says what it
       // does with a glyph before a word (BUILD-RULES 2.1); the keyboard's way to the same thing is Ctrl+S.
       const get = document.createElement('button');
-      get.className = 'fb-get';
+      get.className = 'fb-get fb-bring';
       get.type = 'button';
       get.title = 'Bring this file to the PC (Ctrl+S)';
       get.setAttribute('aria-label', `Bring ${r.name} to the PC`);
@@ -1032,7 +1187,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         place(r.name);
         askHash(r.name, ev.shiftKey ? 'md5' : 'sha256');
       });
-      e.append(sum, get, bye);
+      e.append(sum, renameBtn(r.name), get, bye);
     } else if (r.kind === 'folder' && r.name !== '..') {
       // A folder is deleted whole, and comes back whole; it has no hash and nothing to bring over.
       const bye = document.createElement('button');
@@ -1047,9 +1202,28 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         place(r.name);
         askToDelete(r.name);
       });
-      e.append(bye);
+      e.append(renameBtn(r.name), bye);
     }
     return e;
+  };
+
+  // The button on a row that gives the thing on it a new name. It is on the row for the same reason the
+  // others are: it acts on that row and nothing else. Ctrl is not needed, so the key is F2, which is the key
+  // this does on Windows and the one his hands already know from the app this replaces.
+  const renameBtn = (name: string): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.className = 'fb-get fb-rename';
+    b.type = 'button';
+    b.title = 'Give this a new name (F2)';
+    b.setAttribute('aria-label', `Give ${name} a new name`);
+    b.tabIndex = -1;
+    b.append(glyph('rename'));
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      place(name);
+      askToRename(name);
+    });
+    return b;
   };
 
   // What a row is for, found from its name: the same thing a double-click on it does.
@@ -1139,6 +1313,64 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
+  // A new name for one thing, and a new folder in the folder on screen. The panel is the same for both: a
+  // field with one name in it and one press either way. What a box would refuse is said here first, before
+  // anything leaves the window, so a name that cannot work is answered at once instead of after a round trip
+  // (BUILD-RULES 2.20). The box is still the one that decides: it checks the same things again.
+  const askToRename = (name: string): void => {
+    if (name === '' || name === '..') return;
+    if (!rows.some((x) => x.name === name)) return;
+    naming = { mode: 'rename', was: name, name, busy: false, said: '', id: 0 };
+    draw();
+  };
+
+  const askForFolder = (): void => {
+    naming = { mode: 'folder', was: '', name: '', busy: false, said: '', id: 0 };
+    draw();
+  };
+
+  // What is wrong with a name, in words, or an empty string when nothing is. The rules are the box's own
+  // (src/main/main.ts holds to them too), said here as a person would hear them.
+  const wrongWith = (name: string): string => {
+    if (name === '') return 'Type a name';
+    if (name === '.' || name === '..') return 'That name is a folder\u2019s own shorthand, so nothing can be called it';
+    if (name.includes('/')) return 'A name cannot hold a slash: that would be a path to somewhere else';
+    if (name.length > 255) return 'That name is longer than a box will take';
+    for (const ch of name) {
+      const c = ch.codePointAt(0) ?? 0;
+      if (c < 0x20 || c === 0x7f) return 'That name holds something that is not a character a name can hold';
+    }
+    return '';
+  };
+
+  const reallyName = (): void => {
+    const n = naming;
+    if (!n || n.busy) return;
+    const name = n.name;
+    const wrong = wrongWith(name);
+    if (wrong !== '') {
+      n.said = wrong;
+      draw();
+      return;
+    }
+    if (n.mode === 'rename' && name === n.was) {
+      naming = null;
+      draw();
+      return;
+    }
+    if (rows.some((x) => x.name === name)) {
+      n.said = NAME_WHY['already-there']!;
+      draw();
+      return;
+    }
+    n.busy = true;
+    n.said = '';
+    n.id = asker.ask(
+      n.mode === 'rename' ? { do: 'rename', path: join(where || asked, n.was), name } : { do: 'folder', path: where || asked, name },
+    );
+    draw();
+  };
+
   const openTrash = (): void => {
     bin = { open: true, where: '', rows: [], busy: true, said: '' };
     askingTrash = asker.ask({ do: 'trash', path: where || asked });
@@ -1182,6 +1414,18 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let bin: Binned = { open: false, where: '', rows: [], busy: false, said: '' };
   let askingTrash = 0;
   let goingToTrash: { name: string; kind: string; size: number } | null = null;
+  // Naming something: a new name for what is there, or one new folder. Both are the same panel, because both
+  // are one name typed and one press, and the box is not asked until the name could be a name at all.
+  let naming: { mode: 'rename' | 'folder'; was: string; name: string; busy: boolean; said: string; id: number } | null = null;
+  // Which row the list should stand on once the next listing arrives: what was just renamed or just made, so
+  // the eye and the keyboard both end up on the thing that changed rather than back at the top.
+  let standNext = '';
+  // And what the foot should say once it arrives: a listing clears whatever was said, because it is a new
+  // folder's worth of rows, so a word about what just changed has to be carried across it.
+  let sayNext = '';
+  // The naming panel's own field, kept for as long as the panel is open so that a redraw puts the same field
+  // back rather than a new one: a new one loses the caret, and with it a person's place in the name.
+  let nameField: HTMLInputElement | null = null;
   type TrashedRow = { name: string; from: string; when: number; size: number; kind: string };
 
   const askHash = (name: string, which: 'sha256' | 'md5'): void => {
@@ -1207,8 +1451,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // belong to the window itself or to the box.
   // Escape keeps whatever is being asked about, from anywhere in the pane.
   at.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key !== 'Escape' || !goingToTrash) return;
+    if (e.key !== 'Escape' || (!goingToTrash && !naming)) return;
     goingToTrash = null;
+    naming = null;
     draw();
     e.preventDefault();
   });
@@ -1232,6 +1477,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const all = names();
     if (e.key === 'Delete') {
       if (standing !== '' && standing !== '..') askToDelete(standing);
+    } else if (e.key === 'F2') {
+      askToRename(standing);
     } else if (e.key === 'ArrowDown') step(1);
     else if (e.key === 'ArrowUp') step(-1);
     else if (e.key === 'Home') place(all[0] ?? '');
@@ -1339,6 +1586,10 @@ export const SHAPES: Record<string, string> = {
   name: 'M3.5 4.5h9M3.5 8h6M3.5 11.5h3',
   size: 'M4.5 3.5h7M3.5 7h9M2.5 10.5h11M2.5 13h11',
   clock: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.5l2.5 1.5',
+  // Naming: a pencil for a new name, and the same folder as above with a plus in it for a new folder. Both
+  // are the shape a person already reads as the thing, and neither is a word in a picture.
+  rename: 'M9.5 3.5l3 3-6 6h-3v-3zM8 5l3 3',
+  newfolder: 'M2.5 4.5h4l1.5 1.5h5.5v7h-11zM8 8.5v3.5M6.25 10.25h3.5',
 };
 
 export function glyph(kind: string): SVGSVGElement {
