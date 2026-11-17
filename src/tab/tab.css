@@ -55,7 +55,9 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-up .fb-name { color: #808d99; }
 .fb-why { padding: 10px; color: #cc9b47; font-size: 12px; }
 .fb-why.quiet { color: #808d99; }
-.fb-foot { flex: none; display: flex; align-items: center; gap: 9px; padding: 5px 10px 6px; border-top: 1px solid var(--line); color: #808d99; font-size: 11px; white-space: nowrap; overflow: hidden; }
+/* The counts under the list wrap rather than being cut off at the pane's edge: "41.9 GB free of 105 GB" cut
+   after "105 G" is a number nobody can act on, and this pane is narrow by design. */
+.fb-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 9px; padding: 5px 10px 6px; border-top: 1px solid var(--line); color: #808d99; font-size: 11px; }
 .fb-sep { width: 1px; height: 10px; background: var(--line); }
 /* What is moving to or from the box, and how each one ended. A sentence, so it wraps rather than being cut
    off at the edge of the pane; at most three at a time, after which it scrolls. */
@@ -65,11 +67,31 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-moving-one + .fb-moving-one { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .fb-moving-one { display: flex; align-items: flex-start; gap: 6px; }
 .fb-moving-one > span { flex: 1; min-width: 0; }
+/* The strip under the folder's name: narrowing the list, and what it is ordered by. It keeps its height
+   whatever is in it, so the list below never moves as a filter is typed (BUILD-RULES 2.4). */
+.fb-tools { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+.fb-tools[data-off='yes'] { opacity: .45; }
+.fb-find { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; }
+.fb-find:focus-within { border-color: color-mix(in srgb, var(--hue) 65%, var(--line)); }
+.fb-find-field { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #cfd6db; font: inherit; font-size: 11px; }
+.fb-find-field::placeholder { color: #6d7781; }
+.fb-find-field:disabled { color: #6d7781; }
+/* Only the column in use says its name: three words and a filter do not fit across a pane this narrow, and a
+   word that is cut in half says less than a glyph does. The others carry their word in their title and to a
+   screen reader, so nothing is lost to anyone (BUILD-RULES 2.1, 2.16). */
+.fb-by > span { display: none; }
+.fb-by[data-on='yes'] > span { display: inline; }
+.fb-by { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: #8b959e; font: inherit; font-size: 11px; cursor: pointer; }
+.fb-by:hover { color: #cfd6db; }
+.fb-by:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: 1px; }
+/* The column in use carries the hue and its own glyph turns; nothing here is colour alone. */
+.fb-by[data-on='yes'] { color: #e3e9ed; border-color: color-mix(in srgb, var(--hue) 45%, transparent); background: color-mix(in srgb, var(--hue) 14%, transparent); }
+.fb-by[data-down='yes'] .fb-glyph { transform: scaleY(-1); }
 /* A file that is here on the PC can be taken out of the window by hand. The mark is the cursor under the hand
    and a quiet rule down the left, never colour alone, and the row keeps its height so nothing moves when one
    file becomes draggable and its neighbours do not (BUILD-RULES 2.4, 2.16). */
-.fb-row.fb-here, .fb-moving-one[draggable='true'] { cursor: grab; box-shadow: inset 2px 0 0 color-mix(in srgb, var(--hue) 55%, transparent); }
-.fb-row.fb-here:active, .fb-moving-one[draggable='true']:active { cursor: grabbing; }
+.fb-row.fb-on-pc, .fb-moving-one[draggable='true'] { cursor: grab; box-shadow: inset 2px 0 0 color-mix(in srgb, var(--hue) 55%, transparent); }
+.fb-row.fb-on-pc:active, .fb-moving-one[draggable='true']:active { cursor: grabbing; }
 .fb-row[data-dragging], .fb-moving-one[data-dragging] { background: color-mix(in srgb, var(--hue) 20%, transparent); }
 .fb-stop { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 3px; background: none; color: #96a3ae; cursor: pointer; }
 .fb-stop:hover { background: color-mix(in srgb, #c3ccd3 12%, transparent); color: #d7dee4; }

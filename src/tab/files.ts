@@ -4,6 +4,7 @@
 // the first rows of a folder with thousands of files are on screen while the rest are still being read. Moving
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
+import { whenAs, whenShort } from '../common/when';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
@@ -181,8 +182,77 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     openTrash();
   });
+  // Narrowing the list to what is being looked for, and saying what the list is ordered by. Both sit on a
+  // strip of their own under the folder's name: putting them beside it would push the folder's name about as
+  // the order changed, and the folder's name is the one thing on this pane that must not move.
+  const tools = document.createElement('div');
+  tools.className = 'fb-tools';
+  const find = document.createElement('div');
+  find.className = 'fb-find';
+  find.append(glyph('search'));
+  const findField = document.createElement('input');
+  findField.type = 'text';
+  findField.id = 'fb-find';
+  findField.className = 'fb-find-field';
+  findField.placeholder = 'Find in this folder';
+  findField.setAttribute('aria-label', 'Show only things whose name holds this');
+  findField.spellcheck = false;
+  findField.autocomplete = 'off';
+  findField.addEventListener('input', () => {
+    only = findField.value;
+    standing = ''; // the row the keyboard stood on may be hidden now; it is settled again from what is drawn
+    draw();
+  });
+  // Escape clears it and gives the list back, which is the way out a person reaches for first.
+  findField.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || only === '') return;
+    e.preventDefault();
+    e.stopPropagation();
+    only = '';
+    findField.value = '';
+    draw();
+  });
+  const clearFind = document.createElement('button');
+  clearFind.className = 'fb-stop';
+  clearFind.id = 'fb-find-clear';
+  clearFind.type = 'button';
+  clearFind.title = 'Show everything in this folder again';
+  clearFind.setAttribute('aria-label', 'Show everything in this folder again');
+  clearFind.append(glyph('close'));
+  clearFind.addEventListener('click', () => {
+    only = '';
+    findField.value = '';
+    findField.focus();
+    draw();
+  });
+  find.append(findField, clearFind);
+  // One button a column: pressing the one already in use turns the order around, which is how every file list
+  // a person has used behaves (BUILD-RULES 2.13: reuse, never reinvent).
+  const byBtns: { what: By; btn: HTMLButtonElement }[] = (['name', 'size', 'changed'] as By[]).map((what) => {
+    const btn = document.createElement('button');
+    btn.className = 'fb-by';
+    btn.id = `fb-by-${what}`;
+    btn.type = 'button';
+    btn.append(glyph(what === 'name' ? 'name' : what === 'size' ? 'size' : 'clock'));
+    const label = document.createElement('span');
+    label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : 'Changed';
+    btn.append(label);
+    btn.addEventListener('click', () => {
+      // The same column again turns the order around; another column starts it the way that column is usually
+      // read: names from A, sizes biggest first, times newest first.
+      if (by === what) down = !down;
+      else {
+        by = what;
+        down = what !== 'name';
+      }
+      sort(rows);
+      draw();
+    });
+    return { what, btn };
+  });
+  tools.append(find, ...byBtns.map((b) => b.btn));
   here.append(el.path, binBtn, sendBtn);
-  at.append(here, el.list, el.moving, el.foot);
+  at.append(here, tools, el.list, el.moving, el.foot);
 
   const ask = (a: FileAsk) => asker.ask(a);
 
@@ -192,6 +262,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       trying = null;
     }
     tried = keepTries;
+    // A filter belongs to the folder it was typed in: carrying it into the next one would make that folder
+    // look half empty for a reason a person has already stopped thinking about.
+    if (keepTries === 0) {
+      only = '';
+      findField.value = '';
+    }
     for (const [id, b] of [...bringing]) {
       if (b.ended !== '') bringing.delete(id); // what has finished has been read; what is still coming goes on
     }
@@ -381,12 +457,36 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   // Folders first, then files, each by name as a person reads them: 10 after 9, and case ignored.
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  // How the list is ordered, and what of it is shown. Folders always come before files, whichever column the
+  // order is by: a folder is a place to go and a file is a thing to act on, and mixing them by size would put
+  // a place to go in the middle of a list of things. The order is this tab's own and lasts as long as the tab.
+  type By = 'name' | 'size' | 'changed';
+  let by: By = 'name';
+  let down = false; // the biggest, the newest, or Z first
   const sort = (r: FileRow[]) => {
     r.sort((a, b) => {
       const af = a.kind === 'folder' ? 0 : 1;
       const bf = b.kind === 'folder' ? 0 : 1;
-      return af !== bf ? af - bf : collator.compare(a.name, b.name);
+      if (af !== bf) return af - bf;
+      // Within folders there is nothing to compare but the name: a folder's size is not its contents' size and
+      // saying it is would be a number that means nothing.
+      // Both sides are folders by now, or neither is: the rule above has already separated them. It is
+      // written as both rather than one, because a comparison that reads one side only answers differently
+      // depending on which side it is given, and a comparator that does that puts a list in no order at all.
+      const bothFolders = a.kind === 'folder' && b.kind === 'folder';
+      const same = by === 'name' || bothFolders ? collator.compare(a.name, b.name) : by === 'size' ? a.size - b.size : a.mtime - b.mtime;
+      // A tie is broken by name, always, so the same folder comes out in the same order every time it is read.
+      return (down ? -same : same) || collator.compare(a.name, b.name);
     });
+  };
+
+  // What is typed into the filter. It hides rows and nothing else: the folder is still the whole folder, the
+  // counts below say what is hidden, and moving to another folder clears it.
+  let only = '';
+  const shown = (r: FileRow[]): FileRow[] => {
+    const want = only.trim().toLowerCase();
+    if (want === '') return r;
+    return r.filter((x) => x.name === '..' || x.name.toLowerCase().includes(want));
   };
 
   const draw = () => {
@@ -397,6 +497,20 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // text direction to cut from the left moves the leading "/" to the other end of the line.
     el.path.textContent = shorten(here, 46);
     el.path.title = here;
+    // Which column the list is ordered by, and which way: said on the buttons themselves, in words a reader
+    // hears as well as in their look, because a button that is "on" only by its colour says nothing aloud.
+    for (const { what, btn } of byBtns) {
+      const on = by === what && !bin.open;
+      btn.dataset['on'] = on ? 'yes' : 'no';
+      btn.dataset['down'] = on && down ? 'yes' : 'no';
+      btn.setAttribute('aria-pressed', String(on));
+      const which = what === 'name' ? (down ? 'Z to A' : 'A to Z') : what === 'size' ? (down ? 'biggest first' : 'smallest first') : down ? 'newest first' : 'oldest first';
+      btn.title = on ? `Ordered by ${what}, ${which}. Press to turn it around` : `Order by ${what}`;
+      btn.setAttribute('aria-label', btn.title);
+    }
+    tools.dataset['off'] = bin.open ? 'yes' : 'no';
+    findField.disabled = bin.open;
+    clearFind.disabled = bin.open || only === '';
 
     el.list.replaceChildren();
     binBtn.dataset['open'] = bin.open ? 'yes' : 'no';
@@ -418,6 +532,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       none.id = 'fb-empty';
       none.textContent = busy ? 'Reading the folder' : 'This folder is empty';
       el.list.append(none);
+    } else if (shown(rows).length === 0) {
+      // The folder has things in it and the filter hides all of them. That is said, with a way back in one
+      // press, rather than a list that looks like an empty folder (NOTHING fails silently).
+      const none = document.createElement('div');
+      none.className = 'fb-why quiet';
+      none.id = 'fb-none-match';
+      none.textContent = `Nothing here is called "${shorten(only.trim(), 24)}". ${rows.length} ${rows.length === 1 ? 'thing is' : 'things are'} hidden by the filter.`;
+      el.list.append(none);
     } else {
       const frag = document.createDocumentFragment();
       // One row above, when there is one: the window's own way up, rather than a "..' among the files.
@@ -425,7 +547,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (up !== '') {
         frag.append(row({ name: '..', kind: 'folder', size: 0, mode: 0, mtime: 0 }, () => open(up), 'fb-up'));
       }
-      for (const r of rows) {
+      for (const r of shown(rows)) {
         // A folder is gone into; a file is opened in the viewer, read-only. Anything else is neither, and is
         // shown with what it is rather than opened at all (plan B4.1).
         const enter = r.kind === 'folder' ? () => open(join(here, r.name)) : r.kind === 'file' ? () => openFile(join(here, r.name), r.name, r.size) : undefined;
@@ -500,7 +622,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     el.foot.replaceChildren();
     const bits: string[] = bin.open
       ? [`${bin.rows.length} in the trash${bin.busy ? ', reading' : ''}`, ...(bin.said === '' ? [] : [bin.said])]
-      : [`${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`];
+      : [
+          `${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`,
+          ...(only.trim() === '' || rows.length === 0 ? [] : [`${rows.length - shown(rows).length} hidden by the filter`]),
+        ];
     if (!bin.open && bin.said !== '') bits.push(bin.said);
     if (space && !bin.open) bits.push(`${size(space.free)} free of ${size(space.total)}`);
     if (said !== '' && !bin.open) bits.push(said);
@@ -776,6 +901,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (id) e.id = id;
     e.dataset['name'] = r.name;
     e.dataset['kind'] = r.kind;
+    // What the row is, in numbers, for the window's own tests to read: a probe that judged the order from the
+    // words on screen would be judging how a size is written, not how the list is ordered.
+    e.dataset['bytes'] = String(r.size);
+    e.dataset['changed'] = String(r.mtime);
     // Every row is a place the keyboard can stand. Which one holds the tab stop is settled after the whole
     // list is on screen, not here.
     e.setAttribute('role', 'option');
@@ -791,13 +920,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     name.title = r.name;
     const right = document.createElement('span');
     right.className = 'fb-size';
-    right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
+    // The column on the right says whatever the list is ordered by, so that the order can be read against
+    // something: ordering by a time with no time on screen is an order a person has to take on trust.
+    right.textContent = by === 'changed' && r.name !== '..' ? whenShort(r.mtime) : r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
+    if (by === 'changed' && r.name !== '..' && r.mtime > 0) right.title = `${r.kind === 'file' ? size(r.size) : r.kind === 'folder' ? 'folder' : r.kind}, last changed ${whenAs(r.mtime)}`;
     e.append(name, right);
     // A file this tab has already brought over is draggable from its own row too, not only from the strip:
     // the row is where a person is looking when they decide to take it somewhere.
     const brought = r.kind === 'file' ? broughtOver(r.name) : undefined;
     if (brought !== undefined) {
-      e.classList.add('fb-here');
+      e.classList.add('fb-on-pc');
       dragFrom(e, brought, r.name);
     }
     if (enter) {
@@ -1144,6 +1276,12 @@ export const SHAPES: Record<string, string> = {
   copy: 'M5.5 5.5h7.5v7.5h-7.5zM3 10.5V3h7.5',
   bin: 'M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5',
   back: 'M3.5 8.5h7a2.5 2.5 0 0 0 0-5H7M6 11L3.5 8.5 6 6',
+  // Narrowing the list: a lens, drawn as the one glyph a person already reads as "look for".
+  search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3 3',
+  // The three columns the list can be ordered by: letters, a stack with weight at its foot, and a clock.
+  name: 'M3.5 4.5h9M3.5 8h6M3.5 11.5h3',
+  size: 'M4.5 3.5h7M3.5 7h9M2.5 10.5h11M2.5 13h11',
+  clock: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.5l2.5 1.5',
 };
 
 export function glyph(kind: string): SVGSVGElement {
