@@ -33,6 +33,11 @@ const (
 	TypeExit        byte = 0x25 // engine to main: the shell ended, with its status if the box gave one
 	TypeNotice      byte = 0x26 // engine to main: something the tab must say (the box is waiting on the window, typed bytes were dropped)
 
+	// Files. A tab's files travel on a channel of their own, so asking for a listing never holds up what is
+	// typed. A listing comes back as pages, each its own frame, and a page carries only what a row shows.
+	TypeFileAsk  byte = 0x28 // main to engine: do this with the box's files (JSON)
+	TypeFilePage byte = 0x29 // engine to main: one page of an answer, or the end of one (JSON)
+
 	TypeKeyRequest byte = 0x30 // main to the key process: one thing asked of the list or a key (JSON)
 	TypeKeyReply   byte = 0x31 // the key process to main: the answer
 	TypePassword   byte = 0x32 // main to the key process: a password, as raw bytes so they can be wiped

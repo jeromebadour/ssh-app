@@ -594,6 +594,10 @@ function openTab(boxId = '', place = ''): Tab | null {
       if (tabs.get(id) === tab) sendTo(view, CH.tabBanner, bytes);
     },
     sign: (req: SignRequest) => (aimedAt ? signFor(aimedAt, req) : Promise.resolve({ error: 'refused' })),
+    // A page of an answer about the box's files goes to the tab that asked, and nowhere else.
+    filePage: (page: Record<string, unknown>) => {
+      if (tabs.get(id) === tab) sendTo(view, CH.tabFilePage, page);
+    },
   };
   let engine = new Engine(ENGINE_BIN, ENGINE_HASHES, id, hooks, aim);
   // A box's terminal is opened at the size its view really has, so the engine starts when the view has said
@@ -723,6 +727,23 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || !tab.engine.resize(cols as number, rows as number)) return drop('tab:resize', e);
   tab.begin(cols as number, rows as number);
+});
+
+// The tab's own file browser asks its own box, and nothing else. A path is a box's to understand, so main
+// checks only that it is a plain string of a sane length and hands it on; what it means is worked out on the
+// box itself and every answer names the folder as the box names it.
+ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:file-ask', e);
+  const a = ask as Record<string, unknown> | null;
+  const id = a?.['id'];
+  const what = a?.['do'];
+  const where = a?.['path'];
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'cancel';
+  if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
+    return drop('tab:file-ask', e);
+  }
+  if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
 });
 
 // Select to copy. A tab may leave plain text on the clipboard only while it is the tab in front of the window

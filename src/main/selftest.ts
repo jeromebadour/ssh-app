@@ -744,6 +744,75 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // the only place that name is read.
           check('the window names the box and place it is on', ctx.win.title.startsWith('lab-box') && ctx.win.title.includes('logs') && ctx.win.title.includes('Berth'), ctx.win.title);
         }
+        // The tab's own file browser, on its own channel to the box: the folder is listed and drawn while the
+        // terminal on the same link goes on working.
+        {
+          const front = [...ctx.tabs.values()].find((t) => t.place === 'logs')!;
+          const listed = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 0, 15_000);
+          const names = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+          const kinds = await js<Record<string, string>>(front.view, `Object.fromEntries([...document.querySelectorAll('#fb-list .fb-row')].map((r) => [r.dataset.name, r.dataset.kind]))`);
+          const path0 = await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`);
+          check('the tab lists its box\'s own folder in its own file browser', listed && path0.endsWith('/var/log') && names.includes('syslog') && names.includes('ledger'), [path0, names.slice(0, 10)]);
+          check('and each row says what it is', kinds['ledger'] === 'folder' && kinds['syslog'] === 'file', kinds);
+          // Folders first, then names as a person reads them.
+          const real = names.filter((n) => n !== '..');
+          const folders = real.filter((n) => kinds[n] === 'folder');
+          check('folders come first', real.slice(0, folders.length).every((n) => kinds[n] === 'folder'), real);
+          const foot = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+          check('the footer says how many things are there and what is left of the disk', /\d+ items/.test(foot) && foot.includes('free of'), foot);
+          // Going into a folder lists it, and the way up comes back.
+          await js(front.view, `document.querySelector('[data-name="ledger"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+          const wentIn = await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('today.log'), 10_000);
+          const path1 = await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`);
+          check('going into a folder lists that folder, and the path says where it is', wentIn && path1.endsWith('/var/log/ledger'), [path1, wentIn]);
+          await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+          check('and the way up comes back to the folder above', await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), 10_000), await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`));
+          // A folder with thousands of things in it, left part-read: moving away must abandon it, and its
+          // pages, still arriving, must not be drawn over the folder now on screen. Without that, a person
+          // moving quickly ends up looking at a folder they have already left.
+          {
+            const said = await lab.tell('manyfiles /var/log/many 1200');
+            check('the lab made a folder with many things in it', said['made'] === 1200, said);
+            // The box is made to answer each page of a listing slowly, so this folder is still arriving while
+            // the person moves away from it: that is the moment this is about, and a fast box never shows it.
+            await lab.tell('filepace 120');
+            // The folder was made after this one was listed, and nothing redraws by itself, so the folder is
+            // read again before the new one can be gone into.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('many'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="many"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            // Away again as soon as the first rows are there, with the rest still coming.
+            const began = await until(async () => (await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-row').length`)) > 50, 20_000);
+            const stillReading = (await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`)).includes('reading');
+            check('a big folder is drawn as it arrives, not held back until it is whole', began && stillReading, [began, stillReading]);
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            const backUp = await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.textContent ?? ''`)).endsWith('/var/log'), 15_000);
+            // Long enough that every page of the folder left behind would have arrived by now.
+            await sleep(2500);
+            const names = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+            const foot = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            check('a folder left part-read is abandoned, and its late pages are never drawn over the next one', began && backUp && !names.some((n) => n.startsWith('thing-')) && names.includes('syslog') && !foot.includes('reading'), [names.slice(0, 8), foot]);
+            // And it really stopped: the box is no longer being asked for pages of the folder left behind.
+            // Without that it would be read to its end for nobody, which on a real folder of a hundred
+            // thousand files is minutes of a box's time and the tab's own channel.
+            // The folder now on screen is listed too, and its own pages count, so this waits until nothing at
+            // all is being read before it starts counting.
+            const settled = await until(async () => !(await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`)).includes('reading'), 15_000);
+            const pagesThen = Number((await lab.tell('pages'))['pages'] ?? 0);
+            await sleep(1500);
+            const pagesNow = Number((await lab.tell('pages'))['pages'] ?? 0);
+            check('and the box is no longer being asked for its pages', settled && pagesNow === pagesThen, [settled, pagesThen, pagesNow]);
+            await lab.tell('filepace 0');
+          }
+
+          // And the terminal on the same link is untouched by any of it.
+          await type(front, 'echo files-did-not-block\n');
+          check('the terminal on the same link is untouched by the file browser', await until(async () => (await shown(front)).includes('files-did-not-block'), 10_000), '');
+          await shot('files', 'a tab: its box\'s files beside its terminal', front);
+        }
+
         const open1 = [...ctx.tabs.values()].find((x) => x.place === 'logs')!;
         {
           const front = open1;
@@ -1322,7 +1391,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,frame,link,meter,onAgain,onBanner,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -1489,8 +1558,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('another tab saw none of it', !(await shown(a)).includes('typed-into-the-box'), '');
       const seenNow = await lab.tell('seen');
       const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
-      const last = sessions[sessions.length - 1];
-      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 1 && JSON.stringify(last?.Asked?.slice(0, 2)) === '["pty-req","exec"]' && (last?.Asked ?? []).slice(2).every((x) => x === 'window-change') && last?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && last?.Term === 'xterm-256color', seenNow);
+      // What Berth asks a box for, in full, and nothing beyond it (plan B10). A tab opens two sessions and no
+      // more: the terminal, and the file subsystem for its own file browser. The second asks for one thing,
+      // "subsystem", and carries no terminal and no command.
+      const shell = sessions.find((x) => (x.Asked ?? []).includes('pty-req'));
+      const fileSession = sessions.find((x) => JSON.stringify(x.Asked) === '["subsystem"]');
+      const last = shell;
+      check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 2 && JSON.stringify(shell?.Asked?.slice(0, 2)) === '["pty-req","exec"]' && (shell?.Asked ?? []).slice(2).every((x) => x === 'window-change') && shell?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && shell?.Term === 'xterm-256color', seenNow);
+      check('and its files were asked for on a session of their own, which asks for one thing and no terminal', fileSession !== undefined && fileSession.Term === '' && fileSession.Command === '', fileSession);
       const sizeNow = await js<{ cols: number; rows: number }>(t.view, `window.berthTerm.size()`);
       check(`the box's terminal was opened at this tab's own size, ${sizeNow.cols} x ${sizeNow.rows}, and never told a size twice`, last?.Cols === sizeNow.cols && last?.Rows === sizeNow.rows && sizeNow.cols > 40 && (last?.Asked ?? []).length === 2, [last?.Cols, last?.Rows, sizeNow, last?.Asked]);
       const worn = await dress(t);

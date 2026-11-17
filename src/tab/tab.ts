@@ -1,10 +1,10 @@
-// The tab's view: its terminal, and where its link stands, as the approved pictures show it (the file panel
-// comes with step 3). It talks to main through the few functions of tabPort and to nothing else.
+// The tab's view: its terminal, its own file browser on the box's files, and where its link stands. It talks to main through the few functions of tabPort and to nothing else.
 import type { TabInfo, TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
 import { drawChrome, folded, type Chrome } from './chrome';
+import { startFiles } from './files';
 import { clock } from './states';
 import { openTerminal, type Term } from './term';
 
@@ -122,6 +122,11 @@ const chrome: Chrome = {
 const draw = (): void => drawChrome(chromeAt, signInAt, chrome);
 
 let last = '';
+// The tab's file browser, on its own channel to the box. It is asked for a folder once the link is up: before
+// that there is nothing to ask.
+const files = startFiles(document.getElementById('files') as HTMLDivElement, port);
+let askedFor = '';
+
 port.onState((info) => {
   // The terminal is framed in its box's colour, so which box you are typing into is visible without reading a
   // tab label: the tabs already carry that colour and the terminal did not, which the design always said it
@@ -142,6 +147,15 @@ port.onState((info) => {
   chrome.againIn = info.againAt;
   chrome.info = info;
   draw();
+  // The file browser opens on the tab's own place once the link is up, and only once: moving about afterwards
+  // is the person's, not the window's. A tab with no place of its own starts where the account's home is,
+  // which the box works out itself from ".".
+  if (live && info.link.phase === 'up' && askedFor === '') {
+    // The tab's own folder: the place's, or the box's starting folder, or the account's home, which the box
+    // works out itself from ".". The shell started there too, so the two begin together.
+    askedFor = info.box?.folder ? info.box.folder : '.';
+    files.open(askedFor);
+  }
   // The end of a link is also written where it happened, in the terminal, in Berth's own words.
   if (info.box && info.link.phase === 'ended' && now !== last) term.note(`Berth: the link is gone: ${ending(info.link.cause).said} at ${clock(Date.now())}`);
   if (info.link.droppedBytes > 0 && now !== last) term.note(`Berth: ${info.link.droppedBytes} typed bytes could not be kept for the box`);

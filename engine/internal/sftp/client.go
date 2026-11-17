@@ -117,10 +117,11 @@ type Client struct {
 	mu  sync.Mutex // one writer at a time
 	seq uint32
 
-	waitMu  sync.Mutex
-	waiting map[uint32]chan answer
-	closed  bool
-	fault   error
+	waitMu    sync.Mutex
+	waiting   map[uint32]chan answer
+	abandoned map[uint32]bool // given up on, but still ours: a late answer to one of these is dropped
+	closed    bool
+	fault     error
 
 	exts map[string]bool // what the box said it can do beyond the protocol itself
 }
@@ -133,7 +134,7 @@ type answer struct {
 // Start opens the protocol on an already-open channel: it says which version it speaks and reads the box's
 // answer. A box that answers something else, or nothing in time, is refused here and not later.
 func Start(ctx context.Context, rw io.ReadWriteCloser) (*Client, error) {
-	c := &Client{rw: rw, waiting: map[uint32]chan answer{}, exts: map[string]bool{}}
+	c := &Client{rw: rw, waiting: map[uint32]chan answer{}, abandoned: map[uint32]bool{}, exts: map[string]bool{}}
 	var w writer
 	w.u32(3) // the version this client speaks
 	if err := writePacket(rw, fxpInit, w.b); err != nil {
@@ -206,7 +207,17 @@ func (c *Client) read() {
 		if ours {
 			delete(c.waiting, id)
 		}
+		late := c.abandoned[id]
+		if late {
+			delete(c.abandoned, id)
+		}
 		c.waitMu.Unlock()
+		if late {
+			// An answer to something that was given up on. It is still ours, so it is dropped and the link
+			// goes on: a person moving quickly through folders leaves these behind constantly, and ending the
+			// link for one would make the file browser unusable exactly when it is being used hardest.
+			continue
+		}
 		if !ours {
 			// An answer to nothing. A box that does this is not one to keep talking to: it has either lost
 			// track or is trying something, and either way the next answers cannot be trusted to be ours.
@@ -295,9 +306,24 @@ func (c *Client) ask(ctx context.Context, kind byte, build func(w *writer)) (ans
 	}
 }
 
+// forget stops waiting for an answer but remembers that its number was ours, so the answer that arrives later
+// is dropped rather than taken for an answer to nothing. The set is bounded: a box that never answers at all
+// must not make this grow without end, and once it is full the oldest are let go, which at worst ends a link
+// that was already not answering.
+const mostAbandoned = 4096
+
 func (c *Client) forget(id uint32) {
 	c.waitMu.Lock()
 	delete(c.waiting, id)
+	if len(c.abandoned) >= mostAbandoned {
+		for old := range c.abandoned {
+			delete(c.abandoned, old)
+			if len(c.abandoned) < mostAbandoned {
+				break
+			}
+		}
+	}
+	c.abandoned[id] = true
 	c.waitMu.Unlock()
 }
 

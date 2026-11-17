@@ -18,6 +18,8 @@ export interface EngineHooks {
   link?(info: LinkInfo): void;
   banner?(bytes: Uint8Array): void;
   sign?(req: SignRequest): Promise<SignAnswer>;
+  // filePage: one page of an answer about the box's files, saying which ask it belongs to.
+  filePage?(page: Record<string, unknown>): void;
 }
 
 export interface SignRequest {
@@ -141,6 +143,15 @@ export class Engine {
     return true;
   }
 
+  // Ask the box's files for something: a listing, what one path is, or how much of a disk is left. The answer
+  // comes back as pages, through the hook, each saying which ask it belongs to. Nothing here waits: a listing
+  // of a folder with thousands of files arrives a page at a time while the tab goes on working.
+  askFiles(ask: { id: number; do: string; path: string }): boolean {
+    if (this.aim.stub || this.state === 'gone') return false;
+    this.write(T.FileAsk, Buffer.from(JSON.stringify(ask)));
+    return true;
+  }
+
   // The tab was closed by the user: let the engine end by itself, and only then insist.
   close(): void {
     this.closing = true;
@@ -187,6 +198,7 @@ export class Engine {
         case T.Banner:
         case T.Exit:
         case T.Notice:
+        case T.FilePage:
           // Only an engine aimed at a box says these; from the skeleton they are an unknown message.
           if (this.aim.stub || !this.fromBox(f.type, f.body)) {
             this.child?.kill();
@@ -205,6 +217,19 @@ export class Engine {
 
   // A frame only a real engine sends. False for one that cannot be read: that ends the engine.
   private fromBox(type: number, body: Uint8Array): boolean {
+    if (type === T.FilePage) {
+      // A page of an answer about the box's files. It is read here only far enough to know whose ask it is;
+      // what it holds is the window's to draw.
+      let v: Record<string, unknown>;
+      try {
+        v = JSON.parse(Buffer.from(body).toString('utf8')) as Record<string, unknown>;
+      } catch {
+        return false;
+      }
+      if (typeof v !== 'object' || v === null || typeof v['id'] !== 'number') return false;
+      this.hooks.filePage?.(v);
+      return true;
+    }
     if (type === T.Banner) {
       this.hooks.banner?.(body);
       return true;

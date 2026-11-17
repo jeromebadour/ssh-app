@@ -12,6 +12,9 @@
 //
 //	accept <authorized-keys line>   let this key in, as when Berth's key is added on a box
 //	seen                            {"tries":N,"users":[...],"sessions":[...]}: every sign-in try and session so far
+//	manyfiles <folder> <count>      make a folder with that many things in it, under the box's own files
+//	filepace <ms>                   wait this long before answering each page of a listing
+//	pages                           {"pages":N}: how many pages of a listing it has been asked for in all
 //	keyfile <path> [passphrase]     write a private key file where a person's own would be, in the format
 //	                                OpenSSH writes, and say its public half and fingerprint
 //	rekey                           become another box at the same address: a new identity, nothing else changed
@@ -36,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sshapp/engine/internal/lab/hostile"
 	"strings"
 	"time"
@@ -68,13 +72,33 @@ func printed(k ssh.PublicKey) string {
 func main() {
 	host := identity()
 	var let ssh.PublicKey
-	box, err := hostile.Start(hostile.Config{HostSigner: host, Sessions: true, Banner: "Welcome to the lab box\n\x1b[c\x1b]52;c;aGlkZGVu\x07\x1b[31msecond line\n*** System restart required ***\n"})
+	// A real folder for its file subsystem, so the app's own file browser can be driven against it. It is
+	// made here with a few things of each kind in it, and goes when the lab box does.
+	files, err := os.MkdirTemp("", "labbox-files-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(files)
+	// The folders the self-test's own places point at are here too, so a tab opened on a place has something
+	// real to list. Paths are taken as being under this folder, so "/var/log" is this folder's own var/log.
+	for _, d := range []string{"logs", "releases", "empty", "var/log", "var/log/ledger", "srv/ledger"} {
+		_ = os.MkdirAll(filepath.Join(files, d), 0o755)
+	}
+	_ = os.WriteFile(filepath.Join(files, "var", "log", "syslog"), []byte("a line of the box's own log\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(files, "var", "log", "ledger", "today.log"), []byte("ledger\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(files, "notes.txt"), []byte("a file on the lab box\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(files, "kit.tar.gz"), make([]byte, 23_400), 0o644)
+	_ = os.WriteFile(filepath.Join(files, "logs", "today.log"), []byte("line one\nline two\n"), 0o644)
+	_ = os.Symlink("notes.txt", filepath.Join(files, "latest"))
+
+	box, err := hostile.Start(hostile.Config{HostSigner: host, Sessions: true, FilesUnder: files, Banner: "Welcome to the lab box\n\x1b[c\x1b]52;c;aGlkZGVu\x07\x1b[31msecond line\n*** System restart required ***\n"})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	addr := box.Addr()
-	say(map[string]any{"addr": addr, "printed": printed(host.PublicKey())})
+	say(map[string]any{"addr": addr, "printed": printed(host.PublicKey()), "files": files})
 
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 64*1024), 64*1024)
@@ -119,6 +143,53 @@ func main() {
 				continue
 			}
 			say(map[string]any{"wrote": where, "publicKey": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), "fingerprint": ssh.FingerprintSHA256(signer.PublicKey())})
+		case "pages":
+			say(map[string]any{"pages": hostile.Pages()})
+		case "filepace":
+			// How long the box waits before answering each page of a listing, so a listing takes a known time.
+			ms := 0
+			for _, c := range strings.TrimSpace(rest) {
+				if c < '0' || c > '9' {
+					ms = -1
+					break
+				}
+				ms = ms*10 + int(c-'0')
+			}
+			if ms < 0 || ms > 5000 {
+				say(map[string]any{"error": "a wait between 0 and 5000 ms"})
+				continue
+			}
+			hostile.Pace(int64(ms))
+			say(map[string]any{"pace": ms})
+		case "manyfiles":
+			// A folder with a great many things in it, so a listing can be left part-read and the window's
+			// handling of that proven. The count is given; the folder is made under the box's own files.
+			where, n, _ := strings.Cut(rest, " ")
+			count := 0
+			for _, c := range n {
+				if c < '0' || c > '9' {
+					count = 0
+					break
+				}
+				count = count*10 + int(c-'0')
+			}
+			if count < 1 || count > 100_000 {
+				say(map[string]any{"error": "a count between 1 and 100000"})
+				continue
+			}
+			dir := filepath.Join(files, filepath.FromSlash(strings.TrimPrefix(where, "/")))
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			made := 0
+			for i := 0; i < count; i++ {
+				name := fmt.Sprintf("thing-%05d.dat", i)
+				if os.WriteFile(filepath.Join(dir, name), nil, 0o644) == nil {
+					made++
+				}
+			}
+			say(map[string]any{"made": made, "in": where})
 		case "seen":
 			tries, users := box.SignInTries()
 			say(map[string]any{"tries": tries, "users": users, "sessions": box.Sessions()})

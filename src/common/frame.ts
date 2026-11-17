@@ -20,6 +20,9 @@ export const T = {
   Banner: 0x24,
   Exit: 0x25,
   Notice: 0x26,
+  // Files, on a channel of their own so a listing never holds up what is typed.
+  FileAsk: 0x28,
+  FilePage: 0x29,
   KeyRequest: 0x30,
   KeyReply: 0x31,
   Password: 0x32,
