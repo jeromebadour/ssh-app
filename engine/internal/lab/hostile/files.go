@@ -163,18 +163,24 @@ func serveFiles(ch io.ReadWriteCloser, root string) {
 // under keeps every path inside the lab folder, so a test cannot reach the machine's own files by mistake.
 // asBox turns a path on the machine running the lab into the path a box would call it: the box's own files
 // are the box's root.
+// Both of these cross between two kinds of path and must say which is which. A box's paths have slashes and
+// start at its root; the machine running the lab has its own, and on Windows they have backslashes and a
+// drive letter. Mixing the two reads "C:\\lab\\srv\\app" as a box path and makes nonsense of everything
+// judged on it, which is how every file test of the engine failed on Windows while passing on Linux.
 func (s *fileServer) asBox(p string) string {
-	cut := strings.TrimPrefix(p, s.root)
-	if cut == "" {
+	here := filepath.ToSlash(p)
+	root := filepath.ToSlash(s.root)
+	cut := strings.TrimPrefix(here, root)
+	if cut == "" || cut == "/" {
 		return "/"
 	}
 	return path.Clean("/" + strings.TrimPrefix(cut, "/"))
 }
 
 func (s *fileServer) under(raw []byte) string {
-	p := string(raw)
-	clean := path.Clean("/" + strings.TrimPrefix(p, s.root))
-	return path.Join(s.root, clean)
+	asked := filepath.ToSlash(string(raw))
+	clean := path.Clean("/" + strings.TrimPrefix(asked, filepath.ToSlash(s.root)))
+	return filepath.Join(s.root, filepath.FromSlash(clean))
 }
 
 func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
