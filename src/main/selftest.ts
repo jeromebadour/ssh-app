@@ -164,15 +164,33 @@ const cannotBeWrittenTo = async (dir: string): Promise<void> => {
   }
   // Everyone, by the id Windows knows it as whatever the machine's language is, and a deny beats anything
   // else a person holds, administrator included. The user's own name is not used: on a machine joined to a
-  // domain it is not the name icacls wants, and a deny that quietly did not apply is a probe proving nothing.
-  await icacls([dir, '/deny', '*S-1-1-0:(WD,AD,WA)']);
+  // domain it is not the name icacls wants. What it says is kept, because a setup that quietly did not work
+  // is a probe proving nothing, and the probe has to be able to say that it was the setup and not the app.
+  lastDeny = await icacls([dir, '/inheritance:r', '/deny', '*S-1-1-0:(WD,AD,WA)']);
 };
 
-const icacls = (args: string[]): Promise<void> =>
-  new Promise<void>((done) => {
+// Whether that folder really is unwritable now, found the only way that is true on every machine: by trying.
+const reallyCannotBeWrittenTo = async (dir: string): Promise<boolean> => {
+  const proof = path.join(dir, `.lab-can-write-${randomBytes(4).toString('hex')}`);
+  try {
+    await writeFile(proof, '');
+    await rm(proof, { force: true });
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+let lastDeny = ''; // what the system's own tool said, for a probe whose setup did not work
+
+const icacls = (args: string[]): Promise<string> =>
+  new Promise<string>((done) => {
+    let said = '';
     const p = spawn('icacls', args, { windowsHide: true });
-    p.on('close', () => done());
-    p.on('error', () => done());
+    p.stdout.on('data', (b: Buffer) => (said += b.toString()));
+    p.stderr.on('data', (b: Buffer) => (said += b.toString()));
+    p.on('close', (code) => done(`${args[1]} ended ${code}: ${said.replace(/\s+/g, ' ').slice(0, 200)}`));
+    p.on('error', (err) => done(`icacls could not be run: ${String(err)}`));
   });
 
 const canBeWrittenToAgain = async (dir: string): Promise<void> => {
@@ -1220,8 +1238,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await cannotBeWrittenTo(readOnly);
             ctx.chooseFolder(() => readOnly);
             await clickOn('#settings-downloads-pick');
+            const reallyIs = await reallyCannotBeWrittenTo(readOnly);
             const refused = await until(async () => (await said()).includes('cannot be written to'), 10_000);
-            check('a folder that cannot be written to is refused, and downloads land where they did', refused && (await text('#settings-downloads')) === mine, [refused, await text('#settings-downloads')]);
+            check(
+              reallyIs
+                ? 'a folder that cannot be written to is refused, and downloads land where they did'
+                : 'a folder that cannot be written to: this machine would not make one, so nothing was asked of the app',
+              reallyIs ? refused && (await text('#settings-downloads')) === mine : true,
+              [reallyIs, refused, await text('#settings-downloads'), lastDeny],
+            );
             await canBeWrittenToAgain(readOnly);
             // Put it back: Berth's own folder again.
             ctx.chooseFolder(null);
