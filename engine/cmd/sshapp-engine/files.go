@@ -32,6 +32,8 @@ type fileAsk struct {
 	Into    string `json:"into,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Replace bool   `json:"replace,omitempty"`
+	// "get" and "put": take up what a broken transfer left where it stopped, rather than starting again.
+	Resume bool `json:"resume,omitempty"`
 	// "put" only, and main's own: the whole path of the file on the PC to send. A view never names one.
 	From string `json:"from,omitempty"`
 }
@@ -47,15 +49,16 @@ type filePage struct {
 	Space *spaceShown `json:"space,omitempty"`
 	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
 	// "get": how it is going and how it ended.
-	Got      uint64   `json:"got,omitempty"`      // bytes written to the PC so far
-	Of       uint64   `json:"of,omitempty"`       // how big the box said the file is
-	Landed   string   `json:"landed,omitempty"`   // the name it was given on the PC, once it is really there
-	Mark     string   `json:"mark,omitempty"`     // "checked", "changed" or "not-checked": what its hash proved
-	MarkWhy  string   `json:"markWhy,omitempty"`  // why it could not be checked, where it could not
-	Replaced bool     `json:"replaced,omitempty"` // "put": it went in over a file that was already there
-	There    *fileRow `json:"there,omitempty"`    // "put": what is already at that name on the box
-	Hash     string   `json:"hash,omitempty"`     // "hash": the box's own hash of the file, as it printed it
-	Which    string   `json:"which,omitempty"`    // "hash": which hash it is
+	Got       uint64   `json:"got,omitempty"`       // bytes written to the PC so far
+	Of        uint64   `json:"of,omitempty"`        // how big the box said the file is
+	Landed    string   `json:"landed,omitempty"`    // the name it was given on the PC, once it is really there
+	Mark      string   `json:"mark,omitempty"`      // "checked", "changed" or "not-checked": what its hash proved
+	MarkWhy   string   `json:"markWhy,omitempty"`   // why it could not be checked, where it could not
+	Replaced  bool     `json:"replaced,omitempty"`  // "put": it went in over a file that was already there
+	There     *fileRow `json:"there,omitempty"`     // "put": what is already at that name on the box
+	Hash      string   `json:"hash,omitempty"`      // "hash": the box's own hash of the file, as it printed it
+	Which     string   `json:"which,omitempty"`     // "hash": which hash it is
+	ResumedAt uint64   `json:"resumedAt,omitempty"` // a transfer taken up again: how much was already there
 }
 
 type fileRow struct {

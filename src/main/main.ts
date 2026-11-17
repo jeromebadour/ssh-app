@@ -3,7 +3,7 @@
 import { app, BaseWindow, clipboard, dialog, ipcMain, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, statfs } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
@@ -625,11 +625,28 @@ function openTab(boxId = '', place = ''): Tab | null {
         if (page['done'] === true) {
           if (page['error'] === 'already-there' && sendingNow.has(comingKey(id, 0))) return; // the question has it
           sendingNow.delete(comingKey(id, ask));
+          const was = comingBroke.get(comingKey(id, ask));
+          comingBroke.delete(comingKey(id, ask));
+          const why = page['error'];
+          if (was) {
+            if (typeof why === 'string' && WORTH_TAKING_UP.has(why)) broke.set(was.key, { size: was.size, mtime: was.mtime });
+            else broke.delete(was.key);
+          }
         }
       }
       const mine = coming.get(comingKey(id, ask));
       if (mine) {
-        if (page['done'] === true) coming.delete(comingKey(id, ask));
+        if (page['done'] === true) {
+          coming.delete(comingKey(id, ask));
+          // A transfer that broke with bytes already written is written down, so the next try takes it up.
+          const was = comingBroke.get(comingKey(id, ask));
+          comingBroke.delete(comingKey(id, ask));
+          const why = page['error'];
+          if (was) {
+            if (typeof why === 'string' && WORTH_TAKING_UP.has(why)) broke.set(was.key, { size: was.size, mtime: was.mtime });
+            else broke.delete(was.key);
+          }
+        }
         page = { ...page, into: mine.into, ...(mine.why === '' ? {} : { renamed: mine.why }) };
       }
       sendTo(view, CH.tabFilePage, page);
@@ -886,6 +903,7 @@ const downloadsInto = (): string => (LAB_PROFILE ? path.join(LAB_PROFILE, 'downl
 const spareOnDisk = 64 * 1024 * 1024;
 type Coming = { tab: number; into: string; name: string; why: string };
 const coming = new Map<string, Coming>(); // per tab and ask: what main knows that the engine does not
+const comingBroke = new Map<string, { key: string; size: number; mtime: number }>(); // what to write down if it breaks
 // Transfers main has taken in and not yet given to an engine: the stat for a download, the chooser for a send.
 // A stop that arrives in that gap lands here, and is seen before anything starts.
 const settling = new Set<string>();
@@ -923,6 +941,10 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
     return say(at.error);
   }
   const size = at.attrs?.size ?? 0;
+  const mtime = at.attrs?.mtime ?? 0;
+  const key = brokeKey('in', tab.box?.id ?? '', remote);
+  const had = broke.get(key);
+  const resume = had !== undefined && had.size === size && had.mtime === mtime;
   const room = await roomFor(into, size);
   if (stopWanted(tab, id)) return say('stopped');
   if (!room) return say('pc-full');
@@ -941,7 +963,8 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
   const why = [landed.changed ? landed.why : '', name !== landed.name ? 'a file of that name was already here' : ''].filter((x) => x !== '').join(', ');
   if (tabs.get(tab.id) !== tab) return;
   coming.set(comingKey(tab.id, id), { tab: tab.id, into, name, why });
-  if (!tab.engine.askFiles({ id, do: 'get', path: remote, into, name })) {
+  comingBroke.set(comingKey(tab.id, id), { key, size, mtime });
+  if (!tab.engine.askFiles(resume ? { id, do: 'get', path: remote, into, name, resume: true } : { id, do: 'get', path: remote, into, name })) {
     coming.delete(comingKey(tab.id, id));
     say('no-link');
   }
@@ -982,7 +1005,20 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   const name = path.basename(from);
   settling.delete(comingKey(tab.id, id));
   sendingNow.set(comingKey(tab.id, id), { tab: tab.id, id, from, name, folder });
-  if (!tab.engine.askFiles({ id, do: 'put', path: folder, name, from })) {
+  // A send that broke part way is taken up where it stopped, if the file on this PC is still the one those
+  // bytes came from. What is checked at the end still covers the whole file.
+  let was: { size: number; mtime: number } = { size: 0, mtime: 0 };
+  try {
+    const f = await stat(from);
+    was = { size: f.size, mtime: Math.floor(f.mtimeMs / 1000) };
+  } catch {
+    return say('failed');
+  }
+  const key = brokeKey('out', tab.box?.id ?? '', `${folder}/${name}`);
+  const had = broke.get(key);
+  const resume = had !== undefined && had.size === was.size && had.mtime === was.mtime;
+  comingBroke.set(comingKey(tab.id, id), { key, size: was.size, mtime: was.mtime });
+  if (!tab.engine.askFiles(resume ? { id, do: 'put', path: folder, name, from, resume: true } : { id, do: 'put', path: folder, name, from })) {
     sendingNow.delete(comingKey(tab.id, id));
     say('no-link');
   }
@@ -995,18 +1031,18 @@ const MAIN_ASKS_FROM = 1_000_000;
 let mainAskNext = MAIN_ASKS_FROM;
 const mainAsks = new Map<string, (p: Record<string, unknown>) => void>();
 
-function askTheBox(tab: Tab, what: { do: string; path: string }): Promise<{ error: string; attrs?: { size: number; kind: string } }> {
+function askTheBox(tab: Tab, what: { do: string; path: string }): Promise<{ error: string; attrs?: { size: number; kind: string; mtime: number } }> {
   return new Promise((settle) => {
     const ask = ++mainAskNext;
     const key = comingKey(tab.id, ask);
-    let attrs: { size: number; kind: string } | undefined;
+    let attrs: { size: number; kind: string; mtime: number } | undefined;
     const done = setTimeout(() => {
       mainAsks.delete(key);
       settle({ error: 'no-answer' });
     }, 30_000);
     mainAsks.set(key, (p) => {
-      const a = p['attrs'] as { size?: number; kind?: string } | undefined;
-      if (a && typeof a.size === 'number') attrs = { size: a.size, kind: String(a.kind ?? '') };
+      const a = p['attrs'] as { size?: number; kind?: string; mtime?: number } | undefined;
+      if (a && typeof a.size === 'number') attrs = { size: a.size, kind: String(a.kind ?? ''), mtime: typeof a.mtime === 'number' ? a.mtime : 0 };
       if (p['done'] !== true) return;
       clearTimeout(done);
       mainAsks.delete(key);
@@ -1066,6 +1102,17 @@ function answerReplacing(replace: boolean): void {
   }
   tellShell();
 }
+
+// Transfers that broke part way, so the next try can take one up where it stopped rather than start again.
+// What is remembered is which file, at which end, and what it was when it broke: a file that has changed since
+// is not the file those bytes came from, so that one starts again. Whatever happens, the hash at the end
+// covers the whole file, so a wrong guess here cannot deliver a wrong file, only waste a transfer.
+type Broke = { size: number; mtime: number };
+const broke = new Map<string, Broke>();
+const brokeKey = (way: string, box: string, where: string): string => `${way}:${box}:${where}`;
+// The ways a transfer can end with bytes worth keeping. Anything else either wrote nothing or wrote something
+// known to be wrong, and the engine has already taken its half-written file away.
+const WORTH_TAKING_UP = new Set(['no-answer', 'no-link', 'failed', 'denied']);
 
 // How much room the disk has left for one more file. The file being replaced, if there is one, is still there
 // while the new one is written, so what must fit is the whole of the new file beside everything already on the

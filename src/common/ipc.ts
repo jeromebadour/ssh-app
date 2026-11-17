@@ -351,4 +351,5 @@ export interface FilePage {
   asking?: string; // a file sent to a box: it is waiting on a question about this name, and nothing is moving
   hash?: string; // a hash asked for: the box's own hash of the file
   which?: string; // a hash asked for: which one it is
+  resumedAt?: number; // a transfer taken up again: how much of it was already there
 }

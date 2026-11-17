@@ -21,6 +21,8 @@
 //	rekey                           become another box at the same address: a new identity, nothing else changed
 //	read <path>                     {"text":"..."}: what one of the box's own files holds
 //	forget <path>                   take one of the box's own files away
+//	hashof <path>                   {"sha256":"..."}: the box's own hash of one of its files
+//	failreads <bytes>               answer no read from this offset on, as a link going down looks from here
 //	nofiles <n>                     say no to the next n asks for the file subsystem, as a busy box does
 //	pretendsize <name> <bytes>      the box says that file is that big, whatever it really is
 //	oddnames <folder>               make files whose names a PC cannot hold as they are
@@ -41,6 +43,7 @@ import (
 	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -268,6 +271,24 @@ func main() {
 		case "forget":
 			// Take one of the box's own files away again, so a test can run twice.
 			say(map[string]any{"gone": os.Remove(filepath.Join(files, filepath.FromSlash(rest))) == nil})
+		case "hashof":
+			// The box's own sha256 of one of its files, so a test can compare what arrived with what it has.
+			b, err := os.ReadFile(filepath.Join(files, filepath.FromSlash(rest)))
+			if err != nil {
+				say(map[string]any{"error": "no such file"})
+				continue
+			}
+			sum := sha256.Sum256(b)
+			say(map[string]any{"sha256": hex.EncodeToString(sum[:])})
+		case "failreads":
+			// <bytes>: the box answers no read from this offset on, as a link going down looks from here.
+			n, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if err != nil || n < 0 {
+				say(map[string]any{"error": "a count"})
+				continue
+			}
+			hostile.FailReadsAt(n)
+			say(map[string]any{"failingFrom": n})
 		case "nofiles":
 			n, err := strconv.Atoi(rest)
 			if err != nil || n < 0 {

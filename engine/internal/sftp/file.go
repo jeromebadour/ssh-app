@@ -30,6 +30,12 @@ func (c *Client) Create(ctx context.Context, p string, mode uint32) (*File, erro
 	return c.open(ctx, p, openWrite|openCreat|openExcl|openTrunc, mode)
 }
 
+// WriteOn opens a file that is already there for writing, without emptying it. It is how a transfer that
+// broke is taken up where it stopped: what is already in the file stays, and the rest is written after it.
+func (c *Client) WriteOn(ctx context.Context, p string) (*File, error) {
+	return c.open(ctx, p, openRead|openWrite, 0)
+}
+
 func (c *Client) open(ctx context.Context, p string, flags, mode uint32) (*File, error) {
 	a, err := c.ask(ctx, fxpOpen, func(w *writer) {
 		w.string(p)

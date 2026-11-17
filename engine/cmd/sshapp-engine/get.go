@@ -18,7 +18,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,6 +57,10 @@ func landingName(name string) error {
 	return nil
 }
 
+// partName is what a file is called while it is still arriving: the same name every time, so a transfer that
+// broke can be taken up where it stopped. A dot in front keeps it out of the way and .part says what it is.
+func partName(name string) string { return ".berth-" + name + ".part" }
+
 func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	if err := landingName(a.Name); err != nil {
 		return err
@@ -78,19 +81,49 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 			return errAlreadyThere
 		}
 	}
-	// The temporary name carries this ask's own number, so two downloads at once in one tab cannot collide,
-	// and it begins with a dot and ends with .part so it is this app's own and recognisable as unfinished.
-	temp := filepath.Join(a.Into, fmt.Sprintf(".berth-%d.part", a.ID))
-	_ = os.Remove(temp)
-	to, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	// The temporary name comes from the name the file will have, not from this ask, so the same file always
+	// has the same half-written file waiting for it and a transfer that broke can be taken up again. It begins
+	// with a dot and ends with .part, so it is this app's own and plainly unfinished.
+	temp := filepath.Join(a.Into, partName(a.Name))
+	// What is already there, when this is a second try at the same file. The bytes are read back and hashed
+	// before the rest is asked for, so what is checked at the end is the whole file and not only the new part
+	// of it: a file put together from two tries is still only delivered if the box agrees with all of it.
+	var got uint64
+	sum := sha256.New()
+	if a.Resume {
+		if had, err := os.Open(temp); err == nil {
+			n, cerr := io.Copy(sum, had)
+			_ = had.Close()
+			if cerr == nil && n >= 0 && uint64(n) <= was.Size {
+				got = uint64(n)
+			} else {
+				sum.Reset()
+			}
+		}
+	}
+	if got == 0 {
+		_ = os.Remove(temp)
+	}
+	to, err := os.OpenFile(temp, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	// Anything but a clean finish takes the half-written file with it.
-	landed := false
+	if got > 0 {
+		if err := to.Truncate(int64(got)); err != nil {
+			return err
+		}
+		f.page(filePage{ID: a.ID, Got: got, Of: was.Size, ResumedAt: got})
+	}
+	// A clean finish moves the file into place. A transfer given up on by hand, or one whose bytes the box
+	// disagrees with, takes its half-written file with it. Anything else leaves it where it is, because the
+	// next try reads on from it rather than starting again from nothing.
+	landed, binIt := false, false
 	defer func() {
 		_ = to.Close()
-		if !landed {
+		if landed {
+			return
+		}
+		if binIt || ctx.Err() != nil {
 			_ = os.Remove(temp)
 		}
 	}()
@@ -105,15 +138,15 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		_ = file.Close(done)
 	}()
 
-	sum := sha256.New()
 	buf := make([]byte, sftp.Block)
-	var got uint64
 	said := time.Now()
-	f.page(filePage{ID: a.ID, Got: 0, Of: was.Size})
+	if got == 0 {
+		f.page(filePage{ID: a.ID, Got: 0, Of: was.Size})
+	}
 	for {
 		n, err := file.ReadAt(ctx, buf, got)
 		if n > 0 {
-			if _, werr := to.Write(buf[:n]); werr != nil {
+			if _, werr := to.WriteAt(buf[:n], int64(got)); werr != nil {
 				return werr
 			}
 			sum.Write(buf[:n])
@@ -161,6 +194,7 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		if serr == nil && (now.Size != was.Size || now.MTime != was.MTime) {
 			mark = "changed"
 		} else {
+			binIt = true
 			return errNotTheSame
 		}
 	}

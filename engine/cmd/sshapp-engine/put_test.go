@@ -252,3 +252,53 @@ func TestAnUploadGivenUpOnLeavesNothingOnTheBox(t *testing.T) {
 	stayed, _ := os.ReadDir(box)
 	t.Fatalf("it left its half-written file on the box: %v", names(stayed))
 }
+
+// A send that broke leaves what had arrived on the box, and the next try writes on from there. The hash still
+// covers the whole file, so one put together from two tries is only put in place if the box agrees about all
+// of it.
+func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
+	r, box := withFiles(t)
+	from, want := writeOnThePC(t, 500_000)
+	// Half of it is already on the box, under the name a half-written send has.
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), want[:250_000], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 81, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
+	ps := pages(r.wait("the upload to end", ended(81)), 81)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v", e)
+	}
+	if last(ps, "resumedAt") != float64(250_000) {
+		t.Fatalf("it did not say where it was taken up: %v", ps)
+	}
+	if last(ps, "mark") != "checked" {
+		t.Fatalf("a file put together from two tries was not checked: %v", ps)
+	}
+	got, err := os.ReadFile(filepath.Join(box, "sent.bin"))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("what the box holds is not what was sent (%v, %d of %d)", err, len(got), len(want))
+	}
+	if left, _ := os.ReadDir(box); len(left) != 1 {
+		t.Fatalf("the half-written file was left on the box: %v", names(left))
+	}
+}
+
+// Half of something else on the box under the same name: the hash covers the whole file, so it is never put
+// in place, and the wrong bytes are not kept.
+func TestASendTakenUpFromTheWrongBytesIsNeverPutInPlace(t *testing.T) {
+	r, box := withFiles(t)
+	from, _ := writeOnThePC(t, 300_000)
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), make([]byte, 150_000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 82, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
+	ps := pages(r.wait("the refusal", ended(82)), 82)
+	if last(ps, "error") != "not-the-same" {
+		t.Fatalf("a file taken up from the wrong bytes was put in place: %v", ps)
+	}
+	if left, _ := os.ReadDir(box); len(left) != 0 {
+		t.Fatalf("bytes known to be wrong were kept on the box: %v", names(left))
+	}
+}

@@ -79,6 +79,12 @@ var pretend atomic.Pointer[pretendSize]
 
 // PretendSize makes the box say a file of this name is this big, whatever it really is. An empty name puts
 // every file back to its real size.
+// failReadsAt is the offset past which this box answers no read, for the lab. Zero means it answers all.
+var failReadsAt atomic.Int64
+
+// FailReadsAt makes the box stop answering reads from this offset on. Zero puts it back to answering.
+func FailReadsAt(at int64) { failReadsAt.Store(at) }
+
 func PretendSize(name string, size uint64) {
 	if name == "" {
 		pretend.Store(nil)
@@ -241,6 +247,11 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		}
 		key := string(r.str())
 		at := r.u64()
+		// A box that stops answering part way through a file, which is what a link going down looks like from
+		// here: the transfer breaks with bytes already written, which is the case taking one up is for.
+		if stop := failReadsAt.Load(); stop > 0 && at >= uint64(stop) {
+			return fxpStatus, status(fxFailure, "the box stopped answering")
+		}
 		want := r.u32()
 		s.mu.Lock()
 		f := s.files[key]
