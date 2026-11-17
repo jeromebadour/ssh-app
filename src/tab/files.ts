@@ -4,7 +4,7 @@
 // the first rows of a folder with thousands of files are on screen while the rest are still being read. Moving
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
-import { MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
+import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
 const WHY: Record<string, string> = {
@@ -131,6 +131,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // hand over. Both are main's count, not the window's: the window only says them.
   let waitingToSend = 0;
   let leftBehind = 0;
+  // Files fetched only so they can be carried out of the window (plan B4.5). A press on a small file starts
+  // one; it is not a download and gets no line of its own in the strip, because a person who presses a row is
+  // not asking for a transfer, only reaching for the file.
+  const carryReady = new Map<string, number>(); // the box's name for it, and the ask that fetched it
+  const carryGoing = new Map<number, string>(); // asks still fetching, by the name they are fetching
 
   const el = {
     path: document.createElement('div'),
@@ -208,6 +213,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // apart, and the window says it is trying rather than leaving a person looking at a dead list with no way
   // to ask again. A reason that is the folder's own (it is not there, this account may not read it) is the
   // answer, and is not tried again.
+  // Why a file could not be fetched for carrying, in words rather than in the one word the engine uses.
+  const CARRY_WHY: Record<string, string> = {
+    'too-big-to-carry': 'too big to pick up by hand; bring it over first',
+    'no-such-file': 'it is not there any more',
+    denied: 'this account may not read it',
+    'pc-denied': 'Berth could not write its own folder on this PC',
+    'no-link': 'the link to the box is not up',
+    'no-answer': 'the box did not answer',
+    failed: 'it could not be fetched',
+  };
   const WORTH_ANOTHER_TRY = new Set(['unsupported', 'no-link', 'no-answer', 'failed']);
   const TRIES = 3;
   let tried = 0;
@@ -221,6 +236,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (typeof p.tooMany === 'number' && p.tooMany > 0) leftBehind = p.tooMany;
     // What was waiting has been dropped, because a person asked for it to be: it is said, so the button that
     // did it says what it did, and nothing else on this page is about a file at all.
+    // A file fetched only to be carried. Its pages never become a transfer line: what a person sees is the row
+    // becoming draggable, and one line saying what is happening while they wait (BUILD-RULES 2.18).
+    if (p.carrying === true) {
+      const what = carryGoing.get(p.id) ?? '';
+      if (p.draggable === true && what !== '') {
+        carryReady.set(what, p.id);
+        carryGoing.delete(p.id);
+        said = `${shorten(what, 28)} is ready to drag`;
+      } else if (p.done === true) {
+        carryGoing.delete(p.id);
+        if (p.error) said = what === '' ? (CARRY_WHY[p.error] ?? CARRY_WHY['failed']!) : `${shorten(what, 28)}: ${CARRY_WHY[p.error] ?? CARRY_WHY['failed']!}`;
+      }
+      draw();
+      return;
+    }
     // The file is not in the download folder any more: it was moved, renamed or deleted since it landed. The
     // line says so and stops offering the drag, rather than leaving a hand reaching for nothing.
     if (p.dragGone === true) {
@@ -725,7 +755,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // over an older copy of a file that has since changed on the box.
   const broughtOver = (name: string): number | undefined => {
     for (const [id, b] of [...bringing].reverse()) if (b.way === 'in' && (b.landed === name || b.name === name)) return b.canDrag ? id : undefined;
-    return undefined;
+    return carryReady.get(name);
+  };
+
+  // A press on a small file fetches it, so that a drag begun a moment later has something to carry. A file
+  // already here is not fetched again; one too big for this is left to the download button, which says so.
+  const carry = (r: FileRow): void => {
+    if (r.kind !== 'file' || r.size > GRAB_MAX) return;
+    if (broughtOver(r.name) !== undefined) return;
+    if ([...carryGoing.values()].includes(r.name)) return;
+    const id = asker.ask({ do: 'grab', path: join(where || asked, r.name) });
+    carryGoing.set(id, r.name);
+    said = `Fetching ${shorten(r.name, 24)} so it can be dragged`;
+    draw();
   };
 
   const row = (r: FileRow, enter: (() => void) | undefined, id?: string) => {
@@ -737,7 +779,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // Every row is a place the keyboard can stand. Which one holds the tab stop is settled after the whole
     // list is on screen, not here.
     e.setAttribute('role', 'option');
-    e.addEventListener('mousedown', () => place(r.name));
+    e.addEventListener('mousedown', () => {
+      place(r.name);
+      carry(r);
+    });
     e.append(glyph(id === 'fb-up' ? 'up' : r.kind));
     const name = document.createElement('span');
     name.className = 'fb-name';

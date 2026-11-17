@@ -317,7 +317,7 @@ export interface ShellPort {
 // arriving, and the window keeps the newest and drops the rest.
 export interface FileAsk {
   id: number;
-  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel' | 'unqueue';
+  do: 'list' | 'stat' | 'space' | 'read' | 'get' | 'put' | 'hash' | 'delete' | 'trash' | 'restore' | 'empty' | 'cancel' | 'unqueue' | 'grab';
   name?: string; // restore: which thing in the trash to put back. Never a path, and never a name of a view's own making elsewhere
   which?: 'sha256' | 'md5'; // a hash asked for: which one. Only these two may ever be asked of a box
   path: string;
@@ -345,6 +345,10 @@ export interface FileRow {
 // all; a person who picked ten thousand by accident gets as many as this and a line saying the rest were
 // left. Main holds to it and the window names it, so it is written once, here.
 export const MOST_AT_ONCE = 64;
+
+// How big a file may be and still be fetched by a press, so it can be dragged out of the window. Bigger than
+// this is a download, with its own line and its own Stop. Written once, here, and read by both sides.
+export const GRAB_MAX = 4 * 1024 * 1024;
 
 export interface FilePage {
   id: number;
@@ -380,4 +384,5 @@ export interface FilePage {
   unqueued?: number; // what was waiting to be sent was dropped: how many were dropped
   draggable?: boolean; // a download that landed: this ask's file is on the PC and can be dragged out of the window
   dragGone?: boolean; // a drag was asked for a file that is no longer in the download folder
+  carrying?: boolean; // this page belongs to a file fetched only so it can be dragged, not to a download
 }

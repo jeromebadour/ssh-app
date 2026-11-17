@@ -3,13 +3,13 @@
 import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, stat, statfs } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, INPUT_MAX, MOST_AT_ONCE, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { Boxes, fingerprintOf } from './boxes';
@@ -637,6 +637,20 @@ function openTab(boxId = '', place = ''): Tab | null {
           }
         }
       }
+      // A file fetched to be carried: when it is there and whole it becomes draggable, exactly as a download
+      // does, and the view is told so. Its pages are the view's own to show on the row it pressed.
+      const carried = carrying.get(comingKey(id, ask));
+      if (carried) {
+        page = { ...page, carrying: true };
+        if (page['landed'] === carried.name && page['error'] === undefined) {
+          draggable.set(comingKey(id, ask), path.join(carried.into, carried.name));
+          sendTo(view, CH.tabFilePage, { id: ask, draggable: true, carrying: true });
+        }
+        if (page['done'] === true) {
+          carrying.delete(comingKey(id, ask));
+          grabbing.delete(comingKey(id, ask));
+        }
+      }
       const mine = coming.get(comingKey(id, ask));
       if (mine) {
         // Where a download really landed is main's own knowledge, worked out before the engine was asked
@@ -822,6 +836,11 @@ function closeTab(id: number): void {
   protectedPaste.delete(id);
   queuedToSend.delete(id); // a tab that has gone takes what it still had to send with it
   for (const key of [...draggable.keys()]) if (key.startsWith(`${id}:`)) draggable.delete(key); // and what it could drag out
+  for (const key of [...grabbing]) if (key.startsWith(`${id}:`)) grabbing.delete(key);
+  for (const key of [...carrying.keys()]) if (key.startsWith(`${id}:`)) carrying.delete(key);
+  // The copies it fetched for carrying go with it: they were never his files, only Berth's way of handing one
+  // to Windows, and a tab that has gone has nothing left to hand over.
+  void rm(path.join(carryIn, String(id)), { recursive: true, force: true }).catch(() => undefined);
   if (waitingPaste?.shown.tab === id) closePaste(false);
   if (waitingLink?.tab === id) closeLink(false);
   tab.stopReopen();
@@ -866,7 +885,7 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const id = a?.['id'];
   const what = a?.['do'];
   const where = a?.['path'];
-  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel' || what === 'unqueue';
+  const doing = what === 'list' || what === 'stat' || what === 'space' || what === 'read' || what === 'get' || what === 'put' || what === 'hash' || what === 'delete' || what === 'trash' || what === 'restore' || what === 'empty' || what === 'cancel' || what === 'unqueue' || what === 'grab';
   if (!a || typeof id !== 'number' || !Number.isInteger(id) || id < 1 || !doing || typeof where !== 'string' || where.length > 4096) {
     return drop('tab:file-ask', e);
   }
@@ -879,6 +898,15 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
     settling.add(comingKey(tab.id, id));
     if (what === 'get') void bringOver(tab, id, where);
     else void sendOver(tab, id, where);
+    return;
+  }
+  // Fetching a small file so it can be carried out of the window. It is the same ask as a download in every
+  // way a box can see; what differs is where it lands, which is Berth's own folder and never his (plan B4.5).
+  if (what === 'grab') {
+    const key = comingKey(tab.id, id);
+    if (grabbing.has(key)) return;
+    grabbing.add(key);
+    void grabOver(tab, id, where);
     return;
   }
   // A stop is written down here as well as passed on, always, and for a moment afterwards. A transfer main
@@ -1197,6 +1225,52 @@ const brokeKey = (way: string, box: string, where: string): string => `${way}:${
 // The ways a transfer can end with bytes worth keeping. Anything else either wrote nothing or wrote something
 // known to be wrong, and the engine has already taken its half-written file away.
 const WORTH_TAKING_UP = new Set(['no-answer', 'no-link', 'failed', 'denied']);
+
+// ---- Fetching a small file so it can be dragged (plan B4.5) ----
+// A file on a box cannot be dragged into anything until it is on this PC, because Windows takes hold of a
+// file and not of an idea of one. So a press on a small file fetches it, into a folder of Berth's own that
+// nothing else writes to and that is emptied at every start and when a tab closes. It is a copy for carrying,
+// not a download: it never goes near his download folder.
+const grabRoot = (): string => (LAB_PROFILE ? path.join(LAB_PROFILE, 'carry') : path.join(os.tmpdir(), `berth-carry-${process.pid}-${randomBytes(6).toString('hex')}`));
+const carryIn = grabRoot();
+// Every start begins with an empty one: a copy left behind by a run that ended badly is not carried forward.
+// It is emptied without blocking (B8.1: main never waits on the disk), and anything that would write into it
+// waits for that to have happened, so a fetch can never land in a folder that is about to be removed.
+const carryCleared = rm(carryIn, { recursive: true, force: true }).catch(() => undefined);
+const grabbing = new Set<string>(); // asks that are fetching a file to carry, so one press does not start two
+
+async function grabOver(tab: Tab, id: number, remote: string): Promise<void> {
+  const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error, carrying: true });
+  const key = comingKey(tab.id, id);
+  // Its own folder for this one ask, so two files of the same name never meet and nothing has to be renamed.
+  const into = path.join(carryIn, String(tab.id), String(id));
+  await carryCleared;
+  const at = await askTheBox(tab, { do: 'stat', path: remote });
+  if (at.error !== '') {
+    grabbing.delete(key);
+    return say(at.error);
+  }
+  if ((at.attrs?.size ?? 0) > GRAB_MAX) {
+    grabbing.delete(key);
+    return say('too-big-to-carry');
+  }
+  try {
+    await mkdir(into, { recursive: true });
+  } catch {
+    grabbing.delete(key);
+    return say('pc-denied');
+  }
+  if (tabs.get(tab.id) !== tab) return;
+  const name = safeName(remote.split('/').pop() ?? '').name;
+  carrying.set(key, { into, name });
+  if (!tab.engine.askFiles({ id, do: 'get', path: remote, into, name })) {
+    carrying.delete(key);
+    grabbing.delete(key);
+    say('no-link');
+  }
+}
+// What each carrying ask is fetching, and where: main's own knowledge, as with a download (B4.2).
+const carrying = new Map<string, { into: string; name: string }>();
 
 // ---- Dragging a file out of the window (plan B4.5) ----
 // What a tab may drag out: files its own engine brought over, by the number of the ask that brought each.
