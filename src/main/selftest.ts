@@ -1439,6 +1439,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
             await sleep(150);
 
+            // ---- A colour for each kind of thing. ----
+            // Beside MobaXterm, whose list puts a different coloured mark on every kind, every row here wore
+            // one grey glyph: a folder of a hundred files had to be read word by word.
+            const marks = await js<{ name: string; kind: string; colour: string }[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => { const g = r.querySelector('.fb-ft'); return { name: r.dataset.name, kind: [...(g?.classList ?? [])].find((c) => c.startsWith('fb-ft-')) ?? '', colour: g ? getComputedStyle(g).color : '' }; })`);
+            const logs = marks.filter((m) => m.name.endsWith('.log'));
+            const folders = marks.filter((m) => m.kind === 'fb-ft-folder');
+            check(`every .log is marked a log and every folder a folder: ${logs.length} logs, ${folders.length} folders`, logs.length > 0 && logs.every((m) => m.kind === 'fb-ft-log') && folders.length > 0, [logs.slice(0, 3), folders.slice(0, 3)]);
+            const colours = new Set(marks.filter((m) => m.colour !== '').map((m) => m.colour));
+            check(`and the kinds do not all wear one colour: ${colours.size} colours among ${marks.length} rows`, colours.size >= 3, [...colours]);
+            // A name with nothing to read at its end is a plain file, which is most of what sits in /etc.
+            const plain = marks.find((m) => !m.name.includes('.') && !['fb-ft-folder', 'fb-ft-link', 'fb-ft-pipe', 'fb-ft-device', 'fb-ft-socket', 'fb-ft-unknown', 'fb-ft-up'].includes(m.kind) && m.name !== '..');
+            check('a name with no end to read is a plain file, not a kind guessed at', plain === undefined || plain.kind === 'fb-ft-file', plain);
+
             // ---- Several files at once. ----
             // "i cant do select multiple files like mobaxterm". The list had no notion of a selection at all:
             // one row held the keyboard's place and that was the whole of it.

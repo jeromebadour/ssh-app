@@ -1333,7 +1333,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (standing === r.name) draw();
       carry(r);
     });
-    e.append(glyph(id === 'fb-up' ? 'up' : r.kind));
+    // What kind of thing this is, by the end of its name, so a folder of a hundred files can be read by
+    // colour before it is read by word. The colours are the ones the approved direction already uses, muted
+    // and each meaning one thing (BUILD-RULES 2.2 and 2.3); the shapes stay as they are.
+    const mark = glyph(id === 'fb-up' ? 'up' : r.kind);
+    mark.classList.add('fb-ft', `fb-ft-${id === 'fb-up' ? 'up' : r.kind === 'file' ? byName(r.name) : r.kind}`);
+    e.append(mark);
     const name = document.createElement('span');
     name.className = 'fb-name';
     // A name is data, never markup: it is set as text and nothing else, however it is written.
@@ -1838,6 +1843,28 @@ export function shorten(p: string, most: number): string {
 // The app's own glyphs, drawn for this pane: each kind of thing in a folder says what it is without reading
 // (BUILD-RULES 2.1). They are built here rather than taken from the window's set, because a tab's page holds
 // no part of the window.
+// What kind of file a name says it is. Only the end of the name is read: a box is asked nothing for this, and
+// nothing is opened to find out. A name with no end to read, which is most of what sits in /etc, is a plain
+// file and wears the plain colour.
+const KINDS: Record<string, string> = {
+  zip: 'archive', tar: 'archive', gz: 'archive', tgz: 'archive', bz2: 'archive', xz: 'archive', zst: 'archive', '7z': 'archive', rar: 'archive',
+  log: 'log', out: 'log', err: 'log',
+  txt: 'text', text: 'text', rst: 'text',
+  md: 'markdown', markdown: 'markdown',
+  sh: 'script', bash: 'script', zsh: 'script', ps1: 'script', bat: 'script', cmd: 'script', py: 'script', rb: 'script', pl: 'script',
+  conf: 'config', cfg: 'config', ini: 'config', toml: 'config', yaml: 'config', yml: 'config', env: 'config', service: 'config', timer: 'config',
+  json: 'json',
+  js: 'code', ts: 'code', tsx: 'code', jsx: 'code', mjs: 'code', cjs: 'code', go: 'code', c: 'code', h: 'code', cc: 'code', cpp: 'code', hpp: 'code', rs: 'code', java: 'code', php: 'code', css: 'code', html: 'code', htm: 'code', xml: 'code',
+  sql: 'sql', db: 'sql', sqlite: 'sql',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image', webp: 'image', ico: 'image', bmp: 'image',
+};
+
+function byName(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return 'file';
+  return KINDS[name.slice(dot + 1).toLowerCase()] ?? 'file';
+}
+
 export const SHAPES: Record<string, string> = {
   folder: 'M2.5 4.5h4l1.5 1.5h5.5v7h-11z',
   file: 'M4 2.5h5l3 3v8H4zM9 2.5v3h3',
