@@ -24,6 +24,7 @@ export const CH = {
   // a page at a time, so a folder of thousands of files is drawn as it is read.
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
   tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
+  tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
@@ -330,6 +331,7 @@ export interface TabPort {
   // notification when something long ends; main writes every word of both (plan B2.7). A view that lies here
   // gains a wrong mark and nothing else.
   doing(doing: string, finishedMs: number): void;
+  onWhole(cb: () => void): void; // main says Ctrl+Shift+A was pressed: select the whole terminal and copy it
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
   onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts

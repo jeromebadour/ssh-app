@@ -40,6 +40,9 @@ const port: TabPort = {
   doing(doing, finishedMs) {
     ipcRenderer.send(CH.tabDoing, String(doing), Number(finishedMs));
   },
+  onWhole(cb) {
+    ipcRenderer.on(CH.tabWhole, () => cb());
+  },
   onFilePage(cb) {
     ipcRenderer.on(CH.tabFilePage, (_e, page) => cb(page));
   },

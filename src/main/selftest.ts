@@ -2713,7 +2713,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -3222,6 +3222,25 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       press(t.view.webContents, '8', ['control', 'alt']);
       await sleep(250);
       check('a number past the last tab moves nothing, and the window says there is no such tab', !inUseForKeys || (ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8), [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
+      // Ctrl+Shift+A: the whole terminal on the clipboard, and the press never reaching the box. Ctrl+A is
+      // the shell's own and must still go straight through to it.
+      {
+        const before = await clipboard.readText();
+        const boxBefore = await boxGot();
+        press(t.view.webContents, 'A', ['control', 'shift']);
+        const copiedWhole = await until(async () => (await clipboard.readText()) !== before, 5000);
+        const onClipboard = await clipboard.readText();
+        const boxAfter = await boxGot();
+        check(
+          'Ctrl+Shift+A copies the whole terminal, and the box is given nothing',
+          !inUseForKeys || (copiedWhole && onClipboard.length > 40 && boxAfter === ''),
+          [inUseForKeys, copiedWhole, onClipboard.length, JSON.stringify(boxAfter), JSON.stringify(boxBefore)],
+        );
+        // And Ctrl+A alone is the shell's: it reaches the box exactly as it always did.
+        press(t.view.webContents, 'A', ['control']);
+        const plainReached = await until(async () => (await boxGot()).includes('\u0001'), 3000);
+        check('Ctrl+A alone is still the shell\u2019s own, and reaches the box', !inUseForKeys || plainReached, [inUseForKeys, plainReached]);
+      }
       // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
       // given a key that was meant for main.
       await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);

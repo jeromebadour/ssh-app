@@ -89,6 +89,9 @@ export interface Term {
   spot(text: string): { x: number; y: number; hand: boolean } | null; // where these words are drawn, and whether the pointer is a hand; for the lab
   links(row: number): string[]; // what the app would treat as an address to open on this row; for the lab
   bracketedPaste(): boolean;
+  // Everything the terminal holds, selected and given back: what Ctrl+Shift+A copies. Ctrl+A is the shell's
+  // own and is never taken from him.
+  takeAll(): string;
   // The lines the box has printed since this was last asked, with the one the cursor sits on marked: what
   // reads the shape of a prompt (src/tab/blocks.ts). It is given lines from the terminal's own buffer, where
   // every escape sequence has already been acted on, so nothing reading them has to understand a terminal.
@@ -244,6 +247,10 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       return null;
     },
     bracketedPaste: () => term.modes.bracketedPasteMode,
+    takeAll: () => {
+      term.selectAll();
+      return term.getSelection();
+    },
     blockAt: (row, width, colour, copy) => {
       // A marker follows its row as the terminal scrolls, which is what makes a decoration stay with the
       // command it belongs to rather than with a place on the screen.

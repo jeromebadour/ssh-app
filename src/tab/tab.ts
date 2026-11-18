@@ -79,6 +79,18 @@ port.onOutput((bytes) => {
 });
 port.onPace((now) => { share = now; });
 
+// Ctrl+Shift+A: the whole terminal, selected and copied. The press never reaches this page as a key: main
+// answers it and says so here, so a box can neither see it nor make it happen.
+port.onWhole(() => {
+  const all = term.takeAll();
+  if (all === '') {
+    term.note('Berth: there is nothing in this terminal to copy');
+    return;
+  }
+  port.copy(all.slice(0, COPY_MAX));
+  term.note(`Berth: the whole terminal is copied, ${all.split('\n').length} lines`);
+});
+
 // Reading this box's prompt, and from it whether something is running in this tab. It is a reading aid: the
 // lines come from the terminal's own buffer after the box's bytes have been drawn, and nothing any safety
 // question depends on is decided from them (plan A5, B3). What it is for is the marks on a tab that is not in
