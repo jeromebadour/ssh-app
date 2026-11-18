@@ -1382,6 +1382,33 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const names = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
             const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
             const asksBefore = { ...ctx.filesAsked() };
+            // ---- The list has heads over its columns, and they hold at every size the pane has. ----
+            // Beside MobaXterm he said the list had no column heads, that clicking a size should order by it,
+            // that the sizes were set in the name's own weight, and that one press of the zoom wrecked the
+            // whole thing. All four were one cause: the rows were a flex line with the name told to take what
+            // was left, so the name was the only thing that could give, and the one column on the right said
+            // whatever the order happened to be.
+            const headNames = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-head .fb-by')].map((b) => b.textContent.trim())`);
+            check('the list has a head over each of its columns, each saying what it orders', JSON.stringify(headNames) === JSON.stringify(['Name', 'Size', 'Modified']), headNames);
+            const everyRowHasBoth = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..' && r.dataset.kind === 'file').every((r) => r.querySelector('.fb-size')?.textContent.trim() && r.querySelector('.fb-when')?.textContent.trim())`);
+            check('and every file carries both its size and its time, whatever the list is ordered by', everyRowHasBoth, everyRowHasBoth);
+            // The zoom, which is the press he can wreck it with. Everything in a row is set in the pane's own
+            // size, so the whole list grows together: the name's column must grow with the rest, not be eaten
+            // by columns that kept their pixels.
+            const widths = (): Promise<{ name: number; size: number; row: number }> => js(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file'); if (!r) return { name: -1, size: -1, row: -1 }; return { name: Math.round(r.querySelector('.fb-name').getBoundingClientRect().width), size: Math.round(r.querySelector('.fb-size').getBoundingClientRect().width), row: Math.round(r.getBoundingClientRect().width) }; })()`);
+            const at100 = await widths();
+            await js(front.view, `document.getElementById('fb-list').focus()`);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
+            await sleep(150);
+            const at115 = await widths();
+            const cut = await js<number>(front.view, `[...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length`);
+            // What must hold is not that every column grows, which a pane of fixed width cannot give: it is
+            // that the name keeps its room and no name is cut off. Before this, the name was the only thing
+            // that could give and three of them were cut by one press.
+            check(`zoomed in, the name keeps its room and nothing is cut: the name is ${at115.name} of ${at115.row} across, the size ${at115.size}, and ${cut} names are cut off`, cut === 0 && at115.name > at115.row * 0.5 && at115.size > at100.size, [at100, at115, cut]);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+            await sleep(150);
+
             const byName = await names();
             // Folders come first whatever the order is by, and the way up is always the first row.
             // The way up is left out: it is a folder in every order there is, so a check that counted it would
