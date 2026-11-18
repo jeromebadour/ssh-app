@@ -604,3 +604,24 @@ func TestSignInTextIsBudgetedForTheWholeLink(t *testing.T) {
 		}
 	})
 }
+
+// A box whose sign-in text is nothing but blank lines still sends it, and the engine still hands it on. It is
+// not the engine's place to decide that newlines are not words: the budget drops a message only when it is
+// spent. So the window really is given a banner with no lines in it, which is the case the window has to read
+// as a box that said nothing rather than as a box that said nothing in a band of its own.
+func TestABannerOfOnlyBlankLinesIsStillHandedOn(t *testing.T) {
+	var got string
+	var came bool
+	w := setup(t, func(c *hostile.Config) { c.Banner = "\n\n" })
+	l, err := Dial(context.Background(), w.target, w.user, Options{OnBanner: func(m string) { got, came = m, true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if !came {
+		t.Fatal("the engine dropped a banner of blank lines, so the window could never see this case")
+	}
+	if got != "\n\n" {
+		t.Fatalf("the banner reached the window as %q", got)
+	}
+}

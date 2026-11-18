@@ -206,8 +206,6 @@ h1 .mark.now { animation: none; }
 
 /* The one folded line of what the box said at sign-in, and the bars. They lie over the terminal's first rows,
    so the terminal's size, which the box is told, never changes because a link went quiet. */
-/* The strip the folded sign-in line sits in. It is there from the first frame, empty or not: the box is told
-   the terminal's size once, before it opens the terminal, and a line arriving later must not change it. */
 /* The slot a box's own words land in at sign-in. Most boxes say nothing, and a slot that keeps its height
    anyway is a band of empty window above the panes on every tab, every day. It is marked rather than
    measured: Preact renders nothing here when there is nothing to say, and an empty element is a thing CSS

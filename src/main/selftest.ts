@@ -2118,8 +2118,24 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // Folded, as it always is: the line says who said it and how much, and the words themselves are
           // behind it until he opens them. What this holds is that the slot takes its room back to show it.
           check('what the box said is shown, and the slot takes its room back to show it', saidLoud === 'yes' && roomLoud > 0 && words.includes('said 1 line at sign-in'), { saidLoud, roomLoud, words });
+          // And the box in between the two: one that sends sign-in text which is nothing but blank lines. It
+          // is a real box -- a Banner file of newlines -- and the engine hands those bytes on, because it is
+          // not the engine's place to decide that newlines are not words. The window has to read it as a box
+          // that said nothing: before this it kept the whole band and told him the box "said 0 lines".
+          await lab.tell('banner \\n\\n');
+          const blank = ctx.openTab(id, 'logs')!;
+          check('a tab on a box whose sign-in text is only blank lines comes up', await until(() => blank.engine.state === 'ready' && blank.engine.link.phase === 'up', 20_000), blank.engine.link.phase);
+          // Long enough that the banner really has arrived and been folded: the mark is read after it, not
+          // before, or this would pass on a box that simply had not spoken yet.
+          await until(() => blank.engine.link.phase === 'up', 2000);
+          await js<void>(blank.view, `new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r())), 600))`);
+          const saidBlank = await js<string>(blank.view, `document.getElementById('signin-at')?.dataset.said ?? 'missing'`);
+          const roomBlank = await js<number>(blank.view, `Math.round(document.getElementById('signin-at')?.getBoundingClientRect().height ?? -1)`);
+          const topBlank = await js<number>(blank.view, `Math.round(document.getElementById('split')?.getBoundingClientRect().top ?? -1)`);
+          check('blank lines are not words: it is marked as having said nothing and costs the window no room', saidBlank === 'no' && roomBlank === 0 && topBlank === 0, { saidBlank, roomBlank, topBlank });
           ctx.closeTab(quiet.id);
           ctx.closeTab(loud.id);
+          ctx.closeTab(blank.id);
           await lab.tell('banner');
         }
 

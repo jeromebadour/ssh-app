@@ -320,8 +320,13 @@ func main() {
 			say(map[string]any{"prompting": strings.TrimSpace(rest)})
 		case "banner":
 			// <text>, or nothing at all for a box that says nothing at sign-in, as nearly every real box does.
-			box.SetBanner(strings.TrimSpace(rest))
-			say(map[string]any{"banner": strings.TrimSpace(rest)})
+			// A line of this protocol cannot hold a newline, so \n in the text becomes one. That is not a
+			// nicety: a box whose banner is only blank lines is a real box that says nothing a person can see
+			// while still sending something, and the window has to tell those apart. The text is trimmed
+			// first and unescaped after, so "banner" with nothing but spaces is still a box that is quiet.
+			said := strings.ReplaceAll(strings.TrimSpace(rest), `\n`, "\n")
+			box.SetBanner(said)
+			say(map[string]any{"banner": said})
 		case "quiet":
 			box.Quiet(rest == "on")
 			say(map[string]any{"quiet": rest == "on"})

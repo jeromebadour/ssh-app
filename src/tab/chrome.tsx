@@ -137,9 +137,15 @@ function Gone({ said, rest, again, onReconnect, onCancel }: { said: string; rest
 // The one folded line of what the box said at sign-in. It takes a row of its own above the terminal, as the
 // approved picture shows, so it never lies over what a box is printing. It appears while the link is signing
 // in, before the box is asked for a terminal, so the box is still told one size and only one.
+// Whether a box said anything a person can see. Blank lines are not words: folded() drops them and still
+// gives back an object, so a box whose sign-in text is only newlines counted as having spoken, kept the whole
+// band, and told him it had said nothing. One predicate, used by the row and by the mark the stylesheet
+// reads, so the two cannot drift apart: they were the same condition written twice.
+const saidSomething = (c: Chrome): boolean => Boolean(c.info?.box) && (c.signIn?.lines ?? 0) > 0;
+
 function SignInRow(c: Chrome) {
-  if (!c.info?.box || !c.signIn) return null;
-  return <SignIn box={c.info.box.name} said={c.signIn} open={c.signInOpen} onOpen={c.onOpenSignIn} />;
+  if (!saidSomething(c) || !c.signIn) return null;
+  return <SignIn box={c.info!.box!.name} said={c.signIn} open={c.signInOpen} onOpen={c.onOpenSignIn} />;
 }
 
 function View(c: Chrome) {
@@ -166,7 +172,7 @@ export function drawChrome(over: HTMLElement, above: HTMLElement, c: Chrome): vo
   // Whether the box said anything is said here, in a mark on the slot itself, so the window gives the slot no
   // room at all on a box that signs in quietly. Every one of his own boxes is quiet, so what he saw was a band
   // of empty window above both panes that nothing in the app ever used.
-  above.dataset['said'] = c.info?.box && c.signIn ? 'yes' : 'no';
+  above.dataset['said'] = saidSomething(c) ? 'yes' : 'no';
   render(<SignInRow {...c} />, above);
 }
 
