@@ -3225,6 +3225,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // Ctrl+Shift+A: the whole terminal on the clipboard, and the press never reaching the box. Ctrl+A is
       // the shell's own and must still go straight through to it.
       {
+        // The tab this is about is put in front first: the presses before this one moved between tabs, and
+        // what Ctrl+Shift+A copies is the tab he is looking at, not the one a probe happens to hold.
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        await until(() => ctx.shellState().active === t.id, 5000);
         const before = await clipboard.readText();
         const boxBefore = await boxGot();
         press(t.view.webContents, 'A', ['control', 'shift']);
