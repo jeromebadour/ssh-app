@@ -192,6 +192,25 @@ const prose = (view: WebContentsView) => js<Reading[]>(view, `(() => {
   });
 })()`);
 const tooSmall = (r: Reading) => r.size < 14.5 || r.weight < 450 || r.ratio < 4.5;
+// Every glyph a menu draws, against the one the pane falls back to. A name the pane does not know is not an
+// error anywhere: `SHAPES[kind] ?? SHAPES['unknown']` quietly draws the question mark, which is how "Back to
+// the folder" came to be marked with one. A menu line is a glyph and a few words, so a glyph that says
+// nothing is half the line gone, and nothing in the build would ever have said so.
+interface MenuMark { where: string; lines: number; unknown: string[] }
+const menuGlyphs = (view: WebContentsView, where: string) => js<MenuMark>(view, `(() => {
+  const ones = [...document.querySelectorAll('#fb-menu .fb-menu-one')];
+  // What the pane draws when it does not know the name, taken from the pane itself rather than written out
+  // here: a probe holding a copy of the shape would pass the day the shape changed.
+  const miss = window.berthGlyphPath ? window.berthGlyphPath('a-name-no-pane-has') : '';
+  return {
+    where: ${JSON.stringify(where)},
+    lines: ones.length,
+    unknown: ones.filter((o) => {
+      const d = o.querySelector('.fb-glyph path')?.getAttribute('d') ?? '';
+      return d === '' || (miss !== '' && d === miss);
+    }).map((o) => ${JSON.stringify(where)} + ': ' + (o.querySelector('.fb-menu-words')?.textContent ?? '?')),
+  };
+})()`);
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 // A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
 // permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
@@ -269,11 +288,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
   // Every dialog this run opens has its sentences measured as it stands open, and the readings pile up
   // here; finish() holds them all at once, so one line names whichever dialog is the small one.
   const readings: Reading[] = [];
+  // Every menu this run opens, swept for a glyph the pane does not know.
+  const menuMarks: MenuMark[] = [];
+  const sweepMenu = async (view: WebContentsView, where: string): Promise<void> => { menuMarks.push(await menuGlyphs(view, where)); };
   // The box screens are the mode that opens dialogs: 19 lines across the check, Add box, the first visit, the
   // settings, a paste, an odd paste, a link, a changed identity, Edit box and Delete box. The floor is just
   // under that, so the measurement quietly stopping is a failure rather than a pass with nothing in it. The
   // other modes open no dialogs, and a minimum they cannot meet would fail them for nothing.
   const wantedReadings = ctx.mode === 'boxes-ui' ? 18 : 0;
+  // The box screens open the file's menu, the folder's, the one on several chosen, the empty part of a list,
+  // and both of the trash's. A floor under their lines together, so the sweep quietly never running is a
+  // failure rather than a pass over nothing.
+  const wantedMenus = ctx.mode === 'boxes-ui' ? 20 : 0;
   const read = async (view: WebContentsView): Promise<void> => { readings.push(...(await prose(view))); };
   const check = (name: string, ok: boolean, detail: unknown = '') => {
     stage = `after "${name}"`;
@@ -288,6 +314,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     check('no page of the app asked for a file the app does not hold', Object.keys(ctx.missing()).length === 0, ctx.missing());
     // The sentences every dialog of this run put in front of him, each against its own surface. The count is
     // held too: a measurement that never ran would otherwise pass for a window with no small text in it.
+    // Every menu opened in this run, and the glyph on every line of it.
+    const blank = menuMarks.flatMap((m) => m.unknown);
+    const menuLines = menuMarks.reduce((n, m) => n + m.lines, 0);
+    check('every line of every menu this run opened carries a glyph the pane really has',
+      (menuMarks.length === 0 ? wantedMenus === 0 : menuLines >= wantedMenus) && blank.length === 0,
+      { menus: menuMarks.length, lines: menuLines, wanted: wantedMenus, blank });
     const small = readings.filter(tooSmall);
     check('every sentence a dialog puts in front of him is at least 14.5px at weight 450 and 4.5:1 against its own surface',
       readings.length >= wantedReadings && small.length === 0,
@@ -1526,6 +1558,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const menuOn = async (what: string): Promise<string[]> => {
               await js(front.view, `(() => { const r = ${what}; const b = r.getBoundingClientRect(); r.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(b.left + 8), clientY: Math.round(b.top + 4) })); })()`);
               await sleep(160);
+              await sweepMenu(front.view, `the list, on ${what.slice(0, 40)}`);
               return js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
             };
             const shutMenuNow = (): Promise<void> => js(front.view, `document.getElementById('fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
@@ -2098,8 +2131,46 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const binText = await js<string>(front.view, `document.getElementById('fb-list')?.textContent ?? ''`);
             check('the trash says what has been deleted on this disk, with where it came from and when', inBin && binText.includes('Deleted on this disk') && binText.includes('a moment ago'), binText.slice(0, 160));
             await shot('the-trash', 'what has been deleted on a disk, and the way to put it back', front);
-            // Put it back: it is where it was, with its own bytes.
-            await js(front.view, `document.querySelector('#fb-list .fb-row .fb-back')?.click()`);
+            // The right button inside the trash. The trash draws its rows into the same list, with the same
+            // class and the same data-name, so the folder's own menu opened on top of it: Bring it over,
+            // Rename, Delete, every line aimed at a name in the folder behind rather than at the thing under
+            // the pointer. What is held here is both halves: what the trash offers, and what it must not.
+            const menuPutBack = async (): Promise<void> => {
+              await js(front.view, `(() => { const r = document.querySelector('#fb-list .fb-row'); const b = r.getBoundingClientRect(); r.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(b.left + 8), clientY: Math.round(b.top + 4) })); })()`);
+              await sleep(160);
+              await js(front.view, `document.getElementById('fb-menu-back')?.click()`);
+            };
+            {
+              const menuAt = async (what: string): Promise<string[]> => {
+                await js(front.view, `(() => { const r = ${what}; const b = r.getBoundingClientRect(); r.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(b.left + 8), clientY: Math.round(b.top + 4) })); })()`);
+                await sleep(160);
+                return js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+              };
+              const onRow = await menuAt(`document.querySelector('#fb-list .fb-row')`);
+              const folderOnly = ['Bring it over', 'Rename', 'Delete', "The box's own hash", 'New folder', 'Send a file here'];
+              check('the right button on something in the trash offers what the trash can do, and none of what the folder behind it can',
+                onRow.includes('Put it back where it was') && onRow.includes('Copy where it came from')
+                && onRow.some((w) => w.startsWith('Empty what is older than')) && onRow.includes('Back to the folder')
+                && !folderOnly.some((w) => onRow.includes(w)), onRow);
+              // Nothing in it reaches his shell, which is the standing claim about every menu in this app.
+              check('and nothing in the trash\u2019s menu types into his shell', !onRow.some((w) => /terminal|shell|run|open in/i.test(w)), onRow);
+              await sweepMenu(front.view, 'the trash, on a row');
+              await shot('trash-menu', 'the right button on something in the trash', front);
+              await js(front.view, `document.getElementById('fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+              // The empty part of the trash is about the trash itself, and says so without naming a thing.
+              const onEmpty = await menuAt(`document.getElementById('fb-list')`);
+              await sweepMenu(front.view, 'the trash, empty part');
+              check('the right button on the empty part of the trash offers only what is about the trash itself',
+                !onEmpty.includes('Put it back where it was') && onEmpty.some((w) => w.startsWith('Empty what is older than'))
+                && onEmpty.includes('Back to the folder') && !folderOnly.some((w) => onEmpty.includes(w)), onEmpty);
+              await js(front.view, `document.getElementById('fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+              // The button on the row is still there and still says what it does: the menu is another way to
+              // the same thing, never a replacement for the one that was already on screen.
+              const stillThere = await js<string>(front.view, `document.querySelector('#fb-list .fb-row .fb-back')?.getAttribute('aria-label') ?? ''`);
+              check('and the row keeps its own button, which the menu stands beside rather than replaces', stillThere.startsWith('Put '), stillThere);
+            }
+            // Put it back, pressed in the menu: the same thing the row's own button does.
+            await menuPutBack();
             const back = await until(async () => (await foot()).includes('is back where it was'), 15_000);
             const backOnTheBox = await lab.tell('read var/log/syslog');
             check('Put it back puts the file where it came from, with its own bytes', back && backOnTheBox['text'] === "a line of the box's own log\n", [await foot(), backOnTheBox]);

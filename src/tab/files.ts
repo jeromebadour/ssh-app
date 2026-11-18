@@ -198,13 +198,15 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   binBtn.title = "What has been deleted on this disk, and can be brought back";
   binBtn.setAttribute('aria-label', 'The trash on this disk');
   binBtn.append(glyph('bin'));
+  // One way out of the trash, because the button and the menu both offer it and two ways to leave a view is
+  // how a view ends up half-left.
+  const shutTrash = (): void => {
+    bin = { open: false, where: '', rows: [], busy: false, said: bin.said };
+    draw();
+  };
   binBtn.addEventListener('click', () => {
-    if (bin.open) {
-      bin = { open: false, where: '', rows: [], busy: false, said: bin.said };
-      draw();
-      return;
-    }
-    openTrash();
+    if (bin.open) shutTrash();
+    else openTrash();
   });
   // A new folder in the folder on screen. It sits with the other two that act on this folder, and like them
   // it says what it does with a glyph alone, because all three are the same size and sit side by side.
@@ -376,6 +378,26 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     e.preventDefault();
     const onRow = (e.target as HTMLElement | null)?.closest<HTMLElement>('.fb-row');
     const name = onRow?.dataset['name'] ?? '';
+    // The trash draws its rows into the same list, with the same class and the same data-name, so without
+    // this the menu for a folder's files opened on top of it: Bring it over, Rename, Delete, every one of
+    // them aimed at a name in the folder behind rather than at the thing under the pointer. What the trash
+    // offers is what the trash can really do. There is no "delete for good" here: the view is told what a
+    // trashed thing is called inside the trash and where it came from, and never where the trash itself is,
+    // so that menu line would be a delete aimed at a path this side of the app guessed at.
+    if (bin.open) {
+      const t = name === '' ? undefined : bin.rows.find((x) => x.name === name);
+      const binLines: MenuLine[] = [];
+      if (t !== undefined) {
+        binLines.push({ glyph: 'back', label: 'Put it back where it was', run: () => putBack(t.name), id: 'fb-menu-back' });
+        binLines.push({ apart: true });
+        binLines.push({ glyph: 'copy', label: 'Copy where it came from', run: () => void port.copy(t.from) });
+        binLines.push({ apart: true });
+      }
+      if (bin.rows.length > 0) binLines.push({ glyph: 'bin', label: `Empty what is older than ${TRASH_DAYS} days`, danger: true, run: () => emptyTrash(), id: 'fb-menu-empty' });
+      binLines.push({ glyph: 'folder', label: 'Back to the folder', run: () => shutTrash(), id: 'fb-menu-leave-bin' });
+      openMenu(at, e.clientX, e.clientY, binLines, glyph);
+      return;
+    }
     const r = name === '' || name === '..' ? undefined : rows.find((x) => x.name === name);
     // Several, when the press came down on one of them: the menu is about all of them, which is why a right
     // press on a chosen row leaves what is chosen alone.
