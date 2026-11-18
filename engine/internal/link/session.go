@@ -1,6 +1,7 @@
 package link
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -260,7 +261,7 @@ type Files struct {
 
 // OpenFiles asks the box for its file subsystem. A box that does not offer one is said as that and is not a
 // fault of the link: the terminal goes on working either way.
-func (l *Link) OpenFiles() (*Files, error) {
+func (l *Link) OpenFiles(ctx context.Context) (*Files, error) {
 	ch, reqs, err := l.conn.OpenChannel("session", nil)
 	if err != nil {
 		return nil, err
@@ -268,13 +269,39 @@ func (l *Link) OpenFiles() (*Files, error) {
 	// Whatever the box says about this channel is read and dropped, so the library is never blocked waiting
 	// for someone to take it.
 	go ssh.DiscardRequests(reqs)
-	ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(struct{ Name string }{"sftp"}))
-	if err != nil || !ok {
+	// A box that never answers this must not hold whoever asked. The library's own request waits without
+	// end, so it is waited on here with a deadline, and the channel is closed to let it go. Nothing in this
+	// app may wait on a box without a limit (plan B8).
+	answered := make(chan error, 1)
+	go func() {
+		ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(struct{ Name string }{"sftp"}))
+		if err == nil && !ok {
+			err = errRefusedIt
+		}
+		answered <- err
+	}()
+	wait, stop := context.WithTimeout(ctx, FilesOpenDeadline)
+	defer stop()
+	select {
+	case err := <-answered:
+		if err != nil {
+			_ = ch.Close()
+			if errors.Is(err, errRefusedIt) {
+				return nil, refusal("its file subsystem", nil)
+			}
+			return nil, refusal("its file subsystem", err)
+		}
+		return &Files{ch: ch}, nil
+	case <-wait.Done():
 		_ = ch.Close()
-		return nil, refusal("its file subsystem", err)
+		return nil, refusal("its file subsystem", wait.Err())
 	}
-	return &Files{ch: ch}, nil
 }
+
+// FilesOpenDeadline is how long a box has to answer that it has a file subsystem.
+const FilesOpenDeadline = 20 * time.Second
+
+var errRefusedIt = errors.New("link: the box refused")
 
 // Read, Write and Close make the channel what the file protocol's client needs, and nothing more.
 func (f *Files) Read(p []byte) (int, error)  { return f.ch.Read(p) }

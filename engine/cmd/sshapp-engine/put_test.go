@@ -347,3 +347,39 @@ func TestASendIsTakenUpAtAWholeRoundAndNeverOverAHole(t *testing.T) {
 		t.Fatalf("the hole was left in the file (%v, %d of %d)", err, len(got), len(want))
 	}
 }
+
+// A file being replaced keeps its own owner, not only its own mode. Only the mode was put back, so replacing
+// a config owned by a service left it owned by whoever sent it and the service could no longer read its own
+// file; a file owned by a user and carrying setuid became setuid root with the new contents. Only root may
+// really set an owner, so what is proven here is that the box is asked, and asked for the owner the file it
+// replaced had.
+func TestAFileBeingReplacedKeepsItsOwner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a box reports no owner of this shape on Windows, so there is none to put back")
+	}
+	hostile.ForgetOwnerAsked()
+	r, box := withFiles(t)
+	writeOnTheBox(t, box, "conf.txt", 40)
+	st, err := os.Stat(filepath.Join(box, "conf.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, have := hostileOwnerOf(st)
+	if !have {
+		t.Skip("this machine does not say who owns a file")
+	}
+	from, _ := writeOnThePC(t, 1000)
+
+	ask(t, r, map[string]any{"id": 71, "do": "put", "path": "/", "name": "conf.txt", "from": from, "replace": true})
+	ps := pages(r.wait("the send", ended(71)), 71)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
+	}
+	name, askedUID, askedGID, asked := hostile.OwnerAsked()
+	if !asked {
+		t.Fatal("the box was never asked to put the owner back")
+	}
+	if askedUID != uid || askedGID != gid {
+		t.Fatalf("it asked for %d:%d where the file it replaced was %d:%d (on %q)", askedUID, askedGID, uid, gid, name)
+	}
+}

@@ -427,7 +427,7 @@ func TestOpenSSH(t *testing.T) {
 				dir := "/tmp/berth-files-" + box.name
 				run(t, l, "rm -rf "+dir+"; mkdir -p "+dir+"/sub && printf 'hello files' > "+dir+"/one.txt && ln -s one.txt "+dir+"/a-link && echo done", 15*time.Second)
 
-				files, err := l.OpenFiles()
+				files, err := l.OpenFiles(context.Background())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -554,7 +554,7 @@ func TestOpenSSH(t *testing.T) {
 				// could have written through the protocol it is testing.
 				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && head -c 3145728 /dev/urandom > "+dir+"/blob.bin && echo done", 30*time.Second)
 
-				files, err := l.OpenFiles()
+				files, err := l.OpenFiles(context.Background())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -620,7 +620,7 @@ func TestOpenSSH(t *testing.T) {
 				dir := "/tmp/berth-put-" + box.name
 				run(t, l, "rm -rf "+dir+" && mkdir -p "+dir+" && printf 'the old one\n' > "+dir+"/live.conf && chmod 600 "+dir+"/live.conf && echo done", 20*time.Second)
 
-				files, err := l.OpenFiles()
+				files, err := l.OpenFiles(context.Background())
 				if err != nil {
 					t.Fatal(err)
 				}

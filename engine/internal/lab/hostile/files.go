@@ -321,6 +321,13 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			return fxpStatus, status(fxFailure, "the box stopped answering")
 		}
 		want := r.u32()
+		// A box that answers a read with nothing at all and never says the file has ended. A real box in
+		// someone else's hands can do exactly this, and nothing in the app may be asked to go on for ever.
+		if readsWithNothing.Load() {
+			var w pkt
+			w.bytes(nil)
+			return fxpData, w.b
+		}
 		s.mu.Lock()
 		f := s.files[key]
 		s.mu.Unlock()
@@ -361,17 +368,25 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		// bug this is here to catch: a transfer that thinks it put a file's permissions back and did not.
 		key := string(r.str())
 		flags := r.u32()
+		var askedUID, askedGID uint32
+		askedOwner := false
 		if flags&0x1 != 0 {
 			_ = r.u64() // a size we are not asked to set
 		}
 		if flags&0x2 != 0 {
-			_, _ = r.u32(), r.u32() // an owner we are not asked to set
+			askedUID, askedGID, askedOwner = r.u32(), r.u32(), true
 		}
 		s.mu.Lock()
 		f := s.files[key]
 		s.mu.Unlock()
 		if f == nil {
 			return fxpStatus, status(fxFailure, "no such handle")
+		}
+		// The owner it was asked to set is written down rather than set: only root may really set one, and
+		// the lab does not run as root. What this box can honestly prove is that it was asked, and with
+		// which owner, which is the whole of what the app decides.
+		if askedOwner {
+			ownerAsked.Store(&askedOwnerIs{name: filepath.Base(f.Name()), uid: askedUID, gid: askedGID})
 		}
 		if flags&0x4 != 0 {
 			// Through the handle where that works, which is what a box does and what keeps this honest when
@@ -532,7 +547,14 @@ func (w *pkt) u64(v uint64)   { w.b = binary.BigEndian.AppendUint64(w.b, v) }
 func (w *pkt) bytes(v []byte) { w.u32(uint32(len(v))); w.b = append(w.b, v...) }
 func (w *pkt) str(v string)   { w.bytes([]byte(v)) }
 func (w *pkt) attrs(fi os.FileInfo) {
-	w.u32(0x1 | 0x4 | 0x8) // size, permissions, times
+	// Who owns it, as a real box reports it. Without it a file being replaced could not be given its own
+	// owner back, because nothing ever said who that was.
+	uid, gid, haveOwner := ownerOf(fi)
+	has := uint32(0x1 | 0x4 | 0x8) // size, permissions, times
+	if haveOwner {
+		has |= 0x2
+	}
+	w.u32(has)
 	// A box that says a file is bigger than it is. Real boxes do: a file that is being written, a filesystem
 	// that reports a size it cannot hold. The app must answer on what the box says before it writes anything.
 	size := uint64(fi.Size())
@@ -540,6 +562,10 @@ func (w *pkt) attrs(fi os.FileInfo) {
 		size = p.size
 	}
 	w.u64(size)
+	if haveOwner {
+		w.u32(uid)
+		w.u32(gid)
+	}
 	w.u32(modeOf(fi))
 	w.u32(uint32(fi.ModTime().Unix()))
 	w.u32(uint32(fi.ModTime().Unix()))
@@ -627,3 +653,30 @@ func writePacket(w io.Writer, kind byte, body []byte) error {
 	_, err := w.Write(body)
 	return err
 }
+
+// What a box was last asked to set an owner to, for the lab. Only root may really set one, so what is kept
+// here is the ask itself: a file being replaced must be given back the owner it had.
+type askedOwnerIs struct {
+	name     string
+	uid, gid uint32
+}
+
+var ownerAsked atomic.Pointer[askedOwnerIs]
+
+// OwnerAsked says what the box was last asked to set an owner to, and on what.
+func OwnerAsked() (name string, uid, gid uint32, asked bool) {
+	a := ownerAsked.Load()
+	if a == nil {
+		return "", 0, 0, false
+	}
+	return a.name, a.uid, a.gid, true
+}
+
+// ForgetOwnerAsked clears it, so one test cannot read another's.
+func ForgetOwnerAsked() { ownerAsked.Store(nil) }
+
+// readsWithNothing makes the box answer every read with no bytes at all, and never say the file has ended.
+var readsWithNothing atomic.Bool
+
+// AnswerReadsWithNothing turns that on and off.
+func (b *Box) AnswerReadsWithNothing(on bool) { readsWithNothing.Store(on) }

@@ -467,3 +467,48 @@ func TestAnAimWithNoUsableBoxIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A box that takes the ask for its file subsystem and never answers it must not take the terminal with it.
+// The opening used to be done with the lock that every file ask needs held, and that lock is taken on the
+// engine's own frame loop: one more press in the pane then froze that tab's terminal until the box answered,
+// which against a box that never answers is for ever. A loaded box is exactly when he needs the terminal.
+func TestABoxSlowToOpenItsFilesDoesNotFreezeTheTerminal(t *testing.T) {
+	r := newRig(t, rigOpt{folder: "/srv/app", box: func(c *hostile.Config) { c.FilesUnder = t.TempDir() }})
+	r.wait("the link", func(fs []frame.Frame) bool { return lastState(fs)["state"] == "up" })
+	r.box.StallFiles(true)
+
+	// Asks go out until the box has really been asked for its file subsystem. The engine answers "no-link"
+	// for the moment between the link saying it is up and its shell session being open, so the first few
+	// never reach the box at all; the box itself says when one has. Waiting on that rather than on a sleep
+	// is what makes this a probe about the app and not a race with it.
+	askedForFiles := func() bool {
+		for _, sess := range r.box.Sessions() {
+			for _, what := range sess.Asked {
+				if what == "subsystem" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	id := 601
+	for until := time.Now().Add(20 * time.Second); !askedForFiles() && time.Now().Before(until); time.Sleep(50 * time.Millisecond) {
+		ask(t, r, map[string]any{"id": float64(id), "do": "space", "path": "/"})
+		id++
+	}
+	if !askedForFiles() {
+		t.Fatal("the box was never asked for its file subsystem, so nothing is being held up")
+	}
+	// One more ask, which is the one that used to wait on the stuck one, on the frame loop.
+	ask(t, r, map[string]any{"id": float64(id), "do": "list", "path": "/srv/app"})
+	// And then the terminal. What proves the loop is alive is that typed bytes still reach the box and come
+	// back, while every one of those asks is still waiting on a box that will never answer.
+	began := time.Now()
+	r.p.send(t, frame.TypeInput, []byte("still-typing\r"))
+	r.wait("the echo while the files are stuck", func(fs []frame.Frame) bool {
+		return bytes.Contains(output(fs), []byte("still-typing"))
+	})
+	if took := time.Since(began); took > 10*time.Second {
+		t.Fatalf("the terminal took %v to answer while the file subsystem was stuck", took)
+	}
+}

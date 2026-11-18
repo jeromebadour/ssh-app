@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,7 +69,7 @@ func TestHowFastTheBulkPathIsAtADistance(t *testing.T) {
 			stop()
 			t.Fatalf("delay %v: %v", oneWay, err)
 		}
-		files, err := l.OpenFiles()
+		files, err := l.OpenFiles(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,5 +106,50 @@ func TestHowFastTheBulkPathIsAtADistance(t *testing.T) {
 		c.Close()
 		l.Close()
 		stop()
+	}
+}
+
+// A box that answers a read with nothing at all, and never says the file has ended, used to be asked again
+// from the same place for ever: tens of thousands of asks a second, going nowhere, until somebody pressed
+// Stop. It is called not answering now, after a few rounds, and said as that.
+func TestABoxThatAnswersWithNothingIsNotAskedForEver(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.bin"), make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, user := newSigner(t), newSigner(t)
+	box, err := hostile.Start(hostile.Config{HostSigner: host, Accept: user.PublicKey(), Sessions: true, FilesUnder: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	box.AnswerReadsWithNothing(true)
+	ctx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stop()
+	l, err := link.Dial(ctx, link.Target{Addr: box.Addr(), User: "demo", HostKey: host.PublicKey()}, user, link.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	files, err := l.OpenFiles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := sshappsftp.Start(ctx, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	f, err := c.Open(ctx, "/x.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now()
+	err = f.ReadInOrder(ctx, 0, func([]byte, uint64) error { return nil })
+	if !errors.Is(err, sshappsftp.ErrNotAnswering) {
+		t.Fatalf("it gave %v where it should have said the box is not answering", err)
+	}
+	if took := time.Since(began); took > 20*time.Second {
+		t.Fatalf("it took %v to say so", took)
 	}
 }

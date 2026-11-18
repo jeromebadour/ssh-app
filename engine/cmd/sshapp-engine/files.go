@@ -101,6 +101,7 @@ type files struct {
 	o        *out
 	l        *link.Link
 	mu       sync.Mutex
+	opening  sync.Mutex // held only while the file channel is being opened; f.mu is free throughout
 	c        *sftp.Client
 	failedAt time.Time // when the last try to open the channel failed
 	failed   error     // and what it said, for asks inside the quiet time after it
@@ -130,28 +131,53 @@ func newFiles(o *out, l *link.Link) *files {
 // with nothing a person can do but close it. So the next ask tries again. What a failure does buy is a short
 // quiet time, so a run of asks cannot turn one refusal into a storm of channel openings at a box.
 func (f *files) client(ctx context.Context) (*sftp.Client, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.c != nil {
-		return f.c, nil
+	if c, err, have := f.clientNow(); have {
+		return c, err
 	}
-	if !f.failedAt.IsZero() && time.Since(f.failedAt) < quietAfterFail {
-		return nil, f.failed
+	// The opening itself is held by a lock of its own, and f.mu is free throughout it. Holding f.mu across
+	// it meant that a box slow to say it has a file subsystem held every other ask as well, including the
+	// ones that come in on the engine's frame loop: one more press in the pane then froze that tab's
+	// terminal until the box answered, which against a box that never answers is for ever. A loaded box is
+	// exactly when he needs the terminal.
+	f.opening.Lock()
+	defer f.opening.Unlock()
+	if c, err, have := f.clientNow(); have {
+		return c, err
 	}
-	ch, err := f.l.OpenFiles()
+	ch, err := f.l.OpenFiles(ctx)
 	if err != nil {
+		f.mu.Lock()
 		f.failedAt, f.failed = time.Now(), err
+		f.mu.Unlock()
 		return nil, err
 	}
 	c, err := sftp.Start(ctx, ch)
 	if err != nil {
 		_ = ch.Close()
+		f.mu.Lock()
 		f.failedAt, f.failed = time.Now(), err
+		f.mu.Unlock()
 		return nil, err
 	}
+	f.mu.Lock()
 	f.c = c
 	f.failedAt, f.failed = time.Time{}, nil
+	f.mu.Unlock()
 	return c, nil
+}
+
+// clientNow answers from what is already known, without opening anything: the client if there is one, the
+// last failure while its quiet time lasts, and whether either of those is an answer at all.
+func (f *files) clientNow() (*sftp.Client, error, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.c != nil {
+		return f.c, nil, true
+	}
+	if !f.failedAt.IsZero() && time.Since(f.failedAt) < quietAfterFail {
+		return nil, f.failed, true
+	}
+	return nil, nil, false
 }
 
 // ask runs one thing main asked for, and sends back pages until it is done. It runs on its own goroutine, so
@@ -487,6 +513,8 @@ func say(err error) string {
 		return "in-the-way"
 	case errors.Is(err, errNoRoomOnBox):
 		return "box-full"
+	case errors.Is(err, errBiggerThanSaid):
+		return "bigger-than-said"
 	case errors.Is(err, errNoTrash):
 		return "no-trash"
 	case errors.Is(err, errRefused):
