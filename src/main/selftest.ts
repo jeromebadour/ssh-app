@@ -1987,7 +1987,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.getElementById('fb-name-go')?.click()`);
             const renamed = await until(async () => (await names()).includes('syslog.kept'), 15_000);
             const saidSo = await until(async () => (await foot()).includes('is now called'), 15_000);
-            const standsOn = await js<string>(front.view, `document.querySelector('#fb-list .fb-row[aria-selected="true"]')?.dataset?.name ?? ''`);
+            // Where the list stands is the tab stop, which is what carries it. This read it from aria-selected,
+            // which meant the same thing only while one row was all a list could hold: that is being chosen
+            // now, and a rename chooses nothing, so the row the list stands on wears no such mark.
+            const standsOn = await js<string>(front.view, `document.querySelector('#fb-list .fb-row[tabindex="0"]')?.dataset?.name ?? ''`);
             const onTheBox = await lab.tell('read var/log/syslog.kept');
             const oldGone = await lab.tell('read var/log/syslog');
             check('a new name is the name on the box as well: the bytes are under it, nothing is under the old one, and the list stands on it', renamed && saidSo && onTheBox['text'] === "a line of the box's own log\n" && oldGone['error'] === 'no such file' && standsOn === 'syslog.kept' && !(await names()).includes('syslog'), [await foot(), onTheBox, oldGone, standsOn]);
