@@ -696,12 +696,14 @@ function openTab(boxId = '', place = ''): Tab | null {
     state: () => {
       maybeAgain();
       linkEnded(tab);
+      transfersEndWithTheLink(tab);
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
     link: () => {
       maybeAgain();
       linkEnded(tab);
+      transfersEndWithTheLink(tab);
       if (tabs.get(id) === tab) sendTo(view, CH.tabState, info(tab));
       tellShell();
     },
@@ -1321,6 +1323,45 @@ function watchFirstVisit(id: string, tab: Tab): void {
 const spareOnDisk = 64 * 1024 * 1024;
 type Coming = { tab: number; into: string; name: string; why: string };
 const coming = new Map<string, Coming>(); // per tab and ask: what main knows that the engine does not
+
+// A link that is gone takes every transfer on it with it. The engine's last word is often a page saying how
+// far it had got, because the link died under it rather than it deciding anything, so without this the
+// strip kept a line with a speed and a time left for ever, its Stop did nothing, what was queued behind it
+// never moved, and the name it had been given was never free again. Every one of them is ended here, with
+// the link's own cause, and what had already arrived is written down so the next try takes it up.
+// Whether this tab can still carry a transfer at all: an engine that is gone, or a link that has ended,
+// carries nothing more. Both are watched, because an engine killed outright never reports a link ending.
+function transfersEndWithTheLink(t: Tab): void {
+  const gone = t.engine.state === 'gone';
+  const ended = t.engine.link.phase === 'ended' && t.engine.link.cause !== '';
+  if (!gone && !ended) return;
+  endEveryTransfer(t, ended ? t.engine.link.cause : t.engine.cause || 'the engine is gone');
+}
+
+function endEveryTransfer(t: Tab, cause: string): void {
+  for (const [key, c] of [...coming]) {
+    if (c.tab !== t.id) continue;
+    const ask = Number(key.slice(key.indexOf(':') + 1));
+    coming.delete(key);
+    const was = comingBroke.get(key);
+    comingBroke.delete(key);
+    if (was) broke.set(was.key, { size: was.size, mtime: was.mtime });
+    if (tabs.get(t.id) === t) sendTo(t.view, CH.tabFilePage, { id: ask, done: true, error: 'link-gone', detail: cause });
+  }
+  for (const [key, send] of [...sendingNow]) {
+    if (!key.startsWith(`${t.id}:`)) continue;
+    const ask = Number(key.slice(key.indexOf(':') + 1));
+    sendingNow.delete(key);
+    void send;
+    if (ask > 0 && tabs.get(t.id) === t) sendTo(t.view, CH.tabFilePage, { id: ask, done: true, error: 'link-gone', detail: cause });
+  }
+  // Nothing more of this tab's queue is sent: the link it would have gone on is gone.
+  const queued = queuedToSend.get(t.id);
+  if (queued && queued.paths.length > 0) {
+    queuedToSend.set(t.id, { ...queued, paths: [] });
+    if (tabs.get(t.id) === t) sendTo(t.view, CH.tabFilePage, { id: 0, waiting: 0 });
+  }
+}
 const comingBroke = new Map<string, { key: string; size: number; mtime: number }>(); // what to write down if it breaks
 // Transfers main has taken in and not yet given to an engine: the stat for a download, the chooser for a send.
 // A stop that arrives in that gap lands here, and is seen before anything starts.
@@ -1377,7 +1418,12 @@ async function bringOver(tab: Tab, id: number, remote: string): Promise<void> {
   } catch {
     return say('pc-denied');
   }
-  const name = freeName(landed.name, taken);
+  // What is in the folder now, and what is already on its way into it. Without the second, two tabs pulling
+  // a file of the same name from two different boxes at the same moment were both given that one name: they
+  // then shared one half-written file, and one tab was told "checked" over bytes that had come from the
+  // other box. A name is taken the moment it is handed out, not when the file lands.
+  const onTheWay = [...coming.values()].filter((c) => c.into === into).map((c) => c.name);
+  const name = freeName(landed.name, [...taken, ...onTheWay]);
   const why = [landed.changed ? landed.why : '', name !== landed.name ? 'a file of that name was already here' : ''].filter((x) => x !== '').join(', ');
   if (tabs.get(tab.id) !== tab) return;
   coming.set(comingKey(tab.id, id), { tab: tab.id, into, name, why });
@@ -2283,7 +2329,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

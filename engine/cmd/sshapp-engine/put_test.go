@@ -266,9 +266,10 @@ func TestAnUploadGivenUpOnLeavesNothingOnTheBox(t *testing.T) {
 // of it.
 func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 	r, box := withFiles(t)
-	from, want := writeOnThePC(t, 500_000)
-	// Half of it is already on the box, under the name a half-written send has.
-	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), want[:250_000], 0o600); err != nil {
+	const round = 32 * 32 * 1024 // one round of blocks: what a resume is held to
+	from, want := writeOnThePC(t, 5*round)
+	// Two whole rounds of it are already on the box, under the name a half-written send has.
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), want[:2*round], 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -277,7 +278,7 @@ func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 	if e := last(ps, "error"); e != nil {
 		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
-	if last(ps, "resumedAt") != float64(250_000) {
+	if last(ps, "resumedAt") != float64(2*round) {
 		t.Fatalf("it did not say where it was taken up: %v", ps)
 	}
 	if last(ps, "mark") != "checked" {
@@ -296,8 +297,9 @@ func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 // in place, and the wrong bytes are not kept.
 func TestASendTakenUpFromTheWrongBytesIsNeverPutInPlace(t *testing.T) {
 	r, box := withFiles(t)
-	from, _ := writeOnThePC(t, 300_000)
-	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), make([]byte, 150_000), 0o600); err != nil {
+	const round = 32 * 32 * 1024
+	from, _ := writeOnThePC(t, 3*round)
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), make([]byte, round), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,5 +310,40 @@ func TestASendTakenUpFromTheWrongBytesIsNeverPutInPlace(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(box); len(left) != 0 {
 		t.Fatalf("bytes known to be wrong were kept on the box: %v", names(left))
+	}
+}
+
+// A send cut in the middle of a round leaves a file as long as the furthest block that landed, with gaps
+// below it: the blocks of a round go on the wire at once and land in whatever order the box answers them.
+// So a resume is held to the last whole round below that size, never to the size itself. Taking the size at
+// its word left those gaps in the file for good, and on a box that cannot hash they would have been renamed
+// into place and called "not checked" rather than wrong.
+func TestASendIsTakenUpAtAWholeRoundAndNeverOverAHole(t *testing.T) {
+	r, box := withFiles(t)
+	const round = 32 * 32 * 1024
+	from, want := writeOnThePC(t, 5*round)
+	// What a cut round leaves: two whole rounds, then a stretch of the third with a hole in the middle of
+	// it. The file is as long as the furthest block that landed.
+	part := make([]byte, 2*round+300_000)
+	copy(part, want[:2*round])
+	copy(part[2*round+200_000:], want[2*round+200_000:2*round+300_000])
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), part, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 83, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
+	ps := pages(r.wait("the upload to end", ended(83)), 83)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
+	}
+	if last(ps, "resumedAt") != float64(2*round) {
+		t.Fatalf("it was taken up at %v, which is not the last whole round: %v", last(ps, "resumedAt"), ps)
+	}
+	if last(ps, "mark") != "checked" {
+		t.Fatalf("what was put together was not checked: %v", ps)
+	}
+	got, err := os.ReadFile(filepath.Join(box, "sent.bin"))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("the hole was left in the file (%v, %d of %d)", err, len(got), len(want))
 	}
 }

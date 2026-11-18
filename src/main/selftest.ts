@@ -66,6 +66,7 @@ interface Ctx {
   watchFirstVisits(watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => { ok: true; said: string } | { ok: false; cause: string; detail: string }) | null): void;
   dragsAsked(): number;
   canDrag(tab: number): number;
+  transfersOn(tab: number): number;
   chooseKeyFile(file: string): Promise<void>;
   keyPassphrase(passphrase: string): Promise<void> | undefined;
   pace: Pace;
@@ -1524,6 +1525,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               await lab.tell('failreads 0');
               const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') === 'true'`);
               check('a download that failed leaves nothing to drag', went && settled && !offered && ctx.canDrag(front.id) === couldDrag, [went, settled, offered, ctx.canDrag(front.id) - couldDrag]);
+            }
+            // A transfer whose link dies under it must end, rather than leaving a line with a speed and a
+            // time left for ever, a Stop that does nothing, and a name that is never free again. A tab of
+            // its own is used and then closed, because what proves it is killing that tab's engine.
+            {
+              const doomed = front.box ? ctx.openTab(front.box.id, '') : null;
+              if (doomed) {
+                await until(() => doomed.engine.link.phase === 'up', 20_000);
+                await lab.tell('bigfile /var/log/longone.log 40000000');
+                await js(doomed.view, `window.tabPort.files({ id: 501, do: 'get', path: '/var/log/longone.log' })`);
+                const begun = await until(() => ctx.transfersOn(doomed.id) > 0, 20_000);
+                const pid = doomed.engine.pid;
+                const killed = begun && signal(pid, 'SIGKILL');
+                const cleared = await until(() => ctx.transfersOn(doomed.id) === 0, 20_000);
+                check('a transfer whose link dies under it is ended by main, not left running for ever', begun && killed && cleared, [begun, killed, cleared, ctx.transfersOn(doomed.id)]);
+                ctx.closeTab(doomed.id);
+              }
             }
             // A number this tab never had, another tab's number, and a number that is not one: each is dropped
             // and nothing is handed over. This is the whole of what a taken-over view could try.

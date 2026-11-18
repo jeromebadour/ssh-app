@@ -121,7 +121,15 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	var sent uint64
 	if a.Resume {
 		if had, err := c.Lstat(ctx, temp); err == nil && had.IsFile() && had.Size <= size {
-			sent = had.Size
+			// Not the size it reached: the size of the last whole round below it. A round puts several
+			// blocks on the wire at once, and they land in whatever order the box answers them, so a link
+			// that died in the middle of one leaves a file as long as the furthest block that landed with
+			// gaps below it. Taking the size at its word would have left those gaps in the file for good,
+			// and on a box that cannot hash, that file would have been renamed into place over the old one
+			// and called "not checked" rather than wrong. Every round begins at a multiple of its own size
+			// counted from the start of the file, so everything below the last such mark is whole.
+			const round = uint64(sftp.AtOnce) * sftp.Block
+			sent = had.Size / round * round
 		}
 	}
 	if sent == 0 {
