@@ -370,20 +370,31 @@ window.addEventListener('keydown', (e) => {
   };
   grip.addEventListener('pointerup', letGo);
   grip.addEventListener('pointercancel', letGo);
-  // A double press puts it back where a tab starts, which is the way out of any corner it has been dragged into.
-  grip.addEventListener('dblclick', () => split.style.removeProperty('--files-w'));
+  // Putting it back where a tab starts, which is the way out of any corner it has been dragged into. The
+  // share this held has to go with the property, or the next arrow key steps from the corner instead of from
+  // where the tab starts and lands back in it; and the value it announces has to be read again from the
+  // window, or a reader is told the corner's number while the eye sees the tab's own width.
+  const putBack = (): void => {
+    split.style.removeProperty('--files-w');
+    share = 0;
+    grip.setAttribute('aria-valuenow', String(Math.round(shareNow() * 100)));
+  };
+  grip.addEventListener('dblclick', putBack);
   grip.addEventListener('keydown', (e: KeyboardEvent) => {
     const step = e.shiftKey ? 0.1 : 0.02;
     if (e.key === 'ArrowLeft') put((share || shareNow()) - step);
     else if (e.key === 'ArrowRight') put((share || shareNow()) + step);
     else if (e.key === 'Home') put(LEAST);
     else if (e.key === 'End') put(MOST);
-    else if (e.key === 'Enter' || e.key === ' ') { split.style.removeProperty('--files-w'); share = 0; }
+    else if (e.key === 'Enter' || e.key === ' ') putBack();
     else return;
     e.preventDefault();
   });
   grip.setAttribute('aria-valuemin', String(Math.round(LEAST * 100)));
   grip.setAttribute('aria-valuemax', String(Math.round(MOST * 100)));
+  // And the value it has at rest, once the window has a width to read: a separator that announces a range and
+  // no position in it tells a reader nothing until the first key is pressed.
+  requestAnimationFrame(() => grip.setAttribute('aria-valuenow', String(Math.round(shareNow() * 100))));
 }
 
 // The terminal is as large as the view, in whole cells, and the box is told its size.

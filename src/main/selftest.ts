@@ -2137,6 +2137,30 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // Put back where a tab starts, which is the way out of any corner it was dragged into.
           await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
           check('and a press puts it back where a tab starts', await until(async () => Math.abs((await wide()) - was) < 3, 3000), [was, await wide()]);
+          // And it really stays back. Putting it back took the property off the pane but left the share this
+          // grip was holding, so the next arrow key stepped from the corner instead of from where a tab
+          // starts and landed straight back in it: the way out of a corner that one keypress undid. Both ways
+          // of putting it back are tried, because only one of them ever cleared that share.
+          const announced = async () => js<string>(quiet.view, `document.getElementById('grip')?.getAttribute('aria-valuenow') ?? ''`);
+          const shareNow = async () => js<number>(quiet.view, `Math.round(document.getElementById('files-pane').getBoundingClientRect().width / document.getElementById('split').getBoundingClientRect().width * 100)`);
+          for (const [how, press] of [
+            ['a press', `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`],
+            ['a double press', `document.getElementById('grip').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`],
+          ] as const) {
+            await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+            await until(async () => (await wide()) > was + 80, 3000);
+            const corner = await wide();
+            await js(quiet.view, press);
+            await until(async () => Math.abs((await wide()) - was) < 3, 3000);
+            // What the grip says it is at has to be what the window shows, or a reader is told the corner's
+            // number while the eye sees the tab's own width.
+            check(`${how} puts it back where a tab starts and says so: ${await announced()} of ${await shareNow()}`, Math.abs((await wide()) - was) < 3 && Number(await announced()) === (await shareNow()), [was, await wide(), await announced(), await shareNow()]);
+            await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))`);
+            const stepped = await until(async () => (await wide()) < was, 3000) ? await wide() : await wide();
+            check(`and the arrow after ${how} steps from there, not from the corner it was in: ${stepped} from ${was}, never near ${corner}`, stepped < was && stepped > was - 60, [was, corner, stepped]);
+            await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+            await until(async () => Math.abs((await wide()) - was) < 3, 3000);
+          }
           // And the same box, having something to say, still says it: the slot is collapsed, not removed.
           await lab.tell('banner this box has something to say');
           const loud = ctx.openTab(id, 'logs')!;
