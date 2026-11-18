@@ -26,7 +26,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [] };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [], ready: false };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -161,6 +161,10 @@ function Unlocked(props: { s: ShellState }) {
         {s.tabs.length === 0 && (
           <div class="first-use" id="first-use">
             <Mark />
+            {/* Nothing to press until the list is open. The window is drawn the moment the lock opens, and
+                for that moment it knows of no box at all: drawing Add box then, alone in the middle, puts a
+                button where the morning's offer is about to be. The press he began lands on what arrived. */}
+            {s.ready && (<>
             {s.reopen.length > 0 && <Reopen s={s} act={act} />}
             {s.boxes.length > 0 && (
               <div class="fu-boxes">
@@ -174,6 +178,7 @@ function Unlocked(props: { s: ShellState }) {
               </div>
             )}
             <button type="button" class={`btn ${s.boxes.length === 0 ? 'primary' : 'quiet'}`} id="first-add" onClick={act.addBox}><Glyph name="plus" />Add box</button>
+            </>)}
           </div>
         )}
       </main>

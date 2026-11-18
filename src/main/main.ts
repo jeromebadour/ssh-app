@@ -289,7 +289,7 @@ let reopenPut = false;
 // What the offer holds: the tabs of the last session that still point at a box he has, pinned, in the order
 // they were in. A box he has since removed or forgotten simply is not offered, with nothing said about it.
 function reopenOffer(): { box: string; name: string; colour: number; place: string }[] {
-  if (reopenPut || tabs.size > 0 || !gate?.unlocked || !boxes) return [];
+  if (reopenPut || tabs.size > 0 || !boxes?.loaded) return [];
   const out: { box: string; name: string; colour: number; place: string }[] = [];
   for (const one of boxes.lastTabs) {
     const box = boxes.get(one.box);
@@ -372,7 +372,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
+  return { tabs: [...tabs.values()].map(info), active, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
