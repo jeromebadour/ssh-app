@@ -1368,11 +1368,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             } else {
             const odd = await lab.tell('oddnames var/log');
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
-            // One of them is put back a year, for the column that says when a file was changed. Every file this
-            // lab makes is made now, so without this the column holds only today's shape, and a column that
-            // dropped the date entirely would read exactly the same. The folder is re-listed just below, so
-            // this costs no navigation of its own.
-            await lab.tell('aged var/log/two|pipes.log 400');
+            // A file is put back a year, for the column that says when a file was changed. Every file this lab
+            // makes is made now, so without this the column holds only today's shape, and a column that dropped
+            // the date entirely would read exactly the same. The folder is re-listed just below, so this costs
+            // no navigation of its own. It is syslog and not one of the odd-named ones because a Windows runner
+            // cannot hold those names at all, and this must hold on both.
+            await lab.tell('aged var/log/syslog 400');
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -1745,13 +1746,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const digitsOnly = sizeCol.every.every((c) => /^(|<0\.1|\d+(\.\d)?)$/.test(c)) && sizeCol.cells.every((c) => c !== '');
             const noneReadsNothing = sizeCol.cells.every((c, i) => !(sizeCol.bytes[i]! > 0 && c === '0'));
             const smallOnesSaySo = sizeCol.cells.includes('<0.1');
-            check('every size in the column is in the one unit its head names, as digits alone, and a file with bytes in it never reads nothing', unitNamed && digitsOnly && noneReadsNothing && smallOnesSaySo && sizeCol.cells.length > 2, sizeCol);
+            // Two files are enough to prove it, and two is all a Windows runner has here: it cannot hold the
+            // odd names the rest of this folder is made of.
+            check('every size in the column is in the one unit its head names, as digits alone, and a file with bytes in it never reads nothing', unitNamed && digitsOnly && noneReadsNothing && smallOnesSaySo && sizeCol.cells.length >= 2, sizeCol);
             // The date a file was changed, short enough for the column and still able to answer which of two
             // files is the newer: a day and a time for anything but today, the time alone for today's. One file
             // was put back a year when the lab made them, so both shapes are on screen here: a column that
             // dropped the date would hold only the first.
             const whens = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.querySelector('.fb-when')?.textContent?.trim() ?? '')`);
-            const shapeOk = whens.length > 2 && whens.every((w) => /^\d\d:\d\d$|^\d\d-\d\d-\d\d \d\d:\d\d$/.test(w));
+            const shapeOk = whens.length >= 2 && whens.every((w) => /^\d\d:\d\d$|^\d\d-\d\d-\d\d \d\d:\d\d$/.test(w));
             const bothShapes = whens.some((w) => /^\d\d:\d\d$/.test(w)) && whens.some((w) => /^\d\d-\d\d-\d\d \d\d:\d\d$/.test(w));
             check('and every time it says is a time, with its day on it unless the day is today', shapeOk && bothShapes, whens);
             // The zoom, which is the press he can wreck the list with. Every step of it, not one: the first
