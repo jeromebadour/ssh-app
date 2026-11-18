@@ -323,7 +323,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const recentAt = document.createElement('div');
   recentAt.className = 'fb-recent-menu';
   recentAt.id = 'fb-recent-menu';
-  at.append(here, recentAt, tools, head, el.list, el.moving, el.foot);
+  // The heads and the rows are wrapped in one thing, because what gives way when there is not enough room
+  // across is measured against the list's own size, and the pane holds other rows that the zoom never touches.
+  const grid = document.createElement('div');
+  grid.className = 'fb-grid';
+  grid.id = 'fb-grid';
+  grid.append(head, el.list);
+  at.append(here, recentAt, tools, grid, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
   // His own words about MobaXterm: the terminal zooms and the file browser does not, and that annoys him.

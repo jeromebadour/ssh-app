@@ -63,7 +63,7 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 #grip:hover::before, #grip:focus-visible::before, #grip[data-held]::before { top: 4px; height: auto; bottom: 4px; margin-top: 0; background: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
 #grip:hover::after, #grip:focus-visible::after, #grip[data-held]::after { background: none; }
 #grip:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -3px; }
-#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; container: files / inline-size; }
+#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 
 /* The folder this is, and the one thing that acts on the folder itself. */
@@ -90,7 +90,11 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    its glyph, its name and the room around them all grow together: text alone growing inside a row of a fixed
    height is how a list ends up with its names cut off. The strips above and below keep their own size: they
    are the pane's furniture, not what is being read. */
-.fb-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; font-size: calc(12px * var(--fb-size, 1)); }
+/* The heads and the rows under them are one thing, and the zoom is theirs alone: the path line, the tools,
+   the find field and the foot are siblings of this and keep their own size, which is what the zoom has always
+   done. The size lives here rather than on each of them because what gives way below is measured against it. */
+.fb-grid { flex: 1; display: flex; flex-direction: column; min-height: 0; font-size: calc(12px * var(--fb-size, 1)); container: files / inline-size; }
+.fb-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; font-size: 1em; }
 /* A row is a grid of the same columns the heads above it name, so a name that is too long is cut rather than
    pushing a size off the end, and every size sits under every other size. The columns are set in em of the
    pane's own size, so the whole list grows and shrinks together: at 115 per cent the names used to collapse to
@@ -100,10 +104,13 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    he zooms in for, so it is the last thing to give: the time goes first, then the size, and both are still in
    what the row says when the pointer rests on it. Zooming in used to do the opposite, taking the name's room
    and handing it to the numbers, which is how one press of Ctrl and plus wrecked the list. */
-@container files (max-width: 16rem) { .fb-when, #fb-by-changed { display: none; } }
-@container files (max-width: 11rem) { .fb-size, #fb-by-size { display: none; } }
+/* In em of the list's own size, so they move with the zoom. In rem they could only see the pane getting
+   narrower, never the text getting bigger, so zooming in never hid anything and the name was eaten to the
+   last pixel: at 200 per cent the time column was wider than the name itself. */
+@container files (max-width: 21.3em) { .fb-when, #fb-by-changed { display: none; } }
+@container files (max-width: 14.6em) { .fb-size, #fb-by-size { display: none; } }
 .fb-row { height: 1.84em; color: #bcc5cc; font-size: 1em; }
-.fb-head { position: sticky; top: 0; z-index: 1; height: 2em; font-size: calc(12px * var(--fb-size, 1)); background: #19222b; border-bottom: 1px solid var(--line); }
+.fb-head { position: sticky; top: 0; z-index: 1; height: 2em; font-size: 1em; background: #19222b; border-bottom: 1px solid var(--line); }
 .fb-head-glyph { width: 1.25em; }
 .fb-row:hover { background: color-mix(in srgb, #c3ccd3 7%, transparent); }
 /* Where the keyboard stands, and where it is looking: the ring is the box's own colour, so the list says
