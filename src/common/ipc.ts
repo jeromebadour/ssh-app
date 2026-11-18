@@ -197,6 +197,10 @@ export interface ShellState {
   // The morning: what was open when he last used the app, offered to open again. It is there only while no
   // tab is open at all, because once he has opened one the morning is over and the offer is in the way.
   reopen: { box: string; name: string; colour: number; place: string }[];
+  // The list is open and this state is the real one. Until it is true the window knows nothing of his boxes,
+  // so the screen that offers them draws nothing to press: a button drawn from a state the app does not have
+  // yet is a button that moves out from under the press when the real state lands.
+  ready: boolean;
 }
 
 // Sending a file where a file of that name already is. Replacing one on a box cannot be undone from here, so

@@ -380,12 +380,28 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await sleep(200);
       check('the right password during the wait is not looked at', phase() === 'locked', phase());
       await until(async () => (await text('#gate-submit')).trim() === 'Unlock', 5000);
+      // Watching every frame from here, not sampling: the lock opens and the window is drawn at once, and
+      // the fault being held off is a single frame of it. Add box drawn while the app shows no box he has is
+      // a button standing where the morning's offer is about to land, and a press begun on it lands on that
+      // instead. The watcher counts any frame in which Add box is there and his boxes are not.
+      await js(ctx.shell, `(() => {
+        window.__addBoxAlone = 0;
+        const look = () => { if (document.getElementById('first-add') && !document.querySelector('[data-open]')) window.__addBoxAlone++; };
+        look();
+        new MutationObserver(look).observe(document.body, { childList: true, subtree: true });
+        return 'watching';
+      })()`);
       await pressEnter();
       // The window's own three buttons, before the lock opens: Windows draws no title bar for Berth, so if these
       // were not here a person could not put the password screen away or move it with the mouse at all.
       check('the lock screen carries the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), await text('#win-strip'));
       check('after the wait the right password unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       check('the window is the app now', await until(() => has('#bar'), 5000), '');
+      if (process.env['SSHAPP_LABBOX']) {
+        await until(async () => has('[data-open]'), 5000);
+        const alone = await js<number>(ctx.shell, `window.__addBoxAlone`);
+        check('the lock opens on the boxes he has: Add box is never drawn alone first, with nothing to press moving after', alone === 0, [alone, await text('#first-use')]);
+      }
 
       // What the first start left in the list is there again: the box, pinned, with its key in the key process.
       if (process.env['SSHAPP_LABBOX']) {
@@ -2317,6 +2333,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const tick = await js<string>(ctx.shell, `(() => { const t = document.querySelector('#reopen .ro-one input:checked + .ro-tick svg'); return t ? getComputedStyle(t).opacity : 'no tick'; })()`);
             check('a ticked line really draws its tick', tick === '1', tick);
             await shot('reopen', 'the morning: what was open last time, to pick from');
+            // Add box, pressed with the morning's offer on screen and boxes saved: it opens the dialog and
+            // nothing else. He reported a press of Add box that opened a box instead, so both ways of
+            // reaching it are driven here, in the state he was in, and each must open the dialog and no tab.
+            for (const where of ['#first-add', '#add-box-open']) {
+              if (where === '#add-box-open' && !(await has('#add-box-open'))) await clickOn('#boxes');
+              check(`Add box is there to press at ${where}`, await until(() => has(where), 3000), '');
+              await clickOn(where);
+              check(`Add box at ${where} opens the dialog and opens no tab`, (await until(() => has('#box-name'), 3000)) && ctx.shellState().tabs.length === 0 && (await has('#reopen')), [await has('#add-box'), ctx.shellState().tabs.length]);
+              await clickOn('#add-cancel');
+              await until(async () => !(await has('#add-box')), 3000);
+              check(`Cancel at ${where} leaves no tab open`, ctx.shellState().tabs.length === 0, ctx.shellState().tabs.length);
+            }
             await clickOn('#reopen-not-now');
             await until(async () => !(await has('#reopen')), 3000);
           }
