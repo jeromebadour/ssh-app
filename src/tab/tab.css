@@ -34,8 +34,36 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 /* The file browser on the left, the terminal on the right, as MobaXterm's layout is and as the design keeps
    it. The two never share a channel to the box, so a slow listing cannot hold up what is typed; here they do
    not share room either: the browser has a width of its own and the terminal takes the rest. */
-#split { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(220px, 24%, 360px) 1fr; }
-#files { display: flex; flex-direction: column; min-width: 0; margin: 8px 0 8px 10px; border-radius: 4px; background: #141b21; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hue) 55%, var(--line)), inset 0 2px 0 color-mix(in srgb, var(--hue) 75%, var(--line)); overflow: hidden; }
+/* The two panes, and the grip between them. How much room the files take is this tab's own, as its list size
+   is: a folder of long names wants room across, a terminal wants it back. */
+#split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--files-w, clamp(220px, 24%, 360px)) 9px 1fr; }
+
+/* Each pane is a thing of its own, with its own head, rather than two boxes leaning on one another. The head
+   is where the pane says what it is; what it holds is below. */
+#files-pane, #term-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: 4px; overflow: hidden; }
+/* The files are the lighter surface and the terminal the deeper one. It is the files that move, not the
+   terminal: the terminal's own background is the terminal's to paint, and a probe holds it to #141b21.
+   A pane that is lighter than the shell beside it is also how every file browser worth using says which
+   half is the PC's. */
+#files-pane { margin: 8px 0 8px 10px; background: #19222b; box-shadow: inset 0 0 0 1px var(--line); }
+/* The terminal is the box's side of the window and the files are the PC's: they are told apart by their own
+   surface, not only by what is in them. The box's colour is on the terminal, where it means which box is
+   being typed into; the files wear none of it. */
+#term-pane { margin: 8px 8px 8px 0; background: #141b21; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hue) 55%, var(--line)), inset 0 2px 0 color-mix(in srgb, var(--hue) 75%, var(--line)); }
+#files-head, #term-head { flex: none; display: flex; align-items: center; gap: 6px; height: 25px; padding: 0 10px; color: #96a3ae; font-size: 11.5px; border-bottom: 1px solid var(--line); }
+#files-head { background: color-mix(in srgb, #c3ccd3 4%, transparent); }
+#term-head { color: color-mix(in srgb, var(--hue) 55%, #c3ccd3); background: color-mix(in srgb, var(--hue) 9%, transparent); border-bottom-color: color-mix(in srgb, var(--hue) 35%, var(--line)); }
+.pane-glyph { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+
+/* The grip. A hairline that is wider to the hand than to the eye, lit while it is held or reached by the
+   keyboard, because a thing that can be dragged and never shows it is a thing nobody finds. */
+#grip { position: relative; cursor: col-resize; }
+#grip::before { content: ''; position: absolute; top: 50%; left: 3px; width: 3px; height: 26px; margin-top: -13px; border-radius: 2px; background: var(--line); }
+#grip::after { content: ''; position: absolute; top: 10px; bottom: 10px; left: 4px; width: 1px; background: color-mix(in srgb, var(--line) 55%, transparent); }
+#grip:hover::before, #grip:focus-visible::before, #grip[data-held]::before { top: 4px; height: auto; bottom: 4px; margin-top: 0; background: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
+#grip:hover::after, #grip:focus-visible::after, #grip[data-held]::after { background: none; }
+#grip:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -3px; }
+#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 
 /* The folder this is, and the one thing that acts on the folder itself. */
@@ -176,7 +204,7 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 /* The terminal is framed in its box's colour. The tabs carry that colour already; the thing a person actually
    types into did not, so on two boxes at once there was nothing in the terminal itself to say which was which.
    The frame is a hair stronger at the top, where it meets the tab wearing the same colour. */
-#term { min-height: 0; margin: 8px 8px 8px 8px; padding: 8px 0 0 10px; border-radius: 4px; background: #141b21; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hue) 55%, var(--line)), inset 0 2px 0 color-mix(in srgb, var(--hue) 75%, var(--line)); overflow: hidden; }
+#term { flex: 1; min-height: 0; padding: 8px 0 0 10px; overflow: hidden; }
 /* A session that has ended keeps the shape but not the colour: a dead tab must not look like a live one. */
 html[data-live='no'] #term { box-shadow: inset 0 0 0 1px var(--line); }
 .xterm { height: 100%; }
