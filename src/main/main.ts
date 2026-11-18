@@ -912,7 +912,10 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
   if (input.type !== 'keyDown' || !input.control || input.meta) return false;
   const digit = input.alt && input.key.length === 1 && input.key >= '1' && input.key <= '9';
   const step = !input.alt && input.key === 'Tab';
-  if (!digit && !step) return false;
+  // The whole terminal, selected and copied. Ctrl+A stays the shell's own, which is the start of the line:
+  // taking that from him would be the app typing over a key his hands already know (his words, 2026-11-15).
+  const whole = !input.alt && input.shift && (input.key === 'A' || input.key === 'a');
+  if (!digit && !step && !whole) return false;
   // A dialog of the window's own is in front, or the window is not the one being typed into: the press is not
   // this person's doing here, so nothing moves. It is still taken, so no view is given a key meant for main.
   if (overlay || !win?.isFocused()) {
@@ -920,6 +923,16 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
     return true;
   }
   const ids = [...tabs.keys()];
+  if (whole) {
+    const tab = tabs.get(active);
+    if (!tab) {
+      done = 'There is no tab to copy';
+      tellShell();
+      return true;
+    }
+    sendTo(tab.view, CH.tabWhole, true);
+    return true;
+  }
   if (step) {
     if (ids.length < 2) {
       done = 'This is the only tab';
