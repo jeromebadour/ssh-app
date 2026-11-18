@@ -150,6 +150,26 @@ func (f *File) Chmod(ctx context.Context, mode uint32) error {
 	return statusOf(a)
 }
 
+// Chown puts an owner on the open file. A file being replaced wears its own owner again before it is moved
+// into place: a config owned by a service that came back owned by whoever sent it is a service that can no
+// longer read its own file. A box that will not allow it says so, and whoever asked says that plainly rather
+// than letting the change pass unseen.
+func (f *File) Chown(ctx context.Context, uid, gid uint32) error {
+	if f.closed {
+		return ErrClosed
+	}
+	a, err := f.c.ask(ctx, fxpFsetstat, func(w *writer) {
+		w.str(f.handle)
+		w.u32(attrUIDGID)
+		w.u32(uid)
+		w.u32(gid)
+	})
+	if err != nil {
+		return err
+	}
+	return statusOf(a)
+}
+
 // Close lets the box forget the file. A handle never closed is one the box keeps for ever, so this is called
 // even when everything else has gone wrong.
 func (f *File) Close(ctx context.Context) error {
@@ -233,6 +253,11 @@ func (f *File) ReadInOrder(ctx context.Context, at uint64, take func(p []byte, a
 	}
 	ns := make([]int, AtOnce)
 	errs := make([]error, AtOnce)
+	// A box that answers a read with nothing at all, and says the file has not ended, would be asked again
+	// from the same place for ever, as fast as the link allows: tens of thousands of asks a second, going
+	// nowhere, until somebody pressed Stop. A few of those in a row is a box that is not answering, and is
+	// said as that.
+	empty := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -247,8 +272,10 @@ func (f *File) ReadInOrder(ctx context.Context, at uint64, take func(p []byte, a
 		}
 		wg.Wait()
 		next := at + uint64(len(bufs))*Block
+		took := 0
 		for i := range bufs {
 			if ns[i] > 0 {
+				took += ns[i]
 				if err := take(bufs[i][:ns[i]], at+uint64(i)*Block); err != nil {
 					return err
 				}
@@ -267,9 +294,23 @@ func (f *File) ReadInOrder(ctx context.Context, at uint64, take func(p []byte, a
 				break
 			}
 		}
+		if took == 0 {
+			empty++
+			if empty >= emptyRoundsAllowed {
+				return ErrNotAnswering
+			}
+		} else {
+			empty = 0
+		}
 		at = next
 	}
 }
+
+// How many rounds in a row may come back with nothing in them before a box is called not answering.
+const emptyRoundsAllowed = 3
+
+// ErrNotAnswering is a box that answers reads with nothing and does not say the file has ended.
+var ErrNotAnswering = errors.New("sftp: the box answered with nothing, and did not say the file had ended")
 
 // WriteInOrder writes what `next` gives it, AtOnce blocks at a time, starting at `at`. `next` fills a block
 // and says how many bytes it put there; it is called in order, once per block, which is what lets whoever

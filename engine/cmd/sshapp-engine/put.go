@@ -93,6 +93,7 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	// replaced only when the ask says so, and its permissions are what the new file will wear.
 	final := path.Join(into, a.Name)
 	mode := uint32(0o644)
+	var owner *[2]uint32 // the owner of the file being replaced, when there is one and the box said who
 	replacing := false
 	if there, err := c.Lstat(ctx, final); err == nil {
 		if !there.IsFile() {
@@ -107,6 +108,9 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		}
 		replacing = true
 		mode = there.Mode & 0o7777
+		if there.Has&sftp.AttrUIDGID != 0 {
+			owner = &[2]uint32{there.UID, there.GID}
+		}
 	}
 
 	// Room on the box for the whole of the new file beside everything already there, the file being replaced
@@ -223,12 +227,25 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	if err := to.Chmod(ctx, mode); err != nil {
 		return err
 	}
+	// And its owner, when it is replacing a file that had one. Only the account that may do it can, so a box
+	// that refuses is not a failure of the send: the file goes over, and the row says plainly that it is
+	// wearing a different owner than the file it replaced. Saying nothing was the fault: a config owned by a
+	// service came back owned by whoever sent it, and the service could no longer read its own file.
+	ownerKept := true
+	if owner != nil {
+		if err := to.Chown(ctx, owner[0], owner[1]); err != nil {
+			ownerKept = false
+		}
+	}
 	if err := to.Close(ctx); err != nil {
 		return err
 	}
 
 	// What the box says arrived, by its own hash, against the hash of what was read here.
 	mark, why := "checked", ""
+	if !ownerKept {
+		why = "it is wearing a different owner than the file it replaced: this account may not set one"
+	}
 	here := hex.EncodeToString(sum.Sum(nil))
 	there, err := f.l.Hash(ctx, link.SHA256, temp)
 	switch {

@@ -61,10 +61,14 @@ func (s *Status) Unwrap() error {
 
 // Attrs is what a box says about one file. Only what this app uses is kept.
 type Attrs struct {
-	Size  uint64
-	Mode  uint32 // the POSIX mode, when the box gave one
-	MTime uint32
-	Has   uint32 // which of the above the box actually gave
+	Size uint64
+	Mode uint32 // the POSIX mode, when the box gave one
+	// Who owns it, when the box said. A file being replaced is put back wearing its own owner as well as
+	// its own mode: without it, replacing a config owned by a service left it owned by whoever sent it, and
+	// the service could no longer read its own file.
+	UID, GID uint32
+	MTime    uint32
+	Has      uint32 // which of the above the box actually gave
 }
 
 // IsDir and the rest read the mode, and say what they do not know rather than guessing.
@@ -356,8 +360,8 @@ func takeAttrs(r *reader) Attrs {
 		a.Size = r.u64()
 	}
 	if a.Has&attrUIDGID != 0 {
-		r.u32()
-		r.u32()
+		a.UID = r.u32()
+		a.GID = r.u32()
 	}
 	if a.Has&attrPermissions != 0 {
 		a.Mode = r.u32()
@@ -380,3 +384,7 @@ func takeAttrs(r *reader) Attrs {
 	}
 	return a
 }
+
+// AttrUIDGID says whether a box told us who owns a thing, for callers outside this package: a file being
+// replaced can only be given its own owner back if the box said who that was.
+const AttrUIDGID = attrUIDGID

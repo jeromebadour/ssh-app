@@ -67,6 +67,7 @@ type Box struct {
 	got            []byte        // every byte the shells were given since the last Received
 	files          string        // the folder its file subsystem answers under; empty means it has none
 	refuseFiles    int           // how many more times to say no to the file subsystem, for the lab
+	stallFiles     bool          // take the ask for the file subsystem and never answer it
 	answerCommands string        // what every command prints instead of the box's own answer, for the lab
 	flood          atomic.Int64  // Flood: bytes the sessions took, in all
 }
@@ -288,6 +289,13 @@ func hashOfItsOwn(cmd, files string) string {
 	return hex.EncodeToString(sum[:]) + "  " + path + "\n"
 }
 
+// StallFiles makes the box take the ask for its file subsystem and never answer it, from now on.
+func (b *Box) StallFiles(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stallFiles = on
+}
+
 // RefuseFiles makes the box say no to the next n asks for its file subsystem.
 func (b *Box) RefuseFiles(n int) {
 	b.mu.Lock()
@@ -347,6 +355,14 @@ func (b *Box) session(nc ssh.NewChannel) {
 				}
 			case "subsystem":
 				var p struct{ Name string }
+				// A box that takes the ask for its file subsystem and never answers it. A real box can be
+				// this busy, and a box in someone else's hands can be this on purpose: nothing in the app
+				// may wait on it without a limit.
+				if b.stallFiles {
+					b.mu.Unlock()
+					<-b.closed
+					return
+				}
 				// A box that says no to the file subsystem this once: a real box does, when it is busy or when
 				// the link is barely up, and the app has to live through it rather than treat it as the end.
 				if b.refuseFiles > 0 {

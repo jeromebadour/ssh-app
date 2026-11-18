@@ -32,6 +32,7 @@ const DOWNLOAD_WHY: Record<string, string> = {
   'no-link': 'There is no link to the box',
   stopped: 'It was stopped before it began',
   'link-gone': 'The link to the box went while it was coming over',
+  'bigger-than-said': 'The box kept sending past the size it said the file was, so it was stopped',
   failed: 'It could not be brought over',
 };
 

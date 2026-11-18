@@ -62,6 +62,13 @@ func landingName(name string) error {
 // broke can be taken up where it stopped. A dot in front keeps it out of the way and .part says what it is.
 func partName(name string) string { return ".berth-" + name + ".part" }
 
+// How much more than a box said a file is may still be taken: a file being written to grows while it is
+// read, and that is not a box misbehaving. Past this it is, and the download is stopped with its reason.
+const beyondTheSize = 64 << 20
+
+// errBiggerThanSaid is a box sending more than the file it described.
+var errBiggerThanSaid = errors.New("files: the box sent more than it said the file was")
+
 func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	if err := landingName(a.Name); err != nil {
 		return err
