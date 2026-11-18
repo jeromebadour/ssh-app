@@ -1381,6 +1381,36 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           {
             const names = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
             const foot = (): Promise<string> => js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            // ---- The way back, the way forward, and the folders this tab has been in. ----
+            // His own words beside MobaXterm, whose path bar carries everywhere it has been: "our path no drop
+            // down forward backward at all", and "this is very important for changing paths". The pane had no
+            // history of any kind; the only way back up was the row that stands for the folder above.
+            const pathNow = (): Promise<string> => js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`);
+            const wayState = (): Promise<{ back: boolean; fwd: boolean; recent: boolean }> => js(front.view, `({ back: !document.getElementById('fb-back').disabled, fwd: !document.getElementById('fb-forward').disabled, recent: !document.getElementById('fb-recent').disabled })`);
+            const startedAt = await pathNow();
+            const hist = (): Promise<{ been: string; at: string; open: string }> => js(front.view, `({ been: document.getElementById('files').dataset.been, at: document.getElementById('files').dataset.beenAt, open: document.getElementById('files').dataset.recentOpen })`);
+            check(`this tab has been in ${(await hist()).been} folders and stands at ${(await hist()).at} of them`, Number((await hist()).been) > 0 && Number((await hist()).at) >= 0, await hist());
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-kind="folder"][data-name="ledger"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            const went = await until(async () => (await pathNow()).endsWith('/ledger'), 8000) ? await pathNow() : await pathNow();
+            check(`opening a folder is a place he went, and there is nothing forward of the newest: ${went}`, went.endsWith('/ledger') && (await wayState()).back && !(await wayState()).fwd, [went, await wayState()]);
+            await clickOn('#fb-back', front);
+            const backAt = await until(async () => (await pathNow()) === startedAt, 8000) ? await pathNow() : await pathNow();
+            check('the way back goes to the folder before it, and the way forward opens', backAt === startedAt && (await wayState()).fwd, [backAt, startedAt, await wayState()]);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new MouseEvent('auxclick', { button: 4, bubbles: true }))`);
+            const fwdAt = await until(async () => (await pathNow()).endsWith('/ledger'), 8000) ? await pathNow() : await pathNow();
+            check(`the mouse's own forward button goes forward again: ${fwdAt}`, fwdAt.endsWith('/ledger'), fwdAt);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new MouseEvent('auxclick', { button: 3, bubbles: true }))`);
+            check("and its own back button goes back", await until(async () => (await pathNow()) === startedAt, 8000), await pathNow());
+            await js(front.view, `document.getElementById('fb-recent').click()`);
+            await sleep(120);
+            const inMenu = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-recent-menu .fb-recent-one')].map((b) => b.dataset.path)`);
+            check(`the folders this tab has been in are listed, newest first and each of them once: ${inMenu.length}`, inMenu.length >= 2 && inMenu[0]!.endsWith('/ledger') && inMenu.includes(startedAt) && new Set(inMenu).size === inMenu.length, inMenu);
+            await shot('the-way-back', 'the folders this tab has been in, with the ways back and forward', front);
+            await js(front.view, `[...document.querySelectorAll('#fb-recent-menu .fb-recent-one')].find((b) => b.dataset.path.endsWith('/ledger')).click()`);
+            check('and pressing one of them goes there, and shuts the list', (await until(async () => (await pathNow()).endsWith('/ledger'), 8000)) && (await js<number>(front.view, `document.querySelectorAll('#fb-recent-menu .fb-recent-one').length`)) === 0, await pathNow());
+            await clickOn('#fb-back', front);
+            await until(async () => (await pathNow()) === startedAt, 8000);
+
             const asksBefore = { ...ctx.filesAsked() };
             // ---- The list has heads over its columns, and they hold at every size the pane has. ----
             // Beside MobaXterm he said the list had no column heads, that clicking a size should order by it,
