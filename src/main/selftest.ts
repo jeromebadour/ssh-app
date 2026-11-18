@@ -1722,23 +1722,47 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // at 150 and 200 per cent the name was cut to nothing and the time column came out wider than it.
             // What gives way is measured against the list's own size now, so it gives way as the text grows
             // and not only when the pane is dragged narrower.
-            const rowNow = (): Promise<{ name: number; numbers: number; row: number; cut: number; size: string; timeGone: boolean }> => js(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file'); if (!r) return { name: -1, numbers: -1, row: -1, cut: -1, size: '?', timeGone: false }; const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; }; return { name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'), row: Math.round(r.getBoundingClientRect().width), cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length, size: document.getElementById('files').dataset.size, timeGone: getComputedStyle(r.querySelector('.fb-when')).display === 'none' }; })()`);
+            const rowNow = (): Promise<{ name: number; numbers: number; cut: number; size: string; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }> => js(front.view, `(() => {
+              const list = document.getElementById('fb-list');
+              const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file');
+              if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false };
+              const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; };
+              // The head has to ride the list's own sideways scroll, or a column and its name come apart.
+              const head = document.getElementById('fb-head');
+              const before = Math.round(head.getBoundingClientRect().left);
+              list.scrollLeft = 40;
+              const moved = Math.round(head.getBoundingClientRect().left) < before;
+              const canScroll = list.scrollWidth > list.clientWidth + 1;
+              list.scrollLeft = 0;
+              void before;
+              return {
+                name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'),
+                cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length,
+                size: document.getElementById('files').dataset.size,
+                timeGone: getComputedStyle(r.querySelector('.fb-when')).display === 'none',
+                sizeGone: getComputedStyle(r.querySelector('.fb-size')).display === 'none',
+                canScroll, headWith: !canScroll || moved,
+              };
+            })()`);
             await js(front.view, `document.getElementById('fb-list').focus()`);
-            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean }[] = [];
+            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }[] = [];
             for (let i = 0; i < 6; i++) {
               const now = await rowNow();
-              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone });
+              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone, sizeGone: now.sizeGone, canScroll: now.canScroll, headWith: now.headWith });
               await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
               await sleep(130);
             }
             const everCut = steps.filter((x) => x.cut > 0);
             const everEaten = steps.filter((x) => x.numbers >= x.name);
-            // And the thing that is meant to give way really gives way. Without this the probe cannot fail on
-            // the fault it was written for: every file the lab box holds was made today, so its time is five
-            // characters wide and nothing is ever cut whatever the thresholds are. What the design says is
-            // that the time goes first, and by the largest size this list has it must have gone.
-            const gaveWay = steps.some((x) => x.timeGone);
-            check(`at every size this list has, up to ${steps[steps.length - 1]!.size} per cent, no name is cut, the numbers never take more of a row than the name does, and the time gives way as the text grows (it does at ${steps.find((x) => x.timeGone)?.size ?? 'no size at all'})`, everCut.length === 0 && everEaten.length === 0 && gaveWay && steps[steps.length - 1]!.size === '200', { steps, everCut, everEaten });
+            // Nothing gives way any more: that is the change. So what is held is the opposite of what this
+            // probe held before — every column is still on screen at every size, and where the row no longer
+            // fits the pane the pane can be scrolled to the rest of it, with the head riding that scroll.
+            // A hidden column cannot be scrolled to, which is why hiding was the wrong answer.
+            const everHidden = steps.filter((x) => x.timeGone || x.sizeGone);
+            const headCameApart = steps.filter((x) => !x.headWith);
+            check(`at every size this list has, up to ${steps[steps.length - 1]!.size} per cent, no name is cut, no column is hidden, and where the row outgrows the pane the pane scrolls to it with its head`,
+              everCut.length === 0 && everEaten.length === 0 && everHidden.length === 0 && headCameApart.length === 0 && steps[steps.length - 1]!.size === '200',
+              { steps, everCut, everEaten, everHidden, headCameApart });
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
             await sleep(150);
 
@@ -2551,7 +2575,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const kept = await field();
             const caret = await js<number>(front.view, `document.getElementById('fb-name-field')?.selectionStart ?? -1`);
             const stillOnIt = await js<string>(front.view, `document.activeElement?.id ?? ''`);
-            check('a redraw while a name is being typed keeps the letters and the caret where they were', kept === 'half-typed' && caret === 4 && stillOnIt !== '' && orderNow !== orderWas, [kept, caret, stillOnIt, orderWas === orderNow]);
+            // The press that caused the redraw was on a column head, so the keyboard belongs on that head
+            // afterwards and nowhere else. It must not have been dragged onto a row: the pane settles its
+            // tab stop on every draw, and a draw that thinks the rows held the keyboard takes it off
+            // whatever really had it, which is how a person loses the field they are typing a name into.
+            check('a redraw while a name is being typed keeps the letters and the caret where they were, and the keyboard stays on what was pressed', kept === 'half-typed' && caret === 4 && stillOnIt === 'fb-by-name' && orderNow !== orderWas, [kept, caret, stillOnIt, orderWas === orderNow]);
             await js(front.view, `document.getElementById('fb-name-drop')?.click()`);
             await sleep(150);
 

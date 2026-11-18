@@ -334,7 +334,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const grid = document.createElement('div');
   grid.className = 'fb-grid';
   grid.id = 'fb-grid';
-  grid.append(head, el.list);
+  grid.append(el.list);
+  // The head lives inside the list, not above it. The list is the one thing that scrolls, in both directions,
+  // and a head outside it would have to be kept in step by a listener, which is a frame behind by definition:
+  // a column and its own name coming apart for a frame is the fault this is here to prevent. Sticky holds it
+  // at the top while the rows run under it, and it scrolls sideways with them for nothing.
   at.append(here, recentAt, tools, grid, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
@@ -896,7 +900,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   const draw = () => {
     const here = where || asked;
-    const hadFocus = el.list.contains(document.activeElement);
+    // Whether the rows themselves hold the keyboard, and not merely something inside the list: the heads of
+    // the columns live in the list now, so asking the list would count a press on a head as the rows having
+    // the focus, and the redraw that press causes would then take the keyboard off whatever it was really
+    // on and put it on a row.
+    const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.closest('#fb-list .fb-row') !== null;
     // A long path is cut in the middle, keeping its start and its end: the end says which folder this is and
     // the start says which disk it is on. It is cut here rather than by the stylesheet, because leaning on a
     // text direction to cut from the left moves the leading "/" to the other end of the line.
@@ -953,7 +961,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     findField.disabled = bin.open;
     clearFind.disabled = bin.open || only === '';
 
-    el.list.replaceChildren();
+    // Everything but the head is replaced, and the head itself is left where it is, never taken out and put
+    // back: removing a focused element blurs it to the body, and the head holds the buttons that order the
+    // list, so a redraw caused by pressing one would take the focus off the very thing just pressed.
+    if (head.parentNode !== el.list) el.list.replaceChildren(head);
+    else {
+      while (head.previousSibling) head.previousSibling.remove();
+      while (head.nextSibling) head.nextSibling.remove();
+    }
     binBtn.dataset['open'] = bin.open ? 'yes' : 'no';
     binBtn.setAttribute('aria-pressed', String(bin.open));
     if (bin.open) {
@@ -1086,7 +1101,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       part.textContent = b;
       el.foot.append(part);
     }
-    el.moving.replaceChildren();
+    // Everything moving is drawn afresh, and the naming panel is left where it is. Taking it out of the page
+    // blurs the field inside it, so a person typing a name would lose the focus whenever anything arrived
+    // from the box, and the next letter they typed would go nowhere. Its own words are brought up to date
+    // below instead of it being built again.
+    for (const child of [...el.moving.children]) if (child !== namePanel) child.remove();
     // Deleting asks first, and names what would go. It is asked in the pane rather than on the shell because
     // it is about this tab's own box and folder, and because the answer is one press either way
     // (BUILD-RULES 2.20). Keeping it has the focus, so Enter and Escape both keep it.
@@ -1167,7 +1186,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // a panel that is redrawn under a person's hands must not take their letters back.
     if (naming) {
       const n = naming;
-      const panel = document.createElement('div');
+      const panel = namePanel ?? document.createElement('div');
+      namePanel = panel;
       panel.className = 'fb-ask fb-naming';
       panel.id = 'fb-naming';
       const head = document.createElement('div');
@@ -1238,8 +1258,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       go.append(goWord);
       go.addEventListener('click', () => reallyName());
       acts.append(drop, go);
-      panel.append(head, field, saidLine, acts);
-      el.moving.append(panel);
+      // The field is the one thing never taken out: everything around it is drawn afresh and put back in
+      // order around it, head above and the rest below.
+      for (const child of [...panel.children]) if (child !== field) child.remove();
+      if (field.parentNode !== panel) panel.append(field);
+      panel.prepend(head);
+      panel.append(saidLine, acts);
+      if (panel.parentNode !== el.moving) el.moving.append(panel);
       // The focus goes to the field once, when the panel appears, and the caret sits on the part of the name
       // a person is most likely to be changing. A redraw while they are typing must not move either.
       if (fresh) {
@@ -1253,6 +1278,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         }, 0);
       }
     } else {
+      namePanel?.remove();
+      namePanel = null;
       nameField = null;
     }
     // A hash a person asked for: what it is, a way to copy it, and a place to paste what it should be.
@@ -1943,6 +1970,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // The naming panel's own field, kept for as long as the panel is open so that a redraw puts the same field
   // back rather than a new one: a new one loses the caret, and with it a person's place in the name.
   let nameField: HTMLInputElement | null = null;
+  let namePanel: HTMLElement | null = null;
   type TrashedRow = { name: string; from: string; when: number; size: number; kind: string };
 
   const askHash = (name: string, which: 'sha256' | 'md5'): void => {
