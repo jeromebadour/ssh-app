@@ -228,7 +228,7 @@ ul { list-style: none; }
 .scrim { position: absolute; inset: 0 0 var(--status-h) 0; z-index: 10; display: grid; place-items: center; background: rgba(5, 8, 12, .55); }
 .dialog { width: 440px; padding: 22px 24px 20px; border-radius: calc(var(--r) * 2); background: var(--panel-2); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--remove); }
 .dialog h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
-.dlg-lead { color: var(--text-2); line-height: 1.5; }
+.dlg-lead { line-height: 1.5; }
 .dlg-cmd { display: flex; flex-direction: column; gap: 4px; margin: 14px 0 20px; padding: 10px 12px; border-radius: var(--r); background: var(--term-bg); font-family: var(--mono); font-size: 12.5px; }
 .dlg-cmd-time { font-family: var(--ui); font-size: 12px; color: var(--text-2); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; }
@@ -274,8 +274,8 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .gate-brand.big .mark { width: 56px; height: 56px; }
 .gate-brand.big .wordmark { font-size: 24px; }
 .gate-title { font-size: 21px; font-weight: 600; color: var(--text); }
-.gate-lead { color: var(--text-2); line-height: 1.5; margin-top: -6px; }
-.gate-fact { font-size: 12.5px; line-height: 1.5; color: var(--text-2); padding: 10px 12px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); }
+.gate-lead { line-height: 1.5; margin-top: -6px; }
+.gate-fact { line-height: 1.5; padding: 10px 12px; border-radius: var(--r); background: var(--panel); border: 1px solid var(--line); }
 .gate-wrong { display: flex; align-items: center; gap: 8px; color: var(--problem); margin-top: -4px; }
 .gate-wrong b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .gate-saved { min-height: 18px; text-align: center; font-size: 12px; color: var(--text-3); }
@@ -320,7 +320,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 /* One colour per dialog: its action button takes it too, and nothing in it carries a second accent. */
 .dialog.dlg-problem .btn.primary { background: color-mix(in srgb, var(--problem) 62%, #000); }
 .dialog .input.focus { border-color: var(--text-3); box-shadow: none; }
-.dlg-fact { margin: 0 0 18px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.dlg-fact { margin: 0 0 18px; line-height: 1.5; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr 180px; gap: 12px 14px; margin: 16px 0 4px; }
 .span-2 { grid-column: span 2; }
@@ -335,8 +335,11 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
    keeps the top border off, because the dialog's own title is already above it. */
 .dlg-settings { width: 480px; }
 .dlg-settings .sect:first-of-type { margin-top: 10px; padding-top: 0; border-top: 0; }
-.dlg-settings .said { margin: 0 0 8px; font-size: 12px; color: var(--text-2); word-break: break-all; }
-.dlg-settings .said.quiet { color: var(--text-3); }
+.dlg-settings .said { margin: 0 0 8px; }
+/* Only the path breaks, and only where it must: break-all splits any word at the edge of the line, which it
+   was doing to the sentences under it. overflow-wrap: anywhere breaks a word only when the word alone does
+   not fit, which is what a download path needs and what a sentence never hits. */
+#settings-downloads { overflow-wrap: anywhere; }
 .settings-actions { margin-top: 10px; justify-content: flex-start; }
 .size-row { display: flex; gap: 6px; }
 .size-btn { padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
@@ -348,8 +351,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 /* The first visit (decision O2): the one screen that asks for a box's own password. It reads as a dialog like
    any other, because it is one; what sets it apart is what it says, not how it looks. */
 .dlg-visit { width: 500px; }
-.dlg-visit .said { margin: 0 0 10px; font-size: 12px; color: var(--text-2); }
-.dlg-visit .said.quiet { color: var(--text-3); }
+.dlg-visit .said { margin: 0 0 10px; }
 .dlg-visit .said.problem { color: var(--problem); }
 .dlg-visit .said.ok { color: var(--checked); }
 .visit-form { margin-top: 4px; }
@@ -359,7 +361,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .visit-field:focus { outline: none; border-color: color-mix(in srgb, var(--main) 65%, var(--line)); }
 .visit-field:focus-visible { outline: 2px solid color-mix(in srgb, var(--main) 70%, var(--text-1)); outline-offset: 1px; }
 /* What the box printed back: its own words, so it is shown as text and nothing else, and never acted on. */
-.visit-said { margin: 8px 0 0; padding: 8px 10px; max-height: 120px; overflow: auto; border-radius: 4px; background: var(--term-bg); color: var(--text-3); font-family: 'Plex Mono', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+.visit-said { margin: 8px 0 0; padding: 8px 10px; max-height: 120px; overflow: auto; border-radius: 4px; background: var(--term-bg); color: var(--term-text); font-family: 'Plex Mono', monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bm-foot { display: flex; gap: 6px; }
 .bm-settings { margin-left: auto; }
 .pl-keep { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px; border-radius: var(--r-s); color: var(--text-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
@@ -381,10 +383,14 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .step { display: grid; grid-template-columns: 26px 1fr; gap: 10px; margin-top: 16px; }
 .step-n { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--text-2); }
 .step-title { font-weight: 500; margin-top: 2px; }
-.step-sub { font-size: 12.5px; color: var(--text-2); line-height: 1.5; margin-top: 4px; }
-.codeblock { position: relative; margin-top: 10px; padding: 10px 92px 10px 12px; border-radius: var(--r); background: var(--term-bg); border: 1px solid var(--line); }
-.codeblock code { display: block; font: 400 12px/1.55 var(--mono); color: var(--term-text); word-break: break-all; }
-.codeblock .copy { position: absolute; top: 8px; right: 8px; height: 28px; }
+.step-sub { line-height: 1.5; margin-top: 4px; }
+/* The block holds the command and the button that copies it, side by side. It used to keep the button out
+   of the way with 92px of padding on the right, which is a guess at how wide the button is: once it had been
+   pressed and said "Copied" it was wider than the guess, and it sat on top of the key in the command. The
+   row gives each of them its own room, so neither can be measured wrong. */
+.codeblock { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; padding: 10px 10px 10px 12px; border-radius: var(--r); background: var(--term-bg); border: 1px solid var(--line); }
+.codeblock code { flex: 1; min-width: 0; font: 400 12px/1.55 var(--mono); color: var(--term-text); word-break: break-all; }
+.codeblock .copy { flex: none; height: 28px; }
 .pastebox { margin-top: 8px; padding: 10px 12px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--text-3); font: 400 12px/1.6 var(--mono); color: var(--text); }
 .pastebox > div { padding-left: 2ch; text-indent: -2ch; }
 .verdict { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0 18px 36px; padding: 10px 12px; border-radius: var(--r); background: color-mix(in srgb, var(--checked) 11%, transparent); }
@@ -397,7 +403,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .fp.now { border-color: color-mix(in srgb, var(--problem) 55%, var(--line)); }
 .fp-label { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
 .fp.now .fp-label { color: var(--problem); }
-.fp-val { font-size: 12px; line-height: 1.55; color: var(--text); word-break: break-all; }
+.fp-val { line-height: 1.55; color: var(--text); word-break: break-all; }
 .fp-withheld { color: var(--text-3); font-family: var(--ui); font-size: 11.5px; word-break: normal; overflow-wrap: anywhere; }
 
 /* ---------- a tab's link, said inside its terminal ---------- */
@@ -540,7 +546,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .reach-bar > .glyph { width: 16px; height: 16px; color: var(--problem); flex: none; }
 .reach-bar > div { flex: 1; min-width: 0; }
 .reach-title { font-weight: 500; color: var(--text); }
-.reach-sub { margin-top: 3px; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.reach-sub { margin-top: 3px; line-height: 1.5; }
 .dlg-actions.gap-top { margin-top: 18px; }
 /* A box's tabs folded into one when the bar is full: the count opens them as a list. */
 .tab-group.folded { position: relative; }
@@ -622,9 +628,8 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 
 /* A paste, read before it is sent (ui/pastedialog.tsx). */
 #paste .said { margin: 0 0 10px; }
-#paste .said.quiet { color: var(--text-3); }
 #paste .odd { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 6px; border-radius: 4px; background: color-mix(in srgb, var(--problem) 10%, transparent); }
-#paste .odd li { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+#paste .odd li { display: flex; align-items: center; gap: 10px; }
 #paste .odd li .glyph { color: var(--problem); flex: none; }
 #paste .odd li .where { color: var(--text-3); min-width: 150px; }
 #paste .odd li .what { flex: 1; }
@@ -661,13 +666,13 @@ textarea.pastebox:focus { border-color: var(--text-2); }
    were written against #remove-box alone, so the closing question, which is the same kind of question and uses
    the same shell, came out with none of it: a bare line of text run into the paragraph under it. */
 .dlg-remove .goes { margin: 0 0 12px; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 8px; border-radius: 4px; background: var(--term-bg); }
-.dlg-remove .goes li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.dlg-remove .goes li { display: flex; align-items: center; gap: 10px; }
 .dlg-remove .goes li .glyph { flex: none; color: var(--text-3); }
 .dlg-remove .goes li .quiet { color: var(--text-3); }
-.dlg-remove .said.quiet { margin: 0 0 14px; color: var(--text-3); font-size: 12.5px; }
+.dlg-remove .said.quiet { margin: 0 0 14px; }
 #remove-box .btn kbd { margin-left: 8px; padding: 1px 5px; border-radius: 2px; background: rgba(0, 0, 0, .3); font: 500 11px/1.4 var(--mono); }
 /* The identity a box is pinned to, in Edit box. */
-#add-box .key-sub.mono { font-family: var(--mono); font-size: 11.5px; }
+#add-box .key-sub.mono { font-family: var(--mono); }
 /* The key section carries its own button at the end of the row: use a key file, or let Berth make one. The
    name of a chosen file can be long, so the words take what room is left and the button keeps its own. */
 .key-sect .key-main { min-width: 0; }
@@ -675,3 +680,33 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 .key-sect > .btn { flex: none; margin-left: auto; }
 .key-sect .check { margin-top: 3px; }
 #add-box #edit-pinned .btn { margin-left: auto; }
+
+/* ---------- what a person reads in a dialog ---------- */
+/* BUILD-RULES 2.14: text people read at length is at least 14.5px at weight 450, and 4.5:1 or better
+   against its own surface. Every sentence in every dialog was 12px, 12.5px or the body's 13px, and the
+   quiet ones took --text-3, which measures 4.30:1 on --panel-2 and 4.69:1 on --panel: below the 4.5:1
+   a person reading is owed. That is what "the font in dialogs is barely readable" was (Kami, #16).
+   One rule owns it, so a new dialog cannot be born small: the per-dialog font-size and colour that used
+   to sit on each of these was taken off rather than overridden, because a second opinion further down
+   the file is how the glyph palette came to have no effect at all.
+   Quiet prose is still quiet: it stays --text-2 and carries its quietness in weight, not in a fade,
+   which 2.14 forbids. A sentence that carries a verdict keeps its own colour (.problem, .ok). */
+.dlg-lead, .dlg-fact, .gate-lead, .gate-fact, .step-sub, .reach-sub,
+.dlg-remove .goes li, #paste .odd li,
+.dialog .said, .gate .said, #paste .said, #link .said {
+  font-size: 14.5px;
+  font-weight: 450;
+  line-height: 1.5;
+  color: var(--text);
+}
+/* The quiet half of a dialog's words: what stands under the sentence that answers the question. 2.14 sets
+   one floor for everything a person reads, so quiet can no longer be a smaller size or a fade; it is the one
+   step of colour that is still above the floor. --text is 8.95:1 on a dialog and --text-2 is 5.66:1, so both
+   halves are read and the dialogs gain the order they had been faking with size. */
+.dlg-fact, .gate-fact, .step-sub, .reach-sub,
+.dialog .said.quiet, .gate .said.quiet, #paste .said.quiet { color: var(--text-2); }
+.dialog .said.problem, .gate .said.problem { color: var(--problem); }
+.dialog .said.ok, .gate .said.ok { color: var(--checked); }
+/* A fingerprint is compared character by character against what a box printed, which is the closest
+   reading in the app; mono at 13.5px keeps the digits apart without widening its box. */
+.fp-val, .verdict-sub.mono, .key-sub.mono { font-size: 13.5px; }
