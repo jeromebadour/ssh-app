@@ -39,11 +39,11 @@ export function SettingsDialog(props: {
           <p class="said" id="settings-downloads">{props.downloadsNow}</p>
           <p class="said quiet" id="settings-downloads-why">
             {chosen
-              ? 'Your own folder. Everything brought over from a box lands here, under a name this PC can hold.'
-              : "Berth's own folder, made the first time something is brought over. Choose another if you would rather it landed elsewhere."}
+              ? 'Everything brought over from a box lands here, under a name this PC can hold.'
+              : "Berth's own folder, made the first time something is brought over."}
           </p>
           <p class="said quiet" id="settings-downloads-warn">
-            A folder that syncs to the internet would send every file you bring over with it. Berth cannot tell which folders those are, so that one is yours to think about.
+            A folder that syncs to the internet sends every file you bring over with it. Berth cannot tell which folders those are.
           </p>
           <div class="dlg-actions settings-actions">
             <button type="button" class="btn keep-plain" id="settings-downloads-default" disabled={!chosen} onClick={props.onDefault}>
@@ -58,7 +58,7 @@ export function SettingsDialog(props: {
         <section class="sect">
           <SectionHead glyph="zoom" title="How big a new tab's file list starts" />
           <p class="said quiet" id="settings-size-why">
-            Every tab can still be changed on its own with Ctrl and plus, minus or nought. This is only where a new one starts.
+            Ctrl with plus, minus or nought still changes one tab on its own.
           </p>
           <div class="size-row" id="settings-sizes" role="group" aria-label="How big a new tab's file list starts">
             {sizes.map((s) => (
