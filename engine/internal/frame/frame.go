@@ -32,6 +32,12 @@ const (
 	TypeBanner      byte = 0x24 // engine to main: the box's sign-in text, raw. Text from a box: terminal only
 	TypeExit        byte = 0x25 // engine to main: the shell ended, with its status if the box gave one
 	TypeNotice      byte = 0x26 // engine to main: something the tab must say (the box is waiting on the window, typed bytes were dropped)
+	// The first visit only (plan O2). A box may ask its own questions at sign-in instead of taking the
+	// password plainly: a code from a phone, or the password under another name. The questions are the
+	// box's own words and go no further than the one screen that asks them; the answers come back here and
+	// are held only for the length of that sign-in.
+	TypeAskQuestions byte = 0x27 // engine to main: the box asked these at sign-in (JSON)
+	TypeAnswers      byte = 0x2a // main to engine: the answers, in the order they were asked (JSON)
 
 	// Files. A tab's files travel on a channel of their own, so asking for a listing never holds up what is
 	// typed. A listing comes back as pages, each its own frame, and a page carries only what a row shows.

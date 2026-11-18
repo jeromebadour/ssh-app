@@ -867,6 +867,17 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const said = await until(async () => (await has('#first-visit-done')), 30_000);
           const reallyIn = [...ctx.tabs.values()].some((t) => t.box?.id === idA && t.engine.link.phase === 'up');
           check('it says it worked only after signing back in with the key alone, and the tab is really up', said && reallyIn, [said, reallyIn]);
+          // Answers to a box's own questions are taken only while a sign-in is waiting for them. Nothing is
+          // asking now, so these are dropped and counted: a view that has been taken over cannot hand an
+          // answer to a sign-in that did not ask, nor to a box that is not the one on the screen.
+          {
+            const droppedBefore = ctx.dropped();
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'firstVisitAnswers', box: ${JSON.stringify(idA)}, answers: ['123456'] })`);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'firstVisitAnswers', box: 'bno-such-box', answers: ['123456'] })`);
+            await sleep(300);
+            refusedByTheLock += 2;
+            check('answers to questions nothing asked are dropped and counted', ctx.dropped() === droppedBefore + 2, ctx.dropped() - droppedBefore);
+          }
           await clickOn('#first-visit-close');
           // Once, whatever happens: a second visit to the same box is refused.
           await js(ctx.shell, `window.shellPort.cmd({ op: 'firstVisit', box: ${JSON.stringify(idA)} })`);

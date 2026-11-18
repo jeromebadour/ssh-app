@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -37,6 +38,13 @@ const firstVisitOutputMax = 64 << 10
 // answer to a question of its own. Berth cannot answer that here, and says so rather than failing as though
 // the password were wrong.
 var ErrAskedSomethingElse = errors.New("link: the box asked for something a password cannot answer")
+
+// saysPassword is whether a box's question is the password being asked for. It is a reading of a box's own
+// words and so is never a proof of anything (plan A5): the worst it can do is send one question to the
+// screen that he could have answered from what he already typed, or answer "Password:" without asking.
+func saysPassword(q string) bool {
+	return strings.Contains(strings.ToLower(q), "password")
+}
 
 // FirstVisit signs in once with a password, runs the one command it is given, and closes. It returns what the
 // box printed. The password is held only for the length of this call.
@@ -77,6 +85,7 @@ func FirstVisit(ctx context.Context, t Target, password string, command string, 
 	// A box that wants something a password cannot answer is told apart from a wrong password, because the two
 	// are different things to a person and only one of them is worth typing again.
 	askedElse := false
+	rounds := 0
 	cfg := &ssh.ClientConfig{
 		Config: ssh.Config{KeyExchanges: keyExchanges, Ciphers: ciphers, MACs: macs},
 		User:   t.User,
@@ -90,11 +99,53 @@ func FirstVisit(ctx context.Context, t Target, password string, command string, 
 				if len(questions) == 0 {
 					return nil, nil // some boxes open with nothing to ask
 				}
-				if len(questions) != 1 || (len(echos) == 1 && echos[0]) {
+				// One hidden question that says "password" is the password being asked for under another
+				// name, and is answered from what he already typed rather than asked for again. Anything
+				// else, even one hidden question, is the box asking for something of its own: a box with a
+				// second factor asks for its code exactly as a box asks for a password, so a client that
+				// reads every hidden question as the password would hand the password to that prompt and
+				// call the visit failed. With nobody to ask, the old reading is kept: it is the only answer
+				// that process has.
+				if len(questions) == 1 && (len(echos) != 1 || !echos[0]) && (opt.OnAsk == nil || saysPassword(questions[0])) {
+					return []string{password}, nil
+				}
+				// Anything else is the box asking for something of its own: a code from a phone, a question
+				// only he can answer. With nobody to ask, that is refused exactly as it was before.
+				if opt.OnAsk == nil {
 					askedElse = true
 					return nil, ErrAskedSomethingElse
 				}
-				return []string{password}, nil
+				rounds++
+				if rounds > AskRoundMax || len(questions) > AskMax {
+					askedElse = true
+					return nil, ErrAskedSomethingElse
+				}
+				// The box's own words, cut before they leave this process: a box that is already in someone
+				// else's hands does not get to fill a window with whatever it likes.
+				asked := make([]string, len(questions))
+				for i, q := range questions {
+					if len(q) > AskedMax {
+						q = q[:AskedMax]
+					}
+					asked[i] = q
+				}
+				show := make([]bool, len(asked))
+				copy(show, echos)
+				answers, aerr := opt.OnAsk(asked, show)
+				if aerr != nil {
+					askedElse = true
+					return nil, aerr
+				}
+				if len(answers) != len(asked) {
+					askedElse = true
+					return nil, ErrAskedSomethingElse
+				}
+				for i, an := range answers {
+					if len(an) > AnswerMax {
+						answers[i] = an[:AnswerMax]
+					}
+				}
+				return answers, nil
 			}),
 		},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
