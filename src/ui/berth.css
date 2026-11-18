@@ -215,6 +215,17 @@ ul { list-style: none; }
 .status { display: flex; align-items: center; gap: 20px; padding: 0 14px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .status > span { display: flex; align-items: center; gap: 6px; }
 .status .glyph { width: 14px; height: 14px; }
+/* The fields of the status line (Kami's #17). Each is a glyph and a value, and the colour is the meaning:
+   a plain number reads as a number, a protection in place is the checked colour, anything he has to notice
+   takes the problem colour the connection mark already uses for the same thing, and a state that is merely
+   waiting stays quiet. The glyph keeps its field's colour, so a glance across the line reads as marks. */
+.s-f { gap: 6px; }
+.s-f .glyph { width: 13px; height: 13px; }
+.s-tone-plain { color: var(--text); }
+.s-tone-quiet { color: var(--text-3); }
+.s-tone-checked { color: var(--checked); }
+.s-tone-main { color: var(--main); }
+.s-tone-problem { color: var(--problem); }
 .s-conn { color: var(--text); }
 .s-key .glyph { color: var(--owner); }
 .s-last { margin-left: auto; color: var(--text); }
