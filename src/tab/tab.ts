@@ -5,7 +5,7 @@ import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
 import { Blocks } from './blocks';
 import { drawChrome, folded, type Chrome } from './chrome';
-import { makeAsker, startFiles } from './files';
+import { glyph, makeAsker, startFiles } from './files';
 import { startViewer } from './viewer';
 import { clock } from './states';
 import { openTerminal, type Term } from './term';
@@ -14,6 +14,11 @@ declare global {
   interface Window {
     tabPort: TabPort;
     berthTerm: Term & { policyFaults(): string[]; pace(): { front: boolean; share: number; rested: number; taken: number; waiting: number } }; // read by the lab's self-test, which runs in main
+    // The shape this pane draws for a name, read by the lab's self-test. A glyph name the pane does not know
+    // is not an error anywhere: it quietly draws the question mark. The probe that sweeps every menu for one
+    // asks here what the pane draws when it does not know a name, rather than holding a copy of that shape,
+    // which would pass the day the shape changed.
+    berthGlyphPath: (name: string) => string;
   }
 }
 
@@ -35,6 +40,7 @@ const term = openTerminal(host, {
   selected: (text) => port.copy(text),
   link: (url) => port.link(url),
 });
+window.berthGlyphPath = (name) => glyph(name).querySelector('path')?.getAttribute('d') ?? '';
 window.berthTerm = { ...term, policyFaults: () => policyFaults.slice(0, 20), pace: () => ({ front, share, rested, taken: total, waiting: waiting.length }) };
 
 // Output goes to the terminal one piece after another, and is counted as taken once the terminal has worked
