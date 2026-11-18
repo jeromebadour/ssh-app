@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, rm, stat, statfs, writeFile } from 'node:fs/p
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
-import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
+import { addrOf, signsWith, TMUX_NAME, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
 import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
@@ -279,7 +279,7 @@ function info(t: Tab): TabInfo {
   // The id of the log line for the failure that ended this link, if one ended it, is main's to add: the
   // engine knows the cause, main is what wrote it down, and the window needs the id to say it.
   const said = doingNow.get(t.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519' } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
+  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519', keepsRunning: place?.tmux === true } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
 }
 
 // The morning (B3, his own words 2026-11-15): the app starts with nothing open, and one offer to open again
@@ -362,7 +362,7 @@ function linkEnded(t: Tab): void {
 }
 
 function boxView(b: Box): BoxView {
-  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => ({ name: p.name, folder: p.folder })), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
+  return { id: b.id, name: b.name, colour: b.colour, host: b.host, port: b.port, user: b.user, folder: b.folder, places: b.places.map((p) => (p.tmux === true ? { name: p.name, folder: p.folder, tmux: true } : { name: p.name, folder: p.folder })), pinned: b.pin !== '', pinFingerprint: b.pinFingerprint, pinType: b.pin.startsWith('ssh-rsa ') ? 'RSA' : b.pin === '' ? '' : 'ED25519', pinnedAt: b.pinnedAt };
 }
 
 function checkShown(): CheckShown | null {
@@ -661,7 +661,15 @@ function openTab(boxId = '', place = ''): Tab | null {
     if (!box || box.pin === '') return null;
     const at = place === '' ? null : box.places.find((p) => p.name === place);
     if (place !== '' && !at) return null;
-    aim = { stub: false, box: { addr: addrOf(box), user: box.user, hostKey: box.pin, key: box.id, publicKey: box.publicKey }, shell: { folder: at ? at.folder : box.folder, term: 'xterm-256color', cols: 120, rows: 40 } };
+    // A tmux place is one session on the box, so it is one tab here. Opening it twice would attach the same
+    // session to two tabs, which tmux draws at the smaller of the two sizes and types into both at once.
+    if (at?.tmux && [...tabs.values()].some((t) => t.box?.id === box!.id && t.place === place)) {
+      done = `${place} is already open: it keeps running, so it is one tab`;
+      tellShell();
+      return null;
+    }
+    const keepsRunning = at?.tmux === true && TMUX_NAME.test(at.name) ? at.name : '';
+    aim = { stub: false, box: { addr: addrOf(box), user: box.user, hostKey: box.pin, key: box.id, publicKey: box.publicKey }, shell: { folder: at ? at.folder : box.folder, tmux: keepsRunning, term: 'xterm-256color', cols: 120, rows: 40 } };
   }
   const aimedAt = box;
   const id = nextTabId++;

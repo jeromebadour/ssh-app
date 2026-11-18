@@ -117,6 +117,16 @@ export function AddBoxDialog(props: AddBoxProps) {
   const set = (change: Partial<BoxDraft>) => setD({ ...d, ...change });
   // There is always one empty place row at the end, showing an example.
   const rows: Place[] = [...d.places.filter((p) => p.name !== '' || p.folder !== ''), { name: '', folder: '' }];
+  // The tick is drawn with the app's own glyph over a checkbox that is there but cannot be seen: the page's
+  // content policy allows no picture but the app's own files, so a tick drawn any other way draws nothing.
+  const keepsRunningTick = (p: Place, i: number, last: boolean) =>
+    last ? null : (
+      <label class="pl-keep" title="Keeps running on the box when the link dies, in tmux">
+        <input type="checkbox" id={`place-${i}-keeps`} checked={p.tmux === true} onChange={() => setPlace(i, { ...p, tmux: p.tmux !== true })} />
+        <span class="ro-tick"><Glyph name="check" /></span>
+        <span class="pl-keep-words">Keeps running</span>
+      </label>
+    );
   const setPlace = (i: number, p: Place) => set({ places: rows.map((r, j) => (j === i ? p : r)).filter((r) => r.name !== '' || r.folder !== '') });
   const faults = { ...draftFaults(d, props.taken), ...props.refused };
   const toFix = Object.keys(faults).filter((k) => tried || !['name', 'host', 'user'].includes(k) || faults[k] !== 'needed').length;
@@ -197,6 +207,7 @@ export function AddBoxDialog(props: AddBoxProps) {
                       <span class={`input sized mono ${c?.state === 'fix' && p.name !== '' ? 'wrong' : ''}`} style={{ '--w': '25ch' }}>
                         <input id={`place-${i}-folder`} type="text" autocomplete="off" spellcheck={false} placeholder={last ? '/var/log/ledger' : ''} value={p.folder} onInput={(e) => setPlace(i, { ...p, folder: (e.target as HTMLInputElement).value })} onKeyDown={(e) => e.key === 'Enter' && add()} />
                       </span>
+                      {keepsRunningTick(p, i, last)}
                       {!last && <button type="button" class="pl-x-btn" aria-label={`Remove place ${p.name}`} onClick={() => set({ places: rows.filter((_, j) => j !== i && j !== rows.length - 1) })}><Glyph name="close" class="pl-x" /></button>}
                       {c?.state === 'fix' && <span class="check check-fix row-check"><Glyph name="fix" />{c.text}</span>}
                     </div>

@@ -114,6 +114,7 @@ export interface TabBox {
   user: string;
   folder: string; // the place's folder, or the box's starting folder
   pinType: string; // 'ED25519' or 'RSA': the kind of identity pinned for this box
+  keepsRunning: boolean; // a tmux place: what runs in it survives a link that is truly gone (plan B2.5, line 2)
 }
 
 export interface TabInfo {

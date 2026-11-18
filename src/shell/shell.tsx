@@ -214,7 +214,7 @@ function Unlocked(props: { s: ShellState }) {
           refused={refusal?.fields ?? {}}
           error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''}
           editing={{
-            draft: { name: editing.name, colour: editing.colour, host: editing.host, port: String(editing.port), user: editing.user, folder: editing.folder, places: editing.places.map((p) => ({ name: p.name, folder: p.folder })) },
+            draft: { name: editing.name, colour: editing.colour, host: editing.host, port: String(editing.port), user: editing.user, folder: editing.folder, places: editing.places.map((p) => (p.tmux === true ? { name: p.name, folder: p.folder, tmux: true } : { name: p.name, folder: p.folder })) },
             pinType: editing.pinType,
             pinFingerprint: editing.pinFingerprint,
             pinnedAt: editing.pinnedAt,

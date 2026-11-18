@@ -32,7 +32,7 @@ export type SignAnswer = { signature: string } | { error: string };
 // What an engine is aimed at, once: nothing (the skeleton's echo, for the self-test), or one box.
 export type EngineAim =
   | { stub: true }
-  | { stub: false; box: { addr: string; user: string; hostKey: string; key: string; publicKey: string }; shell: { folder: string; term: string; cols: number; rows: number } };
+  | { stub: false; box: { addr: string; user: string; hostKey: string; key: string; publicKey: string }; shell: { folder: string; tmux: string; term: string; cols: number; rows: number } };
 
 const SIGN_REQUESTS_MAX = 4; // one link asks once; more than a few is not a sign-in
 const SIGN_DATA_MAX = 8 * 1024; // base64 characters

@@ -14,7 +14,16 @@ export const PASTE_MAX = 16 * 1024; // the most text taken from a paste into the
 export interface Place {
   name: string;
   folder: string;
+  // A tmux place keeps running on the box when the link dies (plan B2.5, line 2, and step 7). Its own name
+  // is the tmux session's name, so there is one name and not two, and that is why a place marked this way is
+  // held to the characters tmux leaves alone.
+  tmux?: boolean;
 }
+
+// What a tmux place's name may be: letters, digits, dash and underscore, 1 to 32. tmux gives . and : a
+// meaning inside a name, so a name under this rule reaches tmux as a name and never as anything else. The
+// engine holds the same rule again on its own side.
+export const TMUX_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 
 export interface Box {
   id: string; // made by the app; also the name the key process knows this box's key by
@@ -140,12 +149,17 @@ export function checkPlace(place: Place, others: readonly Place[]): Check | null
   if (place.name === '') return fix('a place needs a name');
   if (place.name !== place.name.trim() || place.name.length > NAME_MAX || !/^[\p{L}\p{N}][\p{L}\p{N} ._-]*$/u.test(place.name) || UNSAFE.test(place.name)) return fix('a short name: letters, digits, dashes');
   if (others.some((o) => o.name.toLowerCase() === place.name.toLowerCase())) return fix('two places with one name');
+  // A tmux place's name is the session's name on the box, so it is held to what tmux leaves alone. It is
+  // said as the name to change, because the tick is the thing he just pressed.
+  if (place.tmux && !TMUX_NAME.test(place.name)) return fix('a keeps-running name: letters, digits, - and _');
   const fault = folderFault(place.folder);
   return fault ? fix(fault) : ok('');
 }
 
 export function placesOf(draft: BoxDraft): Place[] {
-  return draft.places.filter((p) => p.name !== '' || p.folder !== '');
+  // A plain place carries no mark at all: only a place that keeps running says so in the saved list, so a
+  // list written before this existed and one written after it are the same file for the same places.
+  return draft.places.filter((p) => p.name !== '' || p.folder !== '').map((p) => (p.tmux === true ? { name: p.name, folder: p.folder, tmux: true } : { name: p.name, folder: p.folder }));
 }
 
 // Everything still to fix in a draft, by field; empty when it can be added. An empty required field counts.

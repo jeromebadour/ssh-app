@@ -2890,7 +2890,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       clearInterval(watching);
       check('a tab on the box: the link comes up, signed in by the key process', up && t.engine.signAsked >= 1 && t.engine.signRefused === 0 && ctx.signsRefused() === 0, [t.engine.link, phases, t.engine.signAsked, t.engine.signRefused, ctx.signsRefused()]);
       check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
-      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs', addr, user: 'demo', folder: "/var/log/it's here", pinType: 'ED25519' }), ctx.shellState().tabs);
+      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs', addr, user: 'demo', folder: "/var/log/it's here", pinType: 'ED25519', keepsRunning: false }), ctx.shellState().tabs);
       await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
       // What the box said at sign-in is folded into one line, with the real notice in it lifted onto that
       // line; nothing of it is drawn in the terminal until the line is opened.
@@ -3262,8 +3262,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         // Whether the window is in use is asked here, not once at the top of all the key probes: a machine
         // that hands out focus can take it away again between one press and the next, and a precondition
         // read long before the press it guards turns a probe about the app into a probe about the machine.
-        ctx.win.focus();
-        const inUse = await until(() => ctx.win.isFocused() && !ctx.overlayOn(), 4000);
+        // Asked again before every press, not once for the group: this block makes four presses over
+        // several seconds, and a machine that hands out focus can take it back between any two of them.
+        const stillInUse = async (): Promise<boolean> => {
+          ctx.win.focus();
+          return await until(() => ctx.win.isFocused() && !ctx.overlayOn(), 4000);
+        };
+        const inUse = await stillInUse();
         const before = await clipboard.readText();
         const boxBefore = await boxGot();
         press(t.view.webContents, 'A', ['control', 'shift']);
@@ -3282,20 +3287,22 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const into = path.join(os.tmpdir(), `berth-saved-${randomBytes(5).toString('hex')}.txt`);
           ctx.savesTo(() => into);
           const clipBeforeSave = await clipboard.readText();
+          const useSave = await stillInUse();
           press(t.view.webContents, 'S', ['control', 'shift']);
           // Waiting on the window's own word, not on the file appearing: a file exists from the first byte
           // written, and reading it then is reading something half written.
           const written = (await until(() => ctx.shellState().done.startsWith('Saved '), 5000)) && (await there(into));
           const held = written ? await readFile(into, 'utf8') : '';
-          check('Ctrl+Shift+S saves the whole terminal into the file he picked, and the box is given nothing', !inUse || (written && held.length > 40 && held.startsWith(onClipboard.slice(0, 60)) && (await boxGot()) === ''), [inUse, ...keysCouldWork(), written, held.length, onClipboard.length]);
-          check('saving leaves the clipboard exactly as it was: it is a file, not a copy', (await clipboard.readText()) === clipBeforeSave, [clipBeforeSave.length, (await clipboard.readText()).length]);
-          check('and the window says what was saved, naming the file', !inUse || (ctx.shellState().done.startsWith('Saved ') && ctx.shellState().done.includes(path.basename(into))), ctx.shellState().done);
+          check('Ctrl+Shift+S saves the whole terminal into the file he picked, and the box is given nothing', !useSave || (written && held.length > 40 && held.startsWith(onClipboard.slice(0, 60)) && (await boxGot()) === ''), [useSave, ...keysCouldWork(), written, held.length, onClipboard.length]);
+          check('saving leaves the clipboard exactly as it was: it is a file, not a copy', !useSave || (await clipboard.readText()) === clipBeforeSave, [clipBeforeSave.length, (await clipboard.readText()).length]);
+          check('and the window says what was saved, naming the file', !useSave || (ctx.shellState().done.startsWith('Saved ') && ctx.shellState().done.includes(path.basename(into))), ctx.shellState().done);
           // Nothing is written behind his back: the chooser answered with nothing means no file at all.
           const andNot = path.join(os.tmpdir(), `berth-saved-${randomBytes(5).toString('hex')}.txt`);
           ctx.savesTo(() => undefined);
+          const useNothing = await stillInUse();
           press(t.view.webContents, 'S', ['control', 'shift']);
           await until(() => ctx.shellState().done === 'Nothing was saved', 5000);
-          check('a chooser he answers with nothing writes no file at all, and the window says so', !inUse || (ctx.shellState().done === 'Nothing was saved' && !(await there(andNot))), ctx.shellState().done);
+          check('a chooser he answers with nothing writes no file at all, and the window says so', !useNothing || (ctx.shellState().done === 'Nothing was saved' && !(await there(andNot))), [useNothing, ...keysCouldWork(), ctx.shellState().done]);
           // Under a dialog of the window's own the key is not acted on at all, so nothing is handed over.
           const refusedBefore = ctx.saves().refused;
           await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
@@ -3433,6 +3440,41 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       B.paste(id, printed2);
       const pinnedLast = await B.trust(id);
       check('and after all of that the box is left as a box should be: named, keyed and pinned', pinnedLast.ok && box().name === 'lab-box' && box().publicKey !== '' && box().pin !== '', [pinnedLast, box().name, box().pin !== '']);
+
+      // ---- A place that keeps running: tmux (step 7, plan B2.5 line 2). ----
+      {
+        const asIs = { name: box().name, colour: box().colour, host: box().host, port: String(box().port), user: box().user, folder: box().folder, places: box().places.map((p) => (p.tmux === true ? { name: p.name, folder: p.folder, tmux: true } : { name: p.name, folder: p.folder })) };
+        // A name tmux would not leave alone is refused by main, by field, and nothing is saved: tmux gives
+        // . and : a meaning inside a name, so a place marked this way is held to what it leaves alone.
+        const badName = await B.edit(id, { ...asIs, places: [...asIs.places, { name: 'a.b c', folder: '/var/log', tmux: true }] });
+        check('a keeps-running place whose name is not one tmux leaves alone is refused, by field', !badName.ok && badName.error === 'fields' && JSON.stringify(badName.fields ?? {}).includes('keeps-running name') && box().places.length === asIs.places.length, badName);
+        // The same name without the tick is a plain place and is taken: the rule belongs to the tick.
+        const plainOk = await B.edit(id, { ...asIs, places: [...asIs.places, { name: 'a.b c', folder: '/var/log' }] });
+        check('and the same name without the tick is an ordinary place, taken as it always was', plainOk.ok && box().places.some((p) => p.name === 'a.b c' && p.tmux !== true), plainOk);
+        const withKeep = await B.edit(id, { ...asIs, places: [...asIs.places, { name: 'build', folder: "/var/log/it's here", tmux: true }] });
+        check('a keeps-running place is saved with its mark, and a plain place carries none at all', withKeep.ok && box().places.find((p) => p.name === 'build')?.tmux === true && box().places.find((p) => p.name === 'logs')?.tmux === undefined, [withKeep, JSON.stringify(box().places)]);
+        const before = ((await lab.tell('seen'))['sessions'] ?? []) as { Command?: string }[];
+        const keeping = ctx.openTab(id, 'build');
+        check('a keeps-running place opens a tab', keeping !== null, '');
+        if (keeping) {
+          await until(async () => (((await lab.tell('seen'))['sessions'] ?? []) as unknown[]).length > before.length, 20_000);
+          const now = ((await lab.tell('seen'))['sessions'] ?? []) as { Command?: string }[];
+          const asked = now.slice(before.length).map((x) => x.Command ?? '').find((c) => c !== '');
+          const want = `exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build' -c '/var/log/it'\\''s here'`;
+          check('and the box is asked for this app\u2019s own tmux server and the place\u2019s session, and nothing else', asked === want, [asked, want]);
+          // One session on the box is one tab here: opening it again would attach the same tmux session to
+          // two tabs, which tmux then draws at the smaller of the two sizes and types into both at once.
+          const twice = ctx.openTab(id, 'build');
+          check('a keeps-running place opened again opens no second tab, and the window says why', twice === null && ctx.shellState().done.includes('already open'), [twice === null, ctx.shellState().done]);
+          // A plain place of the same box is untouched by any of it.
+          const plainAgain = ctx.openTab(id, 'logs');
+          check('a plain place of the same box still opens as it always did', plainAgain !== null, '');
+          if (plainAgain) ctx.closeTab(plainAgain.id);
+          ctx.closeTab(keeping.id);
+        }
+        await B.edit(id, asIs);
+        check('the box is left as it was before any of this', box().places.length === asIs.places.length && box().places.every((p) => p.tmux === undefined), JSON.stringify(box().places));
+      }
 
       ctx.closeTab(t.id);
 

@@ -35,7 +35,7 @@ function play(i) { if (i >= steps.length) return; const s = steps[i]; if (s === 
   return { bin, hashes };
 }
 
-const REAL: EngineAim = { stub: false, box: { addr: '203.0.113.58:22', user: 'deploy', hostKey: 'ssh-ed25519 AAAA', key: 'b0123456789abcdef', publicKey: 'ssh-ed25519 BBBB' }, shell: { folder: '', term: 'xterm-256color', cols: 120, rows: 40 } };
+const REAL: EngineAim = { stub: false, box: { addr: '203.0.113.58:22', user: 'deploy', hostKey: 'ssh-ed25519 AAAA', key: 'b0123456789abcdef', publicKey: 'ssh-ed25519 BBBB' }, shell: { folder: '', tmux: '', term: 'xterm-256color', cols: 120, rows: 40 } };
 
 interface Run {
   engine: Engine;

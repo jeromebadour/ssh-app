@@ -292,6 +292,9 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
                   <div class="bm-row" key={p.name} role="menuitem" data-place={p.name} onClick={(e) => { e.stopPropagation(); open(b, p.name); }}>
                     <Glyph name="place" class="fm-glyph" />
                     <span class="bm-name">{p.name}</span>
+                    {/* A place that keeps running is marked here, where he picks it: the difference between
+                        this place and the one above it is the whole reason he made it. */}
+                    {p.tmux && <Glyph name="reopen" class="bm-keeps" label="keeps running" />}
                   </div>
                 ))}
               </div>

@@ -263,6 +263,11 @@ port.onState((info) => {
   }
   // The end of a link is also written where it happened, in the terminal, in Berth's own words.
   if (info.box && info.link.phase === 'ended' && now !== last) term.note(`Berth: the link is gone: ${ending(info.link.cause).said} at ${clock(Date.now())}`);
+  // A keeps-running place whose shell ended at once with the status a shell gives a command it could not
+  // find: the box has no tmux. Said as that, once, because "the shell ended" tells him nothing he can act on.
+  if (info.box?.keepsRunning && info.link.phase === 'ended' && info.link.exitStatus === 127 && now !== last) {
+    term.note(`Berth: this box has no tmux, so ${info.box.place} cannot keep running. Take the tick off the place, or install tmux on the box.`);
+  }
   if (info.link.droppedBytes > 0 && now !== last) term.note(`Berth: ${info.link.droppedBytes} typed bytes could not be kept for the box`);
   last = now;
 });

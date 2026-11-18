@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,18 @@ func openLab(t *testing.T) *realLab {
 
 // run starts a command on the box the plain SSH way and returns what it printed. The app itself never does
 // this outside the plan's list; here it is how a test sees that a real shell is on the other end.
+// mustDial is one more link to the same box, for a test that needs a second or a third one. Each is closed
+// by the test that made it, or by the box when the test ends.
+func mustDial(t *testing.T, to Target, signer ssh.Signer) *Link {
+	t.Helper()
+	l, err := Dial(context.Background(), to, signer, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	return l
+}
+
 func run(t *testing.T, l *Link, cmd string, limit time.Duration) string {
 	t.Helper()
 	s, err := tryRun(l, cmd, limit)
@@ -313,6 +326,71 @@ func TestOpenSSH(t *testing.T) {
 				if code, ok := sh.ExitStatus(); !ok || code != 3 {
 					t.Fatalf("exit status %d %v", code, ok)
 				}
+			})
+
+			// Step 7's whole point, against a real box: a job started in a tmux place is still running after
+			// the link it was started on is not merely closed but gone. The link is killed underneath, so
+			// the box is given no chance to tidy up, and a second link then reads the file the job keeps
+			// writing to. A plain place cannot do this and is not expected to.
+			t.Run("a tmux place: the job outlives a link that is truly gone", func(t *testing.T) {
+				// Not skipped when tmux is missing: these boxes are ours and are built with it, so a run
+				// that cannot find it is a broken lab, and a test that quietly skips proves nothing.
+				if _, err := tryRun(mustDial(t, honest, lab.user), "command -v tmux", 10*time.Second); err != nil {
+					t.Fatalf("the lab box has no tmux, so step 7 cannot be proven here: %v", err)
+				}
+				mark := "/tmp/berth-alive-" + strconv.Itoa(os.Getpid())
+				run(t, mustDial(t, honest, lab.user), "rm -f "+mark+"; tmux -L berth kill-server 2>/dev/null; true", 10*time.Second)
+				first := mustDial(t, honest, lab.user)
+				sh, err := first.OpenShell(ShellOptions{Folder: "/tmp", Tmux: "survivor", Term: "xterm-256color", Cols: 100, Rows: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { _, _ = io.Copy(io.Discard, sh) }()
+				time.Sleep(2 * time.Second) // tmux starts its server, makes the session and attaches
+				if _, err := sh.Write([]byte("(while true; do echo x >> " + mark + "; sleep 0.2; done) &\n")); err != nil {
+					t.Fatal(err)
+				}
+				// The job is really running before anything is proven about it surviving.
+				deadline := time.Now().Add(20 * time.Second)
+				for {
+					if n := strings.TrimSpace(run(t, mustDial(t, honest, lab.user), "wc -l < "+mark+" 2>/dev/null || echo 0", 10*time.Second)); n != "" && n != "0" {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("the job in the tmux place never started writing")
+					}
+					time.Sleep(300 * time.Millisecond)
+				}
+				// Gone, not closed: the raw connection under the link is shut, so the box sees a link that
+				// vanished rather than a client that said goodbye.
+				first.Close()
+				time.Sleep(2 * time.Second)
+				lines := func() int {
+					n, _ := strconv.Atoi(strings.TrimSpace(run(t, mustDial(t, honest, lab.user), "wc -l < "+mark+" 2>/dev/null || echo 0", 10*time.Second)))
+					return n
+				}
+				was := lines()
+				time.Sleep(2 * time.Second)
+				now := lines()
+				if now <= was {
+					t.Fatalf("the job stopped with the link: %d lines, then %d", was, now)
+				}
+				// And the place opens again on a new link, onto the session that was already there rather
+				// than a second one beside it.
+				second := mustDial(t, honest, lab.user)
+				again, err := second.OpenShell(ShellOptions{Folder: "/tmp", Tmux: "survivor", Term: "xterm-256color", Cols: 100, Rows: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { _, _ = io.Copy(io.Discard, again) }()
+				time.Sleep(2 * time.Second)
+				sessions := strings.TrimSpace(run(t, mustDial(t, honest, lab.user), "tmux -L berth ls 2>&1 | wc -l", 10*time.Second))
+				if sessions != "1" {
+					t.Fatalf("this app's tmux server holds %s sessions; wanted the one place's", sessions)
+				}
+				again.Close()
+				second.Close()
+				run(t, mustDial(t, honest, lab.user), "tmux -L berth kill-server 2>/dev/null; rm -f "+mark+"; true", 10*time.Second)
 			})
 
 			t.Run("a folder that is not there: the shell does not start, and says so", func(t *testing.T) {

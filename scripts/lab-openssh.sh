@@ -16,7 +16,7 @@ down() { docker ps -aq --filter label=berth-lab | xargs -r docker rm -f >/dev/nu
 
 install_cmd() {
   case "$1" in
-    apt) echo "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssh-server >/dev/null && useradd -m -s /bin/sh demo && usermod -p '*' demo" ;;
+    apt) echo "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssh-server tmux >/dev/null && useradd -m -s /bin/sh demo && usermod -p '*' demo" ;;
     apk) echo "apk add --no-cache -q openssh-server >/dev/null && adduser -D -s /bin/sh demo && sed -i 's/^demo:!/demo:*/' /etc/shadow" ;;
     *) echo "lab-openssh: unknown package tool $1" >&2; exit 1 ;;
   esac

@@ -12,7 +12,7 @@
 // A box that is not pinned cannot be connected to: there is no other way to a first sign-in.
 import { SETTINGS_DEFAULT, type AppSettings } from '../common/ipc';
 import { createHash, randomBytes } from 'node:crypto';
-import { BOXES_MAX, BOX_COLOURS, FINGERPRINT, KEY_LINE, addrOf, draftFaults, fingerprintsIn, firstConnectionBlock, folderFault, placesOf, portOf, type Box, type BoxDraft } from '../common/boxes';
+import { BOXES_MAX, BOX_COLOURS, FINGERPRINT, KEY_LINE, addrOf, draftFaults, fingerprintsIn, firstConnectionBlock, folderFault, placesOf, portOf, type Box, type BoxDraft, type Place } from '../common/boxes';
 import type { KeyReply } from './keyproc';
 
 export interface Keys {
@@ -378,7 +378,9 @@ function cleanDraft(draft: unknown): BoxDraft | null {
     const pn = str(p?.['name'], 256);
     const pf = str(p?.['folder'], 4096);
     if (pn === null || pf === null) return null;
-    places.push({ name: pn, folder: pf });
+    // A place keeps running only where the window said exactly that, and a mark is carried no other way:
+    // anything else arriving in that field is a plain place, never a guess that would run tmux on his box.
+    places.push(p?.['tmux'] === true ? { name: pn, folder: pf, tmux: true } : { name: pn, folder: pf });
   }
   return { name, colour: d['colour'], host, port, user, folder, places };
 }
@@ -432,9 +434,11 @@ export function readBoxes(publicPart: unknown): Box[] | null {
     if (texts.some((t) => typeof t !== 'string') || !Array.isArray(b.places)) return null;
     if (!/^b[0-9a-f]{16}$/.test(b.id) || ids.has(b.id)) return null;
     if (!Number.isInteger(b.colour) || b.colour < 1 || b.colour > BOX_COLOURS || !Number.isInteger(b.port) || b.port < 1 || b.port > 65535) return null;
-    const places = b.places.map((x) => ({ name: (x as { name?: unknown })?.name, folder: (x as { folder?: unknown })?.folder }));
+    // A place read back from the list is read field by field, and a tmux place only where the file really
+    // says so: anything else there is a plain place, never a guess that would run tmux on his box.
+    const places = b.places.map((x) => ((x as { tmux?: unknown })?.tmux === true ? { name: (x as { name?: unknown })?.name, folder: (x as { folder?: unknown })?.folder, tmux: true } : { name: (x as { name?: unknown })?.name, folder: (x as { folder?: unknown })?.folder }));
     if (places.some((x) => typeof x.name !== 'string' || typeof x.folder !== 'string')) return null;
-    const draft: BoxDraft = { name: b.name, colour: b.colour, host: b.host, port: String(b.port), user: b.user, folder: b.folder, places: places as { name: string; folder: string }[] };
+    const draft: BoxDraft = { name: b.name, colour: b.colour, host: b.host, port: String(b.port), user: b.user, folder: b.folder, places: places as Place[] };
     if (Object.keys(draftFaults(draft, names)).length > 0 || placesOf(draft).length !== places.length) return null;
     if (!KEY_LINE.test(b.publicKey)) return null;
     // The pinned key is what is enforced on every later connection; the fingerprint beside it is what the
