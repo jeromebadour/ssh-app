@@ -101,6 +101,10 @@ ul { list-style: none; }
 .sig-done { display: inline-flex; align-items: center; gap: 3px; color: var(--checked); font-family: var(--mono); font-size: 11px; }
 .sig-done .sig-glyph { width: 12px; height: 12px; }
 .new-tab { align-self: center; display: grid; place-items: center; width: 28px; height: 28px; color: var(--text-2); border-radius: var(--r); }
+/* The same for the window's own furniture: the tab strip and the status line are pressed, never read out of.
+   A drag across the tabs used to carry a ghost of their names. Dialogs are not here on purpose: what they
+   say is often a path or a fingerprint he has to be able to take away with him. */
+.tabbar, .status { user-select: none; }
 .bar-tools { display: flex; align-items: center; gap: 4px; }
 .tool { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-2); border-radius: var(--r); }
 
