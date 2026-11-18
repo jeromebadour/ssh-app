@@ -54,6 +54,7 @@ interface Ctx {
   windowInUse(): boolean;
   downloads: string;
   filesAsked(): Record<string, number>;
+  filesAskedWhere(): Record<string, string>;
   faults(): Promise<{ written: number; lost: number; waiting: number; lately: { id: string; what: string }[]; file: string }>;
   told(): { decided: number; shown: number };
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
@@ -1525,6 +1526,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               await lab.tell('failreads 0');
               const offered = await js<boolean>(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.getAttribute('draggable') === 'true'`);
               check('a download that failed leaves nothing to drag', went && settled && !offered && ctx.canDrag(front.id) === couldDrag, [went, settled, offered, ctx.canDrag(front.id) - couldDrag]);
+            }
+            // The one thing Berth does on a box without being asked: taking out of the trash what has been
+            // there longer than the box keeps things. It waited on a folder the box had not yet named, and a
+            // tab opened at the account's home asks for ".", which is not a path, so for such a tab it was
+            // refused and quietly never happened at all. A tab of its own is opened at the home to prove it.
+            {
+              const asksBefore = ctx.filesAsked()['empty'] ?? 0;
+              const home = front.box ? ctx.openTab(front.box.id, '') : null;
+              if (home) {
+                await until(() => home.engine.link.phase === 'up', 20_000);
+                const emptied = await until(() => (ctx.filesAsked()['empty'] ?? 0) > asksBefore, 25_000);
+                // Asked with a path, not with ".": the engine refuses a name that is not a path, so an ask
+                // counted is not an ask that did anything. This is what the fault was.
+                const askedWith = ctx.filesAskedWhere()['empty'] ?? '';
+                check('a tab opened at the account\u2019s own home still empties what is too old from the trash, asked with the folder the box named', emptied && askedWith.startsWith('/'), [(ctx.filesAsked()['empty'] ?? 0) - asksBefore, askedWith]);
+                ctx.closeTab(home.id);
+              }
             }
             // A transfer whose link dies under it must end, rather than leaving a line with a speed and a
             // time left for ever, a Stop that does nothing, and a name that is never free again. A tab of

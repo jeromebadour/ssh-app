@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 	"time"
@@ -132,7 +133,7 @@ func (f *files) toTrash(ctx context.Context, c *sftp.Client, where string) (tras
 	if err := c.Rename(ctx, real, path.Join(bin, line.Name)); err != nil {
 		return trashed{}, err
 	}
-	if err := appendLine(ctx, c, path.Join(bin, "index"), line); err != nil {
+	if err := writeRecord(ctx, c, bin, line); err != nil {
 		// The thing is in the trash but nothing says where it came from: it is put back, so the box is left
 		// exactly as it was rather than holding a file nobody can find again.
 		_ = c.Rename(ctx, path.Join(bin, line.Name), real)
@@ -186,7 +187,12 @@ func (f *files) fromTrash(ctx context.Context, c *sftp.Client, bin, name string)
 			return trashed{}, err
 		}
 		back.Gone = true
-		_ = appendLine(ctx, c, path.Join(bin, "index"), back)
+		// Its record goes with it: the thing is back where it came from, so nothing in the trash stands for
+		// it any more. A record that stayed behind saying "gone" was only ever a way of saying this.
+		_ = c.Remove(ctx, path.Join(bin, recordsIn, name+".json"))
+		if old, err := readOldIndex(ctx, c, bin); err == nil && len(old) > 0 {
+			_ = appendLine(ctx, c, path.Join(bin, "index"), back)
+		}
 		return back, nil
 	}
 	return trashed{}, sftp.ErrNoSuchFile
@@ -236,7 +242,10 @@ func emptyOld(ctx context.Context, c *sftp.Client, bin string, days int) (int, u
 			continue
 		}
 		l.Gone = true
-		_ = appendLine(ctx, c, path.Join(bin, "index"), l)
+		_ = c.Remove(ctx, path.Join(bin, recordsIn, l.Name+".json"))
+		if old, err := readOldIndex(ctx, c, bin); err == nil && len(old) > 0 {
+			_ = appendLine(ctx, c, path.Join(bin, "index"), l)
+		}
 		took++
 		freed += l.Size
 	}
@@ -272,6 +281,41 @@ func removeInTrash(ctx context.Context, c *sftp.Client, bin, where string) error
 	}
 	return c.Rmdir(ctx, where)
 }
+
+// writeRecord writes down where one thing came from, in a file of its own named after it. One file per
+// thing, rather than a line added to one record: that record was read, added to and written back, under one
+// temporary name shared by every delete, so two deletes at the same moment lost one another's lines and the
+// thing whose line went sat in the trash with nothing listing it and nothing ever emptying it. A file of its
+// own cannot collide with anything, because the name it is given is the name the thing itself was given.
+func writeRecord(ctx context.Context, c *sftp.Client, bin string, line trashed) error {
+	folder := path.Join(bin, recordsIn)
+	if err := c.Mkdir(ctx, folder); err != nil {
+		// A box says "already there" in its own words, and not every box the same way, so what is asked is
+		// whether the folder is there now. Without the record the thing would be in the trash and
+		// unlistable, which is the fault this is here to prevent, so a folder that is really missing stops
+		// the delete rather than letting it happen unrecorded.
+		if at, serr := c.Stat(ctx, folder); serr != nil || !at.IsDir() {
+			return err
+		}
+	}
+	body, err := json.Marshal(line)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	f, err := c.Create(ctx, path.Join(folder, line.Name+".json"), 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteAt(ctx, body, 0); err != nil {
+		_ = f.Close(ctx)
+		return err
+	}
+	return f.Close(ctx)
+}
+
+// recordsIn is the folder inside a trash that holds one record per thing in it.
+const recordsIn = "records"
 
 // appendLine adds one line to the trash's record. It is read, added to and written back under a temporary
 // name, then renamed into place, so a record is never left half written.
@@ -315,6 +359,62 @@ func appendLine(ctx context.Context, c *sftp.Client, where string, line trashed)
 }
 
 func readIndex(ctx context.Context, c *sftp.Client, bin string) ([]trashed, error) {
+	out, err := readRecords(ctx, c, bin)
+	if err != nil {
+		return nil, err
+	}
+	// And the one-file record that trashes made before this: a trash already on a box goes on listing.
+	older, err := readOldIndex(ctx, c, bin)
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, l := range out {
+		have[l.Name] = true
+	}
+	for _, l := range older {
+		if !have[l.Name] {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// readRecords reads the file-per-thing records.
+func readRecords(ctx context.Context, c *sftp.Client, bin string) ([]trashed, error) {
+	var names []string
+	err := c.List(ctx, path.Join(bin, recordsIn), func(e []sftp.Entry) error {
+		for _, x := range e {
+			if strings.HasSuffix(x.Name, ".json") {
+				names = append(names, x.Name)
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, sftp.ErrNoSuchFile) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []trashed
+	for _, name := range names {
+		body, err := readFileAt(ctx, c, path.Join(bin, recordsIn, name))
+		if errors.Is(err, sftp.ErrNoSuchFile) {
+			continue // taken away between the listing and the reading: it is simply not there
+		}
+		if err != nil {
+			return nil, err
+		}
+		var l trashed
+		if json.Unmarshal([]byte(strings.TrimSpace(string(body))), &l) == nil && l.Name != "" {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func readOldIndex(ctx context.Context, c *sftp.Client, bin string) ([]trashed, error) {
 	body, err := readFileAt(ctx, c, path.Join(bin, "index"))
 	if errors.Is(err, sftp.ErrNoSuchFile) {
 		return nil, nil
@@ -348,8 +448,14 @@ func readFileAt(ctx context.Context, c *sftp.Client, where string) ([]byte, erro
 		if n > 0 {
 			out = append(out, buf[:n]...)
 		}
-		if err != nil || n == 0 {
+		if errors.Is(err, io.EOF) || (err == nil && n == 0) {
 			break
+		}
+		// A read that failed is not the end of a file. Treating it as one made a record that could not be
+		// read in full look like a shorter record, and what was written back then held fewer lines than it
+		// had: the things whose lines went are still in the trash, and nothing lists them.
+		if err != nil {
+			return nil, err
 		}
 	}
 	return out, nil

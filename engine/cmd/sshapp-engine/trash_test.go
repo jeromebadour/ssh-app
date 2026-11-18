@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,8 @@ func TestADeleteIsAMoveIntoTheTrashAndCanBePutBack(t *testing.T) {
 	if got, err := os.ReadFile(inBin); err != nil || string(got) != string(want) {
 		t.Fatalf("it is not in the trash as it was: %v", err)
 	}
-	// The record belongs to the box.
-	line, err := os.ReadFile(filepath.Join(trashOf(t, box, "/"), "index"))
+	// The record belongs to the box, and is a file of its own named after the thing it stands for.
+	line, err := os.ReadFile(filepath.Join(trashOf(t, box, "/"), "records", moved["name"].(string)+".json"))
 	if err != nil || !strings.Contains(string(line), "/srv/app/notes.txt") {
 		t.Fatalf("the trash does not say where it came from: %v %s", err, line)
 	}
@@ -180,24 +181,20 @@ func TestEmptyingTakesOnlyWhatIsOldEnough(t *testing.T) {
 	ask(t, r, map[string]any{"id": 52, "do": "delete", "path": "/srv/new.txt"})
 	fresh, _ := last(pages(r.wait("the delete", ended(52)), 52), "trashed").(map[string]any)
 
-	// The older one is made to look like it was deleted long ago, by rewriting its line in the record.
+	// The older one is made to look like it was deleted long ago, by rewriting its own record.
 	bin := trashOf(t, box, "/")
-	body, err := os.ReadFile(filepath.Join(bin, "index"))
+	rec := filepath.Join(bin, "records", old["name"].(string)+".json")
+	body, err := os.ReadFile(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []string
-	for _, one := range strings.Split(strings.TrimSpace(string(body)), "\n") {
-		var l map[string]any
-		if json.Unmarshal([]byte(one), &l) == nil && l["name"] == old["name"] {
-			l["when"] = time.Now().Add(-30 * 24 * time.Hour).Unix()
-			b, _ := json.Marshal(l)
-			out = append(out, string(b))
-			continue
-		}
-		out = append(out, one)
+	var l map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(body))), &l); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "index"), []byte(strings.Join(out, "\n")+"\n"), 0o600); err != nil {
+	l["when"] = time.Now().Add(-30 * 24 * time.Hour).Unix()
+	b, _ := json.Marshal(l)
+	if err := os.WriteFile(rec, append(b, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -291,5 +288,45 @@ func TestDeletingALinkTakesTheLinkAndNotWhatItPointsAt(t *testing.T) {
 	// And the link itself is gone from where it stood.
 	if _, err := os.Lstat(filepath.Join(box, "srv", "www", "current")); err == nil {
 		t.Fatalf("the link is still there, so something else went instead")
+	}
+}
+
+// Two deletes at the same moment keep both records. The record was one file, read, added to and written back
+// under one temporary name shared by every delete, so two at once lost one another's lines: the thing whose
+// line went sat in the trash with nothing listing it and nothing ever emptying it. One record per thing
+// cannot collide with anything.
+func TestTwoDeletesAtOnceKeepBothRecords(t *testing.T) {
+	r, box := withFiles(t)
+	const many = 6
+	for i := 0; i < many; i++ {
+		writeOnTheBox(t, box, fmt.Sprintf("srv/one-%d.txt", i), 20)
+	}
+	for i := 0; i < many; i++ {
+		ask(t, r, map[string]any{"id": float64(300 + i), "do": "delete", "path": fmt.Sprintf("/srv/one-%d.txt", i)})
+	}
+	for i := 0; i < many; i++ {
+		ps := pages(r.wait("the delete", ended(float64(300+i))), float64(300+i))
+		if e := last(ps, "error"); e != nil {
+			t.Fatalf("delete %d failed: %v", i, e)
+		}
+	}
+	// Every one of them is in the trash, and the trash lists every one of them.
+	ask(t, r, map[string]any{"id": 320, "do": "trash", "path": "/"})
+	ps := pages(r.wait("the listing", ended(320)), 320)
+	seen := map[string]bool{}
+	for _, p := range ps {
+		rows, _ := p["trash"].([]any)
+		for _, one := range rows {
+			if row, ok := one.(map[string]any); ok {
+				if from, _ := row["from"].(string); from != "" {
+					seen[from] = true
+				}
+			}
+		}
+	}
+	for i := 0; i < many; i++ {
+		if !seen[fmt.Sprintf("/srv/one-%d.txt", i)] {
+			t.Fatalf("one-%d.txt is in the trash and the trash does not list it: %v", i, seen)
+		}
 	}
 }
