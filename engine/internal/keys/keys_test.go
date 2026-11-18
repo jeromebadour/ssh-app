@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -443,4 +444,76 @@ func FuzzSign(f *testing.F) {
 			}
 		}
 	})
+}
+
+// A list holding a key brought in from a file must open again. It did not: the reader took only the shape of
+// a key this app makes, so one imported key made the list, its copy and its backup all unreadable at the next
+// start, and he would have been locked out of every box with nothing to go back to. The round trip is held
+// here for every kind of key file this app takes.
+func TestAListHoldingAnImportedKeyOpensAgain(t *testing.T) {
+	ed, _ := keyFile(t, "ed25519", "")
+	rsaFile, _ := keyFile(t, "rsa2048", "")
+	for _, c := range []struct {
+		what string
+		file []byte
+	}{
+		{"ed25519", ed},
+		{"rsa", rsaFile},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			l := &List{keys: map[string]*key{}, public: json.RawMessage(`{}`)}
+			if _, err := l.TakeKey("b1", "b1", "demo", c.file, nil, time.Now()); err != nil {
+				t.Fatalf("the key file was not taken: %v", err)
+			}
+			// Twice over, because adding a box saves twice: the copy beside the list is written from the
+			// first save, so a list that could not be read would have taken its own way back with it.
+			for again := 0; again < 2; again++ {
+				body, err := l.Contents()
+				if err != nil {
+					t.Fatal(err)
+				}
+				back, err := Parse(body)
+				if err != nil {
+					t.Fatalf("a saved list holding an imported key could not be opened: %v", err)
+				}
+				if len(back.keys) != 1 {
+					t.Fatalf("%d keys came back", len(back.keys))
+				}
+				// And it can still sign, which is the whole reason it is kept.
+				s, wipe, err := back.keys["b1"].signer()
+				if err != nil {
+					t.Fatalf("the key that came back cannot sign: %v", err)
+				}
+				wipe()
+				if s.PublicKey().Type() != back.keys["b1"].Type {
+					t.Fatalf("it came back as a %s where it is a %s", s.PublicKey().Type(), back.keys["b1"].Type)
+				}
+				l = back
+			}
+		})
+	}
+}
+
+// And a list that really is damaged is still refused: the way back from one of those is the whole reason the
+// check is there at all.
+func TestAListThatIsReallyDamagedIsStillRefused(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		k    *key
+	}{
+		{"neither a seed nor a private key", &key{Type: ssh.KeyAlgoED25519, Box: "b1", User: "demo"}},
+		{"both at once", &key{Type: ssh.KeyAlgoED25519, Seed: make([]byte, ed25519.SeedSize), Priv: []byte{1, 2, 3}, Box: "b1", User: "demo"}},
+		{"a seed of the wrong size", &key{Type: ssh.KeyAlgoED25519, Seed: make([]byte, 8), Box: "b1", User: "demo"}},
+		{"a kind this app will not sign with", &key{Type: "ssh-dss", Priv: []byte{1, 2, 3}, Box: "b1", User: "demo"}},
+		{"no box", &key{Type: ssh.KeyAlgoED25519, Seed: make([]byte, ed25519.SeedSize), User: "demo"}},
+	} {
+		l := &List{keys: map[string]*key{"b1": c.k}, public: json.RawMessage(`{}`)}
+		body, err := l.Contents()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Parse(body); !errors.Is(err, ErrBadList) {
+			t.Fatalf("%s: it was taken; it must be refused (%v)", c.what, err)
+		}
+	}
 }

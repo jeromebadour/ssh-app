@@ -83,10 +83,27 @@ export class Meter {
     this.slowest = null;
   }
 
+  // Told when a promise is broken on his own PC, so it reaches the local log instead of living only in a
+  // number nobody reads. The first promise of this app is that the window always answers, and a promise
+  // whose breaking is never written down is a promise nobody can hold it to.
+  said: ((what: string, detail: string) => void) | null = null;
+  private toldAt = new Map<keyof Worst, number>();
+
   private take(key: keyof Worst, ms: number): void {
     const v = Math.max(0, Math.round(ms));
     if (v > this.worst[key]) this.worst[key] = v;
+    if (v <= BUDGET[key]) return;
+    // One line per budget per ten minutes: a machine having a bad minute writes one line about it, not
+    // thousands, and the log stays something a person can read.
+    const now = Date.now();
+    const last = this.toldAt.get(key) ?? 0;
+    if (now - last < OVER_BUDGET_AGAIN_MS) return;
+    this.toldAt.set(key, now);
+    this.said?.('meter', `${key} reached ${v} ms, over its budget of ${BUDGET[key]} ms`);
   }
 }
+
+// How long before the same broken promise is written down again.
+const OVER_BUDGET_AGAIN_MS = 10 * 60 * 1000;
 
 const sane = (x: unknown): boolean => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= SANE_MAX_MS;

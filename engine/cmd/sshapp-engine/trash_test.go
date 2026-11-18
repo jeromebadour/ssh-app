@@ -141,13 +141,29 @@ func TestWhatTheBrowserRefusesIsJudgedOnWhatTheBoxResolves(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i, where := range []string{"/etc/passwd", "/srv/app/innocent.txt", "/srv/app/../../etc/passwd"} {
+	// A folder that is a link into a refused place: what is inside it is judged on where it really is, so
+	// the folders above a thing are still resolved and the refusal still holds.
+	if err := os.Symlink(filepath.Join(box, "etc"), filepath.Join(box, "srv", "theirs")); err != nil {
+		t.Fatal(err)
+	}
+	for i, where := range []string{"/etc/passwd", "/srv/app/../../etc/passwd", "/srv/theirs/passwd"} {
 		id := float64(41 + i)
 		ask(t, r, map[string]any{"id": id, "do": "delete", "path": where})
 		ps := pages(r.wait("the refusal", ended(id)), id)
 		if last(ps, "error") != "refused" {
 			t.Fatalf("%q was not refused: %v", where, ps)
 		}
+	}
+	// A link that points at a refused place is a link, and his own: deleting it takes the link and leaves
+	// what it points at exactly where it is. Judging it by where it pointed would have refused him a stray
+	// link in his own folder, and following it would have taken the system file instead.
+	ask(t, r, map[string]any{"id": float64(49), "do": "delete", "path": "/srv/app/innocent.txt"})
+	ps := pages(r.wait("the delete", ended(49)), 49)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("deleting a link of his own was refused: %v", e)
+	}
+	if _, err := os.Lstat(filepath.Join(box, "srv", "app", "innocent.txt")); err == nil {
+		t.Fatalf("the link is still there")
 	}
 	if _, err := os.Stat(filepath.Join(box, "etc", "passwd")); err != nil {
 		t.Fatalf("the system file went: %v", err)
@@ -242,5 +258,38 @@ func TestEmptyingNeverReachesOutsideTheTrash(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(box, "srv", "keep.txt")); err != nil {
 		t.Fatalf("it took something else as well: %v", err)
+	}
+}
+
+// Deleting a link takes the link, never what it points at. Before this, the path was resolved whole before
+// anything was moved, so standing on /var/www/current and pressing Delete moved the release it pointed to
+// into the trash and left the link dangling: one press, and the thing he meant to keep was the thing that
+// went. A person deleting a link means the link.
+func TestDeletingALinkTakesTheLinkAndNotWhatItPointsAt(t *testing.T) {
+	r, box := withFiles(t)
+	want := writeOnTheBox(t, box, "srv/releases/42/app.conf", 300)
+	if err := os.MkdirAll(filepath.Join(box, "srv", "www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(box, "srv", "releases", "42", "app.conf"), filepath.Join(box, "srv", "www", "current")); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 9, "do": "delete", "path": "/srv/www/current"})
+	ps := pages(r.wait("the delete", ended(9)), 9)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v", e)
+	}
+	moved, _ := last(ps, "trashed").(map[string]any)
+	if moved == nil || moved["from"] != "/srv/www/current" {
+		t.Fatalf("what it said was deleted: %v", last(ps, "trashed"))
+	}
+	// What it pointed at is untouched, bytes and all.
+	if got, err := os.ReadFile(filepath.Join(box, "srv", "releases", "42", "app.conf")); err != nil || string(got) != string(want) {
+		t.Fatalf("what the link pointed at was taken away: %v", err)
+	}
+	// And the link itself is gone from where it stood.
+	if _, err := os.Lstat(filepath.Join(box, "srv", "www", "current")); err == nil {
+		t.Fatalf("the link is still there, so something else went instead")
 	}
 }
