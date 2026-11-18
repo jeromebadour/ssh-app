@@ -332,6 +332,60 @@ window.addEventListener('keydown', (e) => {
   port.reopen(true);
 }, true);
 
+// The grip between the two panes. How much room the files take is this tab's own, as its list size is, and it
+// is held to a share of the window rather than a number of pixels, so a window made narrow cannot leave the
+// terminal a sliver nothing can be read in. It answers the keyboard as well as the hand: a thing that can
+// only be dragged is a thing nobody with a keyboard can move at all (BUILD-RULES 2.16).
+{
+  const grip = document.getElementById('grip') as HTMLDivElement;
+  const split = document.getElementById('split') as HTMLDivElement;
+  const LEAST = 0.14; // of the window across
+  const MOST = 0.62;
+  let share = 0;
+  const put = (to: number): void => {
+    share = Math.min(MOST, Math.max(LEAST, to));
+    split.style.setProperty('--files-w', `${(share * 100).toFixed(2)}%`);
+    grip.setAttribute('aria-valuenow', String(Math.round(share * 100)));
+  };
+  const shareNow = (): number => {
+    const whole = split.getBoundingClientRect().width;
+    const files = document.getElementById('files-pane')!.getBoundingClientRect().width;
+    return whole > 0 ? files / whole : 0.24;
+  };
+  grip.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    try { grip.setPointerCapture(e.pointerId); } catch { /* a pointer the window no longer has: the move still follows it */ }
+    grip.dataset['held'] = 'yes';
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!grip.dataset['held']) return;
+    const box = split.getBoundingClientRect();
+    if (box.width > 0) put((e.clientX - box.left) / box.width);
+  });
+  const letGo = (e: PointerEvent): void => {
+    if (!grip.dataset['held']) return;
+    delete grip.dataset['held'];
+    try { grip.releasePointerCapture(e.pointerId); } catch { /* it was already let go */ }
+  };
+  grip.addEventListener('pointerup', letGo);
+  grip.addEventListener('pointercancel', letGo);
+  // A double press puts it back where a tab starts, which is the way out of any corner it has been dragged into.
+  grip.addEventListener('dblclick', () => split.style.removeProperty('--files-w'));
+  grip.addEventListener('keydown', (e: KeyboardEvent) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    if (e.key === 'ArrowLeft') put((share || shareNow()) - step);
+    else if (e.key === 'ArrowRight') put((share || shareNow()) + step);
+    else if (e.key === 'Home') put(LEAST);
+    else if (e.key === 'End') put(MOST);
+    else if (e.key === 'Enter' || e.key === ' ') { split.style.removeProperty('--files-w'); share = 0; }
+    else return;
+    e.preventDefault();
+  });
+  grip.setAttribute('aria-valuemin', String(Math.round(LEAST * 100)));
+  grip.setAttribute('aria-valuemax', String(Math.round(MOST * 100)));
+}
+
 // The terminal is as large as the view, in whole cells, and the box is told its size.
 // It is told once the typeface is there (a cell has no true size before), and after that only when it changes.
 let told = '';

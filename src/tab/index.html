@@ -11,8 +11,21 @@
     <div id="state">starting</div>
     <div id="signin-at"></div>
     <div id="split">
-      <div id="files"></div>
-      <div id="term"></div>
+      <section id="files-pane">
+        <header id="files-head">
+          <svg class="pane-glyph" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 3.5h3.6l1.2 1.4h6.2v6.6a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1z" /></svg>
+          <span>Files</span>
+        </header>
+        <div id="files"></div>
+      </section>
+      <div id="grip" tabindex="0" role="separator" aria-orientation="vertical" aria-label="How much of the tab the files take"></div>
+      <section id="term-pane">
+        <header id="term-head">
+          <svg class="pane-glyph" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 4l3 3-3 3M7.6 10.4h3.8" /></svg>
+          <span>Terminal</span>
+        </header>
+        <div id="term"></div>
+      </section>
     </div>
     <!-- Over the terminal, and after it: the terminal draws its rows in placed elements of its own. -->
     <div id="chrome"></div>

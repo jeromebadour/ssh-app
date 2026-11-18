@@ -2107,6 +2107,36 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('it is marked as having said nothing, and the slot for its words takes no room', said === 'no' && room === 0, { said, room });
           check('so the two panes start at the top of the tab, with no band above them', top === 0, top);
           await shot('quiet-sign-in', 'a tab on a box that says nothing at sign-in, which is every box he owns', quiet);
+
+          // ---- Two panes, each one a thing of its own, with a grip between them. ----
+          // Side by side with MobaXterm he said the two looked like tabs leaning on each other with no weight,
+          // that neither said what it was, that they wore one theme, and that he could not give either of them
+          // more room. Each has a head that names it now, the files are the lighter surface and the terminal
+          // the deeper one, and the grip answers the hand and the keyboard.
+          const heads = await js<string[]>(quiet.view, `[document.getElementById('files-head')?.textContent ?? '', document.getElementById('term-head')?.textContent ?? '']`);
+          const glyphs = await js<number>(quiet.view, `document.querySelectorAll('#files-head .pane-glyph, #term-head .pane-glyph').length`);
+          check('each pane has a head that says what it is, glyph first', heads[0]?.trim() === 'Files' && heads[1]?.trim() === 'Terminal' && glyphs === 2, [heads, glyphs]);
+          const skins = await js<string[]>(quiet.view, `['files-pane', 'term-pane'].map((id) => getComputedStyle(document.getElementById(id)).backgroundColor)`);
+          check('and the two do not wear one surface: the files are the lighter side, the terminal the deeper', skins[0] !== skins[1], skins);
+          // The grip, by hand: taken at its own middle and dragged left, it gives the terminal the room and
+          // the box is told the size it really has now.
+          const wide = async () => js<number>(quiet.view, `Math.round(document.getElementById('files-pane').getBoundingClientRect().width)`);
+          const colsNow = async () => js<number>(quiet.view, `window.berthTerm.size().cols`);
+          const was = await wide();
+          const colsWas = await colsNow();
+          await js(quiet.view, `(() => { const g = document.getElementById('grip'); const b = g.getBoundingClientRect(); const at = (x) => ({ bubbles: true, button: 0, pointerId: 1, clientX: x, clientY: b.top + b.height / 2 }); g.dispatchEvent(new PointerEvent('pointerdown', at(b.left + 4))); g.dispatchEvent(new PointerEvent('pointermove', at(b.left - 120))); g.dispatchEvent(new PointerEvent('pointerup', at(b.left - 120))); })()`);
+          const dragged = await until(async () => (await wide()) < was - 80, 3000) ? await wide() : await wide();
+          const colsDragged = await until(async () => (await colsNow()) > colsWas, 3000) ? await colsNow() : await colsNow();
+          check(`the grip gives the terminal the room: the files went from ${was} to ${dragged} and the terminal from ${colsWas} to ${colsDragged} columns`, dragged < was - 80 && colsDragged > colsWas, [was, dragged, colsWas, colsDragged]);
+          // And by the keyboard, because a thing that can only be dragged cannot be moved at all without a mouse.
+          await js(quiet.view, `document.getElementById('grip').focus()`);
+          const focused = await js<string>(quiet.view, `document.activeElement?.id ?? ''`);
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))`);
+          const byKey = await until(async () => (await wide()) > dragged + 40, 3000) ? await wide() : await wide();
+          check('and the keyboard moves it too, with the grip reachable by Tab', focused === 'grip' && byKey > dragged + 40, [focused, dragged, byKey]);
+          // Put back where a tab starts, which is the way out of any corner it was dragged into.
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+          check('and a press puts it back where a tab starts', await until(async () => Math.abs((await wide()) - was) < 3, 3000), [was, await wide()]);
           // And the same box, having something to say, still says it: the slot is collapsed, not removed.
           await lab.tell('banner this box has something to say');
           const loud = ctx.openTab(id, 'logs')!;
