@@ -88,6 +88,11 @@ export interface AddBoxProps {
   refused: Record<string, string>; // what main refused, by field, after Add or Save
   error: string; // a refusal that is no field's
   demo?: { draft: BoxDraft; tried?: boolean };
+  // Adding a box made from another one (his walkthrough decision of 2026-11-15: Duplicate). What it carries
+  // is what two boxes on one machine really have in common, and nothing that is one box's alone: not the
+  // key, which every box makes for itself, and not the identity, which is pinned per box and would be a
+  // claim this box has never made.
+  start?: BoxDraft;
   // Editing: the box as it stands, so the same dialog shows it and saves what changed. Its identity, when it
   // has one, is shown with the way to forget it; its key is this box's, not a new one.
   editing?: { draft: BoxDraft; pinType: string; pinFingerprint: string; pinnedAt: string; onForget(): void };
@@ -103,7 +108,7 @@ export interface AddBoxProps {
 
 export function AddBoxDialog(props: AddBoxProps) {
   const editing = props.editing;
-  const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? editing?.draft ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
+  const [d, setD] = useState<BoxDraft>(props.demo?.draft ?? editing?.draft ?? props.start ?? { ...EMPTY, colour: (props.taken.length % BOX_COLOURS) + 1 });
   const [tried, setTried] = useState(props.demo?.tried ?? false);
   const [hueOpen, setHueOpen] = useState(false);
   // The key file's passphrase. It is typed here, sent as raw bytes on its own channel and dropped at once: it

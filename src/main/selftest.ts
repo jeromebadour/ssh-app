@@ -1072,6 +1072,59 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const actsShown = await js<boolean>(ctx.shell, `(() => { const a = document.querySelector('[data-box="lab-box"] .bm-acts'); return a !== null && getComputedStyle(a).opacity === '1'; })()`);
         check('hovering a box row shows Edit and Delete without the row moving under the hand', actsShown && after.h === before.h && after.nameW === before.nameW && after.rowW === before.rowW, [before, after, actsShown]);
         await shot('boxes-menu', 'the Boxes menu, a box\'s places open');
+        // The right button on a box. His walkthrough of 2026-11-15 put Connect, Edit, Duplicate and Delete
+        // here and none of it was ever built; Edit and Delete have been on the row as buttons since, because
+        // nothing in this app hides behind a right press, so the menu is the second way to those and the
+        // only way to the other two. Held on what it offers, on what it must not do, and on the one thing a
+        // menu drawn by the window can get wrong: leaving the window above its own tabs when it goes.
+        {
+          const boxRow = async (): Promise<string[]> => {
+            await js(ctx.shell, `(() => { const e = document.querySelector('#box-menu [data-box]'); const r = e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(r.left + 10), clientY: Math.round(r.top + 6) })); })()`);
+            await sleep(180);
+            return js<string[]>(ctx.shell, `[...document.querySelectorAll('#shell-menus .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+          };
+          const onBox = await boxRow();
+          await sweepMenu(ctx.shell, 'the Boxes menu, on a box');
+          await shot('box-menu', 'the right button on a box in the Boxes menu', null);
+          check(`the right button on a box offers what can be done to it: ${onBox.join(', ')}`,
+            onBox.includes('Open it in a new tab') && onBox.includes('Edit it') && onBox.includes('Make another from it') && onBox.includes('Delete it'),
+            onBox);
+          // Nothing in it reaches a shell, and nothing in it does the thing it names without asking: Delete
+          // opens the asking that names what goes, which is the dialog this app has had since #59.
+          check('and nothing in it types into his shell', !onBox.some((w) => /terminal|shell|run |command/i.test(w)), onBox);
+          await js(ctx.shell, `document.querySelector('#shell-menus .fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+          await until(() => !ctx.overlayOn(), 3000);
+          // Make another from it: the same dialog as Add box, with what two boxes on one machine share
+          // already in it, a name that is free, and nothing of the other box's key or pinned identity.
+          const again = await boxRow();
+          check('the menu can be opened a second time on the same box', again.includes('Make another from it'), again);
+          await js(ctx.shell, `document.getElementById('box-menu-duplicate')?.click()`);
+          const opened = await until(() => has('#add-box'), 5000);
+          const seeded = await js<{ name: string; host: string; user: string; pinned: boolean; title: string }>(ctx.shell, `(() => {
+            const v = (id) => document.getElementById(id)?.value ?? '';
+            return { name: v('box-name'), host: v('box-host'), user: v('box-user'), pinned: !!document.getElementById('edit-pinned'), title: document.getElementById('add-title')?.textContent ?? '' };
+          })()`);
+          check('Make another from it opens Add box carrying where it is and who signs in, under a name that is free, and nothing of the other box\u2019s identity',
+            opened && seeded.title.includes('Add box') && seeded.name !== '' && seeded.name !== 'lab-box' && seeded.host !== '' && seeded.user !== '' && !seeded.pinned,
+            [opened, seeded]);
+          await clickOn('#add-cancel');
+          await until(async () => !(await has('#add-box')), 5000);
+          // Waited for rather than read the instant the dialog leaves the page: what the window is drawn
+          // above is main's to decide, and the page saying the dialog is gone travels there before it is
+          // acted on. If nothing ever puts it back this waits its whole time and fails, which is the point.
+          const backDown = await until(() => !ctx.overlayOn(), 3000);
+          const why = await js<{ dialog: boolean; boxes: boolean; menus: number; scrim: boolean }>(ctx.shell, `({
+            dialog: !!document.querySelector('.dialog'),
+            boxes: !!document.getElementById('box-menu'),
+            menus: document.querySelectorAll('#shell-menus .fb-menu').length,
+            scrim: !!document.querySelector('.scrim'),
+          })`);
+          check('and the window is put back behind its tabs after all of that', backDown, why);
+          await js(ctx.shell, `document.getElementById('boxes')?.click()`);
+          await until(() => has('#box-menu'), 5000);
+          await js(ctx.shell, `document.querySelector('#box-menu [data-box]')?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))`);
+          await sleep(160);
+        }
         await clickOn('[data-place="logs"]');
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
@@ -1110,7 +1163,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const onTab = await strip(`document.querySelector('[data-tab]')`);
           await sweepMenu(ctx.shell, 'the tab strip, on a tab');
           await shot('tab-menu', 'the right button on a tab, drawn by the one menu the whole window shares', null);
-          const aboveWhileOpen = shellOnTop();
+          const aboveWhileOpen = ctx.overlayOn();
           // The lines about the tabs beside this one are there only when there are tabs beside it: a menu
           // never shows a thing that cannot be used (BUILD-RULES 2.8), so the claim is held against how many
           // tabs are really open rather than against a number written here.
@@ -1124,7 +1177,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('and nothing in it was invented: no rename, no colour, no duplicate', !onTab.some((w) => /rename|colour|color|duplicate/i.test(w)), onTab);
           await shutIt();
           await sleep(120);
-          check('and the window is put back behind its tabs when the menu goes', !shellOnTop(), '');
+          check('and the window is put back behind its tabs when the menu goes', await until(() => !ctx.overlayOn(), 3000), '');
           const onStrip = await strip(`document.getElementById('bar')`);
           await sweepMenu(ctx.shell, 'the tab strip, empty part');
           check(`the right button on the empty part of the strip is about the strip: ${onStrip.join(', ')}`,
