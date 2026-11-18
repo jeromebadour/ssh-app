@@ -8,7 +8,7 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { FaultLog } from './faultlog';
@@ -289,7 +289,7 @@ let reopenPut = false;
 // What the offer holds: the tabs of the last session that still point at a box he has, pinned, in the order
 // they were in. A box he has since removed or forgotten simply is not offered, with nothing said about it.
 function reopenOffer(): { box: string; name: string; colour: number; place: string }[] {
-  if (reopenPut || tabs.size > 0 || !gate?.unlocked || !boxes) return [];
+  if (reopenPut || tabs.size > 0 || !boxes?.loaded) return [];
   const out: { box: string; name: string; colour: number; place: string }[] = [];
   for (const one of boxes.lastTabs) {
     const box = boxes.get(one.box);
@@ -372,7 +372,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, boxes: gate?.unlocked && boxes ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: gate?.unlocked ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
+  return { tabs: [...tabs.values()].map(info), active, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -915,7 +915,9 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
   // The whole terminal, selected and copied. Ctrl+A stays the shell's own, which is the start of the line:
   // taking that from him would be the app typing over a key his hands already know (his words, 2026-11-15).
   const whole = !input.alt && input.shift && (input.key === 'A' || input.key === 'a');
-  if (!digit && !step && !whole) return false;
+  // And Ctrl+Shift+S puts the same thing in a file instead. Ctrl+S stays the shell's own.
+  const toFile = !input.alt && input.shift && (input.key === 'S' || input.key === 's');
+  if (!digit && !step && !whole && !toFile) return false;
   // A dialog of the window's own is in front, or the window is not the one being typed into: the press is not
   // this person's doing here, so nothing moves. It is still taken, so no view is given a key meant for main.
   if (overlay || !win?.isFocused()) {
@@ -923,14 +925,14 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
     return true;
   }
   const ids = [...tabs.keys()];
-  if (whole) {
+  if (whole || toFile) {
     const tab = tabs.get(active);
     if (!tab) {
-      done = 'There is no tab to copy';
+      done = whole ? 'There is no tab to copy' : 'There is no tab to save';
       tellShell();
       return true;
     }
-    sendTo(tab.view, CH.tabWhole, true);
+    sendTo(tab.view, whole ? CH.tabWhole : CH.tabSaveAsk, true);
     return true;
   }
   if (step) {
@@ -1732,6 +1734,65 @@ ipcMain.on(CH.tabCopy, (e, text: unknown) => {
   tellShell();
 });
 
+// Text from a tab into a file. The view hands over what to write and what it is in words; main asks him
+// where it goes and writes it. The same guards as the clipboard: the tab in front, in a window being typed
+// into, with nothing of the shell's over it, because a file written by a box's output while he is looking
+// at something else is a file he did not ask for.
+let savingToFile = false;
+ipcMain.on(CH.tabSave, (e, text: unknown, what: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || typeof text !== 'string' || typeof what !== 'string' || text.length === 0 || text.length > SAVE_MAX || what.length > 60) return drop('tab:save', e);
+  if (tab.id !== active || overlay || !win?.isFocused() || savingToFile) return void savesRefused++;
+  void saveToFile(tab, text, what);
+});
+
+async function saveToFile(tab: Tab, text: string, what: string): Promise<void> {
+  if (!win || savingToFile) return;
+  savingToFile = true;
+  const when = new Date();
+  const stamp = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')} ${String(when.getHours()).padStart(2, '0')}${String(when.getMinutes()).padStart(2, '0')}`;
+  const called = safeName(`${tab.box?.name ?? `tab ${tab.id}`}${tab.place === '' ? '' : ` ${tab.place}`} ${stamp}.txt`).name;
+  let picked: string | undefined;
+  try {
+    if (labSavesToFile) picked = labSavesToFile();
+    else {
+      const answer = await dialog.showSaveDialog(win, { title: `Save ${what}`, defaultPath: path.join(downloadsInto(), called), buttonLabel: 'Save', filters: [{ name: 'Text', extensions: ['txt'] }], properties: ['createDirectory', 'showOverwriteConfirmation', 'dontAddToRecent'] });
+      picked = answer.canceled ? undefined : answer.filePath;
+    }
+  } catch (err) {
+    savingToFile = false;
+    done = `The place to save could not be asked for: ${err instanceof Error ? err.message : String(err)}`;
+    return tellShell();
+  }
+  savingToFile = false;
+  if (picked === undefined || picked === '') {
+    done = 'Nothing was saved';
+    return tellShell();
+  }
+  // Still the tab in front of a window in use: the chooser was open for as long as he took over it, and what
+  // was true when he pressed the key is asked again before anything is written.
+  if (tabs.get(tab.id) !== tab || tab.id !== active || !win.isFocused()) {
+    savesRefused++;
+    done = 'Nothing was saved: the window moved on while the place was being chosen';
+    return tellShell();
+  }
+  try {
+    await writeFile(picked, text, 'utf8');
+  } catch (err) {
+    const id = faultLog().say({ what: 'save', detail: `a file a tab asked to save could not be written`, tab: tab.id });
+    done = `That file could not be written: ${err instanceof Error ? err.message : String(err)}${id ? ` (fault ${id})` : ''}`;
+    return tellShell();
+  }
+  const lines = text.split('\n').length;
+  savedTo = picked;
+  done = `Saved ${lines} ${lines === 1 ? 'line' : 'lines'} to ${path.basename(picked)}`;
+  tellShell();
+}
+// The lab cannot press a button in the system's own chooser, so the self-test answers it here instead.
+let labSavesToFile: (() => string | undefined) | null = null;
+let savesRefused = 0;
+let savedTo = '';
+
 ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   if (!shell || e.sender.id !== shell.webContents.id || !fromMainFrameOf(e, 'app://shell')) {
     drop('shell:cmd');
@@ -2142,7 +2203,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

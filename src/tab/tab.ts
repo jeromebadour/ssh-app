@@ -1,5 +1,5 @@
 // The tab's view: its terminal, its own file browser on the box's files, and where its link stands. It talks to main through the few functions of tabPort and to nothing else.
-import { COPY_MAX, type TabInfo, type TabPort } from '../common/ipc';
+import { COPY_MAX, SAVE_MAX, type TabInfo, type TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
@@ -91,6 +91,17 @@ port.onWhole(() => {
   term.note(`Berth: the whole terminal is copied, ${all.split('\n').length} lines`);
 });
 
+// Ctrl+Shift+S: the whole terminal into a file. The page hands over the text and nothing else; where the
+// file goes is main's to ask and his to answer, because a page may never name a file (plan B2.7).
+port.onSaveAsk(() => {
+  const all = term.whole();
+  if (all === '') {
+    term.note('Berth: there is nothing in this terminal to save');
+    return;
+  }
+  port.save(all.slice(0, SAVE_MAX), 'this terminal');
+});
+
 // Reading this box's prompt, and from it whether something is running in this tab. It is a reading aid: the
 // lines come from the terminal's own buffer after the box's bytes have been drawn, and nothing any safety
 // question depends on is decided from them (plan A5, B3). What it is for is the marks on a tab that is not in
@@ -122,14 +133,15 @@ const drawBlocksNow = (): void => {
     if (drawn.has(m.id)) continue;
     // What this block printed is read when the press happens, not now: the command may still be running,
     // and the rows under it are the box's to fill until its prompt comes back.
-    const off = term.blockAt(m.row, m.width, hue, () => {
+    const off = term.blockAt(m.row, m.width, hue, (toFile) => {
       const next = blocks.marks.find((x) => x.id > m.id);
       const text = term.outputAfter(m.row, next ? next.row : term.rows());
-      if (text !== '') port.copy(text.slice(0, COPY_MAX));
-      // A press that copied nothing says so, in Berth's own line: a button that looks as if it did
-      // something when it did nothing is the silence this app is built not to have.
-      else term.note('Berth: that command printed nothing, so nothing was copied');
-      copied = text === '' ? 'nothing' : 'copied';
+      // A press that did nothing says so, in Berth's own line: a button that looks as if it worked when it
+      // did nothing is the silence this app is built not to have.
+      if (text === '') term.note(`Berth: that command printed nothing, so nothing was ${toFile ? 'saved' : 'copied'}`);
+      else if (toFile) port.save(text.slice(0, SAVE_MAX), 'what one command printed');
+      else port.copy(text.slice(0, COPY_MAX));
+      copied = text === '' ? 'nothing' : toFile ? 'saving' : 'copied';
       document.documentElement.dataset['copied'] = copied;
     });
     if (off) drawn.set(m.id, off);
