@@ -95,6 +95,10 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-row:hover { background: color-mix(in srgb, #c3ccd3 7%, transparent); }
 /* Where the keyboard stands, and where it is looking: the ring is the box's own colour, so the list says
    which box it belongs to the same way its terminal does (BUILD-RULES 2.16). */
+/* A chosen row. The box's own colour, because that is the colour this tab already means by, and a bar down
+   its left edge so a run of them reads as one block rather than as rows that happen to be tinted. */
+.fb-row[data-chosen='yes'] { background: color-mix(in srgb, var(--hue) 22%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--hue) 85%, transparent); }
+.fb-row[data-chosen='yes'] .fb-name { color: #e3e9ed; }
 .fb-row:focus { outline: none; background: color-mix(in srgb, var(--hue) 16%, transparent); }
 .fb-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 .fb-can-enter { cursor: pointer; }
