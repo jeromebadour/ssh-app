@@ -36,7 +36,7 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
    not share room either: the browser has a width of its own and the terminal takes the rest. */
 /* The two panes, and the grip between them. How much room the files take is this tab's own, as its list size
    is: a folder of long names wants room across, a terminal wants it back. */
-#split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--files-w, clamp(220px, 24%, 360px)) 9px 1fr; }
+#split { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--files-w, clamp(260px, 30%, 420px)) 9px 1fr; }
 
 /* Each pane is a thing of its own, with its own head, rather than two boxes leaning on one another. The head
    is where the pane says what it is; what it holds is below. */
@@ -63,7 +63,7 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 #grip:hover::before, #grip:focus-visible::before, #grip[data-held]::before { top: 4px; height: auto; bottom: 4px; margin-top: 0; background: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
 #grip:hover::after, #grip:focus-visible::after, #grip[data-held]::after { background: none; }
 #grip:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -3px; }
-#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; container: files / inline-size; }
 html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 
 /* The folder this is, and the one thing that acts on the folder itself. */
@@ -78,7 +78,20 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    height is how a list ends up with its names cut off. The strips above and below keep their own size: they
    are the pane's furniture, not what is being read. */
 .fb-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; font-size: calc(12px * var(--fb-size, 1)); }
-.fb-row { display: flex; align-items: center; gap: .66em; height: 1.84em; padding: 0 .84em; color: #bcc5cc; font-size: 1em; }
+/* A row is a grid of the same columns the heads above it name, so a name that is too long is cut rather than
+   pushing a size off the end, and every size sits under every other size. The columns are set in em of the
+   pane's own size, so the whole list grows and shrinks together: at 115 per cent the names used to collapse to
+   "r.." while the sizes kept their full width, which is what he saw. */
+.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em minmax(0, 1fr) auto auto; align-items: center; gap: .66em; padding: 0 .84em; }
+/* What gives way when there is not enough room across. The name is what he came to the list to read and what
+   he zooms in for, so it is the last thing to give: the time goes first, then the size, and both are still in
+   what the row says when the pointer rests on it. Zooming in used to do the opposite, taking the name's room
+   and handing it to the numbers, which is how one press of Ctrl and plus wrecked the list. */
+@container files (max-width: 16rem) { .fb-when, #fb-by-changed { display: none; } }
+@container files (max-width: 11rem) { .fb-size, #fb-by-size { display: none; } }
+.fb-row { height: 1.84em; color: #bcc5cc; font-size: 1em; }
+.fb-head { position: sticky; top: 0; z-index: 1; height: 2em; font-size: calc(12px * var(--fb-size, 1)); background: #19222b; border-bottom: 1px solid var(--line); }
+.fb-head-glyph { width: 1.25em; }
 .fb-row:hover { background: color-mix(in srgb, #c3ccd3 7%, transparent); }
 /* Where the keyboard stands, and where it is looking: the ring is the box's own colour, so the list says
    which box it belongs to the same way its terminal does (BUILD-RULES 2.16). */
@@ -92,7 +105,10 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-get:hover { background: color-mix(in srgb, #c3ccd3 12%, transparent); color: #d7dee4; }
 .fb-get:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 .fb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fb-size { flex: none; color: #808d99; font-family: 'Plex Mono', monospace; font-size: .92em; }
+/* Size and time are what a name is read against, not things to be read first: quieter, smaller, and in the
+   face numbers line up in, so a column of them reads down. */
+.fb-size, .fb-when { color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .84em; text-align: right; white-space: nowrap; overflow: hidden; }
+.fb-when { text-align: left; padding-left: .3em; }
 /* A folder is the thing you go into, so it carries the weight; anything that is neither a file nor a folder
    says what it is in its own place rather than being opened. */
 .fb-folder .fb-name { color: #c3ccd3; font-weight: 500; }
@@ -128,13 +144,17 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 /* Only the column in use says its name: three words and a filter do not fit across a pane this narrow, and a
    word that is cut in half says less than a glyph does. The others carry their word in their title and to a
    screen reader, so nothing is lost to anyone (BUILD-RULES 2.1, 2.16). */
-.fb-by > span { display: none; }
-.fb-by[data-on='yes'] > span { display: inline; }
-.fb-by { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: #8b959e; font: inherit; font-size: 11px; cursor: pointer; }
+/* A column head says its name whether or not it is the order in use. It said only the name of the one in
+   use before, which is fine for a row of buttons and useless for the heads of columns: two of the three
+   were a bare glyph over a column of numbers. */
+.fb-by > span { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-by { display: flex; align-items: center; gap: 4px; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: #8b959e; font: inherit; font-size: .92em; cursor: pointer; }
+#fb-by-size, #fb-by-changed { justify-content: flex-end; }
+#fb-by-changed { justify-content: flex-start; padding-left: .3em; }
 .fb-by:hover { color: #cfd6db; }
 .fb-by:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: 1px; }
 /* The column in use carries the hue and its own glyph turns; nothing here is colour alone. */
-.fb-by[data-on='yes'] { color: #e3e9ed; border-color: color-mix(in srgb, var(--hue) 45%, transparent); background: color-mix(in srgb, var(--hue) 14%, transparent); }
+.fb-by[data-on='yes'] { color: #e3e9ed; }
 .fb-by[data-down='yes'] .fb-glyph { transform: scaleY(-1); }
 /* A file that is here on the PC can be taken out of the window by hand. The mark is the cursor under the hand
    and a quiet rule down the left, never colour alone, and the row keeps its height so nothing moves when one

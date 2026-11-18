@@ -260,7 +260,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     btn.type = 'button';
     btn.append(glyph(what === 'name' ? 'name' : what === 'size' ? 'size' : 'clock'));
     const label = document.createElement('span');
-    label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : 'Changed';
+    label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : 'Modified';
     btn.append(label);
     btn.addEventListener('click', () => {
       // The same column again turns the order around; another column starts it the way that column is usually
@@ -275,9 +275,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     });
     return { what, btn };
   });
-  tools.append(find, ...byBtns.map((b) => b.btn));
+  tools.append(find);
+  // The heads of the columns, each one over the column it orders, which is where every file list a person has
+  // used puts them. They were buttons in the tools row before, so a list of files had no columns at all and
+  // the one column on the right said whatever the order was, which is a column that cannot be read against
+  // anything. The ids are the ones they already had, because what they do has not changed.
+  const head = document.createElement('div');
+  head.className = 'fb-head';
+  head.id = 'fb-head';
+  const headSpacer = document.createElement('span');
+  headSpacer.className = 'fb-head-glyph';
+  head.append(headSpacer, ...byBtns.map((b) => b.btn));
   here.append(el.path, binBtn, newBtn, sendBtn);
-  at.append(here, tools, el.list, el.moving, el.foot);
+  at.append(here, tools, head, el.list, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
   // His own words about MobaXterm: the terminal zooms and the file browser does not, and that annoys him.
@@ -1178,13 +1188,17 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // A name is data, never markup: it is set as text and nothing else, however it is written.
     name.textContent = r.name;
     name.title = r.name;
+    // Size and time are columns of their own now, both on every row, rather than one column on the right
+    // saying whatever the list happened to be ordered by. An order by time with no time on screen is an
+    // order he has to take on trust, and a size set in the name's own weight shouts as loud as the name.
     const right = document.createElement('span');
     right.className = 'fb-size';
-    // The column on the right says whatever the list is ordered by, so that the order can be read against
-    // something: ordering by a time with no time on screen is an order a person has to take on trust.
-    right.textContent = by === 'changed' && r.name !== '..' ? whenShort(r.mtime) : r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
-    if (by === 'changed' && r.name !== '..' && r.mtime > 0) right.title = `${r.kind === 'file' ? size(r.size) : r.kind === 'folder' ? 'folder' : r.kind}, last changed ${whenAs(r.mtime)}`;
-    e.append(name, right);
+    right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
+    const when = document.createElement('span');
+    when.className = 'fb-when';
+    when.textContent = r.name === '..' || r.mtime <= 0 ? '' : whenShort(r.mtime);
+    if (r.name !== '..' && r.mtime > 0) when.title = `last changed ${whenAs(r.mtime)}`;
+    e.append(name, right, when);
     // A file this tab has already brought over is draggable from its own row too, not only from the strip:
     // the row is where a person is looking when they decide to take it somewhere.
     const brought = r.kind === 'file' ? broughtOver(r.name) : undefined;
