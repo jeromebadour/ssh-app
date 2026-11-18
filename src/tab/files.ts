@@ -181,6 +181,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   el.list.id = 'fb-list';
   el.list.setAttribute('role', 'listbox');
   el.list.setAttribute('aria-label', 'Files on the box');
+  // It holds several at once, and a list that does not say so is read as holding one choice whatever it then
+  // does, so the three gestures read as broken rather than as working.
+  el.list.setAttribute('aria-multiselectable', 'true');
   el.foot.className = 'fb-foot';
   el.foot.id = 'fb-foot';
   el.moving.className = 'fb-moving';
@@ -851,11 +854,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // reached by Tab at all. A name that has gone falls back to the first row.
     const drawn = [...el.list.querySelectorAll<HTMLElement>('.fb-row')];
     if (!drawn.some((e) => e.dataset['name'] === standing)) standing = drawn[0]?.dataset['name'] ?? '';
-    for (const e of drawn) {
-      const holds = e.dataset['name'] === standing;
-      e.tabIndex = holds ? 0 : -1;
-      e.setAttribute('aria-selected', String(holds));
-    }
+    // This pass settles the tab stop and nothing else. It used to write aria-selected from it as well, and
+    // wrote over what was chosen: when one row was all there was, where the keyboard stands and what is chosen
+    // were the same thing, and they stopped being the same the moment several became possible. Three rows
+    // chosen, three counted in the foot, and one announced, and that one wherever the keyboard happened to be.
+    // Where the keyboard stands is carried by the tab stop and by focus, which is what they are for.
+    for (const e of drawn) e.tabIndex = e.dataset['name'] === standing ? 0 : -1;
     if (hadFocus) drawn.find((e) => e.tabIndex === 0)?.focus();
 
     drawFoot();
