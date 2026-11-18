@@ -2,8 +2,7 @@
 // It holds no key, opens no network connection and parses nothing a box sent.
 import { app, BaseWindow, clipboard, dialog, ipcMain, nativeImage, Notification, protocol, session, shell as osShell, WebContentsView, type IpcMainEvent, type Session } from 'electron';
 import { randomBytes } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
-import { access, mkdir, readdir, readFile, rm, stat, statfs } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
@@ -1569,7 +1568,13 @@ async function pickDownloads(): Promise<void> {
   try {
     const f = await stat(picked);
     if (!f.isDirectory()) throw new Error('not a folder');
-    await access(picked, fsConstants.W_OK);
+    // Written to, not asked about. Windows answers "yes, writable" for a folder it will then refuse, because
+    // what it reports there is the read-only flag and not the rights that really decide; the only answer
+    // that is true on both is to write something and take it away again. It is a few bytes, once, at the
+    // moment he picks the folder, and it is better than finding out with a file half across the network.
+    const proof = path.join(picked, `.berth-can-write-${randomBytes(6).toString('hex')}`);
+    await writeFile(proof, '');
+    await rm(proof, { force: true });
   } catch {
     done = 'That folder cannot be written to, so downloads land where they did';
     return tellShell();

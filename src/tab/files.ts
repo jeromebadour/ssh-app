@@ -531,8 +531,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         // A failure the app wrote down carries the id of its line, and the row says it: he can read a fault
         // out of the pane and find that one failure in the log without going looking for it.
         const named = p.fault === undefined || p.fault === '' ? '' : ` (fault ${p.fault})`;
+        // What went wrong in the words of whatever said so, after Berth's own: a row that can only say "it
+        // could not be done" leaves him with nothing to go on. It is text and nothing else, as everything a
+        // box writes is.
+        const because = p.detail === undefined || p.detail === '' ? '' : `: ${shorten(p.detail, 90)}`;
         down.ended = p.error
-          ? `${words[p.error] ?? words['failed']!}${named}`
+          ? `${words[p.error] ?? words['failed']!}${because}${named}`
           : down.landed === ''
             ? 'It was stopped'
             : down.way === 'in'

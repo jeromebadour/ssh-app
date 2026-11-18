@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestAFileGoesToTheBoxWholeAndIsCheckedAgainstTheBoxsOwnHash(t *testing.T) {
 	ask(t, r, map[string]any{"id": 7, "do": "put", "path": "/var/log", "name": "sent.bin", "from": from})
 	ps := pages(r.wait("the upload to end", ended(7)), 7)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "landed") != "sent.bin" || last(ps, "mark") != "checked" {
 		t.Fatalf("landed: %v %v %v", last(ps, "landed"), last(ps, "mark"), last(ps, "markWhy"))
@@ -123,6 +124,13 @@ func TestAFileAlreadyOnTheBoxIsNotReplacedUnlessItIsAskedFor(t *testing.T) {
 // The permissions of the file being replaced are what the new one wears: a program on the box that was
 // executable stays executable, and a file that was private stays private.
 func TestWhatIsReplacedKeepsItsOwnPermissions(t *testing.T) {
+	// The one test of these that a Windows filesystem cannot hold: it has no executable bit and no owner-only
+	// bit to keep, so the lab box there can only ever answer -rw-rw-rw-. A real box is Linux, and what this
+	// claims is proven on Linux here and against real OpenSSH 8.9 and 10.5 in CI, where the file written in
+	// place is checked for the mode it had before (engine/internal/link/openssh_test.go).
+	if runtime.GOOS == "windows" {
+		t.Skip("a Windows filesystem has no permissions of this kind to keep: proven on Linux and against real OpenSSH")
+	}
 	r, box := withFiles(t)
 	script := filepath.Join(box, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
@@ -206,7 +214,7 @@ func TestAFileABoxCannotHashIsStillSentAndSaidToBeUnchecked(t *testing.T) {
 	ask(t, r, map[string]any{"id": 61, "do": "put", "path": "/", "name": "sent.bin", "from": from})
 	ps := pages(r.wait("the upload to end", ended(61)), 61)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "mark") != "not-checked" {
 		t.Fatalf("it was not marked as unchecked: %v", ps)
@@ -267,7 +275,7 @@ func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 	ask(t, r, map[string]any{"id": 81, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
 	ps := pages(r.wait("the upload to end", ended(81)), 81)
 	if e := last(ps, "error"); e != nil {
-		t.Fatalf("it failed: %v", e)
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
 	}
 	if last(ps, "resumedAt") != float64(250_000) {
 		t.Fatalf("it did not say where it was taken up: %v", ps)

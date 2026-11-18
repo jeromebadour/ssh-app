@@ -41,15 +41,19 @@ type fileAsk struct {
 }
 
 type filePage struct {
-	ID    uint64      `json:"id"`
-	Rows  []fileRow   `json:"rows,omitempty"`
-	Data  string      `json:"data,omitempty"`  // "read": a piece of a file, base64, in order from its start
-	More  bool        `json:"more,omitempty"`  // "read": the file goes on past what was read
-	Done  bool        `json:"done,omitempty"`  // this ask is finished, whether it gave rows or not
-	Error string      `json:"error,omitempty"` // why it stopped, in words for the window to show
-	Where string      `json:"where,omitempty"` // "list": the folder as the box itself names it
-	Space *spaceShown `json:"space,omitempty"`
-	Attrs *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
+	ID    uint64    `json:"id"`
+	Rows  []fileRow `json:"rows,omitempty"`
+	Data  string    `json:"data,omitempty"`  // "read": a piece of a file, base64, in order from its start
+	More  bool      `json:"more,omitempty"`  // "read": the file goes on past what was read
+	Done  bool      `json:"done,omitempty"`  // this ask is finished, whether it gave rows or not
+	Error string    `json:"error,omitempty"` // why it stopped, in words for the window to show
+	// The whole of what went wrong, in the words of whatever said so, capped and stripped of anything a
+	// terminal would act on. A failure that can only say "failed" tells nobody anything, which is the one
+	// thing this app must never do; the window shows this as what it is, text from somewhere else.
+	Detail string      `json:"detail,omitempty"`
+	Where  string      `json:"where,omitempty"` // "list": the folder as the box itself names it
+	Space  *spaceShown `json:"space,omitempty"`
+	Attrs  *fileRow    `json:"attrs,omitempty"` // "stat": what one path is
 	// "get": how it is going and how it ended.
 	Got       uint64    `json:"got,omitempty"`       // bytes written to the PC so far
 	Of        uint64    `json:"of,omitempty"`        // how big the box said the file is
@@ -184,7 +188,7 @@ func (f *files) ask(a fileAsk) {
 				f.page(filePage{ID: a.ID, Done: true}) // given up: said as finished, not as a failure
 				return
 			}
-			f.page(filePage{ID: a.ID, Done: true, Error: say(err)})
+			f.page(filePage{ID: a.ID, Done: true, Error: say(err), Detail: detailOf(err)})
 			return
 		}
 		f.page(filePage{ID: a.ID, Done: true})
@@ -435,6 +439,26 @@ func boxName(name string) error {
 
 func row(name string, a sftp.Attrs) fileRow {
 	return fileRow{Name: name, Kind: a.Kind(), Size: a.Size, Mode: a.Mode, MTime: a.MTime}
+}
+
+// detailOf is the real reason, for a person looking at a failure that says only "failed". It is cut to a
+// line a window can hold and stripped of control characters: a box writes some of these, and a box's words
+// are drawn as text and never acted on (plan B1).
+func detailOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	out := make([]rune, 0, 200)
+	for _, r := range err.Error() {
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		out = append(out, r)
+		if len(out) >= 200 {
+			break
+		}
+	}
+	return string(out)
 }
 
 // say turns a refusal into the words a window shows. A box's own words are never passed through as they are:

@@ -85,6 +85,10 @@ jobs:
           files=""
           if [ -n "$NUMBER" ]; then files="$(gh api "repos/$REPO/pulls/$NUMBER/files" --paginate --jq '.[].filename')"; fi
           if grep -qx 'toolchain/windows-run' <<<"$files"; then windows=true; fi
+          # The engine runs on his PC, so a change to it is a change to what Windows runs: it asks for the
+          # Windows run of its own accord. Before this, a release was the first thing to run those tests on
+          # Windows, and it found every file test of the engine failing there.
+          if grep -qE '^(engine/|\.github/workflows/ci\.yml$)' <<<"$files"; then windows=true; fi
           # The workflow itself counts: the step that runs these tests, and the names it runs, live here, and a
           # change to them that cannot be run is a change nobody has proved.
           if grep -qE '^(engine/|scripts/lab-openssh\.sh$|toolchain/lab-images$|toolchain/go\.env$|\.github/workflows/ci\.yml$)' <<<"$files"; then openssh=true; fi
@@ -151,9 +155,22 @@ jobs:
       - name: The pinned Go toolchain
         run: bash scripts/get-go.sh
       - name: The engine's tests on Windows (the process tests, and the patience read back from Windows)
+        # The test's own verdict decides this step, not grep's. Piping it through grep hands the step grep's
+        # exit status, so a failing test prints its failure and the job goes green on it: every file test of
+        # the engine was failing on Windows that way, unseen, until a release run (which does not pipe) said
+        # so. The output goes to a file, grep makes it readable, and the file is what is judged.
         run: |
           source scripts/env.sh
-          cd engine && go vet ./... && go test -count=1 -v -run 'Test' ./... 2>&1 | grep -E '^(=== RUN|--- |ok|FAIL|panic|\s+\S+_test.go)' 
+          cd engine
+          go vet ./...
+          set +e
+          go test -count=1 -v -run 'Test' ./... > /tmp/windows-tests.out 2>&1
+          code=$?
+          set -e
+          grep -E '^(=== RUN|--- |ok|FAIL|panic|\s+\S+_test.go)' /tmp/windows-tests.out || true
+          grep -qE '^FAIL' /tmp/windows-tests.out && { echo "::error::A test failed on Windows."; exit 1; }
+          [ "$code" -eq 0 ] || { echo "::error::The engine's tests on Windows ended $code."; exit 1; }
+          grep -qE '^ok\s' /tmp/windows-tests.out || { echo "::error::No test ran on Windows."; exit 1; }
       - name: Build
         run: bash scripts/build.sh
       - name: The Windows packages, built here
@@ -170,8 +187,13 @@ jobs:
         run: node scripts/smoke-windows.mjs
 
       - name: The release zip, and the install proof
+        # The zip is made from packages built under the same version it is named with, because the release
+        # refuses a program whose own properties say it is something else: the version a person reads in the
+        # file's properties and the version of the thing they downloaded are the same thing or they are a
+        # lie. The real release passes its version the same way (release.yml).
         run: |
-          node scripts/release.mjs 0.0.0-ci
+          BERTH_VERSION=0.0.0-ci node scripts/package.mjs win32
+          BERTH_VERSION=0.0.0-ci node scripts/release.mjs 0.0.0-ci
           node scripts/smoke-install.mjs
 
   # GitHub offers no ruleset for a private repo on the free plan, so nothing there blocks a direct push to main.

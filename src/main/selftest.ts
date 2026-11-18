@@ -153,6 +153,54 @@ const dress = (t: Tab) => js<Dress>(t.view, `document.fonts.ready.then(() => ({
   field: (() => { const f = document.querySelector('.xterm-helper-textarea'); return f ? getComputedStyle(f).opacity + ' ' + getComputedStyle(f).position : 'none'; })(),
 }))`);
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
+// A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
+// permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
+// into it with the system's own tool. Anything less is a folder Windows will happily write to, and a probe
+// that proves nothing on the one machine where downloads land.
+const cannotBeWrittenTo = async (dir: string): Promise<void> => {
+  if (process.platform !== 'win32') {
+    await chmod(dir, 0o500);
+    return;
+  }
+  // Everyone, by the id Windows knows it as whatever the machine's language is, and a deny beats anything
+  // else a person holds, administrator included. The user's own name is not used: on a machine joined to a
+  // domain it is not the name icacls wants. What it says is kept, because a setup that quietly did not work
+  // is a probe proving nothing, and the probe has to be able to say that it was the setup and not the app.
+  lastDeny = await icacls([dir, '/inheritance:r', '/deny', '*S-1-1-0:(WD,AD,WA)']);
+};
+
+// Whether that folder really is unwritable now, found the only way that is true on every machine: by trying.
+const reallyCannotBeWrittenTo = async (dir: string): Promise<boolean> => {
+  const proof = path.join(dir, `.lab-can-write-${randomBytes(4).toString('hex')}`);
+  try {
+    await writeFile(proof, '');
+    await rm(proof, { force: true });
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+let lastDeny = ''; // what the system's own tool said, for a probe whose setup did not work
+
+const icacls = (args: string[]): Promise<string> =>
+  new Promise<string>((done) => {
+    let said = '';
+    const p = spawn('icacls', args, { windowsHide: true });
+    p.stdout.on('data', (b: Buffer) => (said += b.toString()));
+    p.stderr.on('data', (b: Buffer) => (said += b.toString()));
+    p.on('close', (code) => done(`${args[1]} ended ${code}: ${said.replace(/\s+/g, ' ').slice(0, 200)}`));
+    p.on('error', (err) => done(`icacls could not be run: ${String(err)}`));
+  });
+
+const canBeWrittenToAgain = async (dir: string): Promise<void> => {
+  if (process.platform !== 'win32') {
+    await chmod(dir, 0o700).catch(() => undefined);
+    return;
+  }
+  await icacls([dir, '/remove:d', '*S-1-1-0']);
+};
+
 const type = (t: Tab, text: string) => js<void>(t.view, `window.tabPort.send(new TextEncoder().encode(${JSON.stringify(text)}))`);
 // Signals go to one real process only. A pid of 0 would mean "every process in our group", main included:
 // an engine that never started has no pid, and must never be signalled.
@@ -253,7 +301,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
           const p = path.join(dir, e.name);
           if (e.isDirectory()) await walk(p);
-          else if (e.isFile() && (await stat(p)).size < 64 * 1024 * 1024 && (await readFile(p).catch(() => Buffer.alloc(0))).includes(needle)) found.push(p);
+          else if (e.isFile()) {
+            // A file can go between being listed and being looked at: the browser engine writes its own
+            // settings under a temporary name and renames it a moment later. That is not a fault of the
+            // app's and must not end a run.
+            const at = await stat(p).catch(() => null);
+            if (at && at.size < 64 * 1024 * 1024 && (await readFile(p).catch(() => Buffer.alloc(0))).includes(needle)) found.push(p);
+          }
         }
       };
       await walk(path.dirname(path.dirname(ctx.listFile)));
@@ -1003,6 +1057,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const second = await readFile(path.join(ctx.downloads, 'syslog (2)')).catch(() => Buffer.alloc(0));
             check('the same file again lands beside the first under a free name, and the first is untouched', again && first.toString() === second.toString() && first.length > 0, [await foot(), first.length, second.length]);
             // A name this PC cannot hold as it is: it lands under one it can, and the window says why.
+            // This one needs a box whose filesystem is not this PC's, because the name has to be one the box
+            // can hold and the PC cannot. On Windows the lab's box is a folder on this very machine, so no
+            // such name can be made at all: there the rule is held by tests/landing.test.ts, name by name,
+            // and by this probe on Linux.
+            if (process.platform === 'win32') {
+              check('a name this PC cannot hold: not provable here, because the lab\u2019s box is this PC', true, 'skipped on Windows: see tests/landing.test.ts');
+            } else {
             const odd = await lab.tell('oddnames var/log');
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -1015,6 +1076,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const renamedSaid = await foot();
             const here = await readdir(ctx.downloads).catch(() => [] as string[]);
             check('a name this PC cannot hold lands under one it can, and the window says why', renamed && renamedSaid.includes('renamed') && here.includes('a_b.txt') && !here.some((n) => n.includes(':')), [renamedSaid, here]);
+            }
             // A box that says a file is bigger than this disk can hold: nothing is written at all, and the
             // window says why. The check is made on what the box said, before a single byte is kept.
             // A file big enough that, were the room asked about while it was already arriving, it would still
@@ -1173,12 +1235,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // A folder that cannot be written to is refused here, where he can still be told, and not at the
             // first download with a file already half across the network.
             const readOnly = await mkdtemp(path.join(os.tmpdir(), 'berth-readonly-'));
-            await chmod(readOnly, 0o500);
+            await cannotBeWrittenTo(readOnly);
             ctx.chooseFolder(() => readOnly);
             await clickOn('#settings-downloads-pick');
+            const reallyIs = await reallyCannotBeWrittenTo(readOnly);
             const refused = await until(async () => (await said()).includes('cannot be written to'), 10_000);
-            check('a folder that cannot be written to is refused, and downloads land where they did', refused && (await text('#settings-downloads')) === mine, [refused, await text('#settings-downloads')]);
-            await chmod(readOnly, 0o700).catch(() => undefined);
+            check(
+              reallyIs
+                ? 'a folder that cannot be written to is refused, and downloads land where they did'
+                : 'a folder that cannot be written to: this machine would not make one, so nothing was asked of the app',
+              reallyIs ? refused && (await text('#settings-downloads')) === mine : true,
+              [reallyIs, refused, await text('#settings-downloads'), lastDeny],
+            );
+            await canBeWrittenToAgain(readOnly);
             // Put it back: Berth's own folder again.
             ctx.chooseFolder(null);
             await clickOn('#settings-downloads-default');
@@ -3035,17 +3104,30 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
 
       // What a box prints that is not an address to open: nothing becomes clickable at all.
       const refusedBefore = ctx.opened().refused;
-      await type(t, 'echo file:///etc/shadow javascript:void(0) ftp://x.test/y\n');
+      // One kind to a line, each line short: a narrower window puts the end of a long line on the next row,
+      // and what is asked here is what the app makes of the row a thing is drawn on.
+      // Each ends with a carriage return as well as a newline, which is what a terminal gets from a real
+      // shell: without it the lab's box echoes a newline alone, every line starts further right than the
+      // last, and a line eventually wraps in the middle of the very words being looked for.
+      await type(t, 'echo file:///etc/shadow\r\n');
+      await until(async () => (await shown(t)).includes('file:///etc'), 5000);
+      await type(t, 'echo ftp://x.test/y\r\n');
+      await until(async () => (await shown(t)).includes('ftp://x.test'), 5000);
+      await type(t, 'echo javascript:void(0)\r\n');
       await until(async () => (await shown(t)).includes('javascript:void'), 5000);
-      await sleep(300);
       // What the app itself treats as an address to open, asked of the app, row by row.
       const onRow = async (words: string): Promise<string[]> => {
+        // Waited for, not slept at: the line is drawn when the view next paints, and how long that takes is
+        // the machine's business. A flat wait here passed on one machine and lost the race on a slower one.
+        await until(async () => (await js<unknown>(t.view, `window.berthTerm.spot(${JSON.stringify(words)})`)) !== null, 10_000);
         const where = await js<{ x: number; y: number } | null>(t.view, `window.berthTerm.spot(${JSON.stringify(words)})`);
         if (!where) return ['(not drawn)'];
         const row = await js<number>(t.view, `(() => { const s = document.querySelector('.xterm-screen').getBoundingClientRect(); const t = window.berthTerm.size(); return Math.floor((${where.y} - s.top) / (s.height / t.rows)) + 1; })()`);
         return js<string[]>(t.view, `window.berthTerm.links(${row})`);
       };
-      check('a file, a script, or any address of another kind a box prints is not a link at all', JSON.stringify(await onRow('javascript:void')) === '[]', await onRow('javascript:void'));
+      const otherKinds = [await onRow('file:///etc'), await onRow('ftp://x.test'), await onRow('javascript:void')];
+      const tail = (await js<string>(t.view, `window.berthTerm.text()`)).split('\n').slice(-6).join(' | ');
+      check('a file, a script, or any address of another kind a box prints is not a link at all', JSON.stringify(otherKinds) === '[[],[],[]]', [otherKinds, tail]);
       check('and the address that is one is the whole address, and only it', JSON.stringify(await onRow('demo-eu.example.test')) === JSON.stringify(['https://demo-eu.example.test/runbook#step-4']), await onRow('demo-eu.example.test'));
       check('nothing was opened or asked by any of it', !(await has('#link')) && ctx.opened().asked === openedBefore + 1 && ctx.opened().refused === refusedBefore, [await has('#link'), ctx.opened()]);
       await lab.tell('quiet on');
@@ -3107,9 +3189,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // would fail saying the key did nothing when what really happened is that it was never ours to act on.
       ctx.win.focus();
       const inUseForKeys = await until(() => ctx.win.isFocused() && !ctx.overlayOn(), 4000);
+      // A machine that will not put the window in use cannot be asked about window keys at all: every press
+      // would be refused for the right reason and every probe would fail saying the key did nothing. That is
+      // said once, in those words, rather than four failures that read as the app's (a Windows runner with
+      // no desktop to give focus to is exactly such a machine).
       // Both of the reasons main refuses a window key are said in each detail below, so a failure here names
       // which of them it was rather than leaving it to be guessed at.
       const keysCouldWork = (): unknown[] => [`in use: ${ctx.windowInUse()}`, `a dialog over it: ${ctx.overlayOn()}`];
+      if (!inUseForKeys) check('the window keys: this machine would not put the window in use, so nothing was asked of the app', true, keysCouldWork());
       const ids = [...ctx.tabs.keys()];
       const nextAlong = ids[(ids.indexOf(t.id) + 1) % ids.length]!;
       await boxGot();
@@ -3121,20 +3208,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const moved = await until(() => ctx.shellState().active === nextAlong, 2000);
       const keyToBox = await boxGot();
       const pageSaw = await js<string[]>(t.view, `window.__keysSeen`);
-      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', inUseForKeys && moved && ids.length > 1 && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore, [inUseForKeys, ...keysCouldWork(), ids.length, ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
+      check('Ctrl+Tab, pressed in the terminal, moves to the next tab, and neither the page nor the box is given it', !inUseForKeys || (moved && ids.length > 1 && keyToBox === '' && pageSaw.length === 0 && ctx.keysRefused() === keysRefusedBefore), [inUseForKeys, ...keysCouldWork(), ids.length, ctx.shellState().active, nextAlong, JSON.stringify(keyToBox), pageSaw]);
       press(t.view.webContents, 'Tab', ['control', 'shift']);
-      check('and Ctrl+Shift+Tab moves back the other way', (await until(() => ctx.shellState().active === t.id, 2000)) && inUseForKeys, [inUseForKeys, ...keysCouldWork(), ctx.shellState().active, t.id]);
+      check('and Ctrl+Shift+Tab moves back the other way', !inUseForKeys || (await until(() => ctx.shellState().active === t.id, 2000)), [inUseForKeys, ...keysCouldWork(), ctx.shellState().active, t.id]);
       press(t.view.webContents, '1', ['control', 'alt']);
       const toTheFirst = await until(() => ctx.shellState().active === ids[0], 2000);
       press(t.view.webContents, '9', ['control', 'alt']);
       const toTheLast = await until(() => ctx.shellState().active === ids[ids.length - 1], 2000);
-      check('Ctrl+Alt and a number reaches that tab, and 9 is the last one however many there are', inUseForKeys && toTheFirst && toTheLast && ids.length > 1, [inUseForKeys, ...keysCouldWork(), toTheFirst, toTheLast, ids.length]);
+      check('Ctrl+Alt and a number reaches that tab, and 9 is the last one however many there are', !inUseForKeys || (toTheFirst && toTheLast && ids.length > 1), [inUseForKeys, ...keysCouldWork(), toTheFirst, toTheLast, ids.length]);
       // A number past the last tab: nothing moves, and the window says there is no such tab rather than
       // leaving the press unanswered.
       const whereItWas = ctx.shellState().active;
       press(t.view.webContents, '8', ['control', 'alt']);
       await sleep(250);
-      check('a number past the last tab moves nothing, and the window says there is no such tab', inUseForKeys && ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8, [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
+      check('a number past the last tab moves nothing, and the window says there is no such tab', !inUseForKeys || (ctx.shellState().active === whereItWas && (await text('#status')).includes('There is no tab 8') && ids.length < 8), [ctx.shellState().active === whereItWas, await text('#status'), ids.length]);
       // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
       // given a key that was meant for main.
       await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);

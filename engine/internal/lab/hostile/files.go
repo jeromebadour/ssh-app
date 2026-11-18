@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,7 +123,14 @@ type fileServer struct {
 
 // serveFiles answers the file protocol on one channel, under this folder.
 func serveFiles(ch io.ReadWriteCloser, root string) {
-	s := &fileServer{root: root, dirs: map[string][]os.DirEntry{}, files: map[string]*os.File{}}
+	// The root is resolved once, here, and every path is compared against that one. Windows hands the same
+	// folder out under two names (C:\Users\RUNNER~1\... and C:\Users\runneradmin\...), and a path that
+	// came back resolved then matched none of the root, so the whole of a machine path was handed on as if
+	// it were a path on the box: the box was asked to open its own root with a PC path stuck on the end.
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	s := &fileServer{root: filepath.Clean(root), dirs: map[string][]os.DirEntry{}, files: map[string]*os.File{}}
 	defer func() {
 		s.mu.Lock()
 		for _, f := range s.files {
@@ -163,18 +171,41 @@ func serveFiles(ch io.ReadWriteCloser, root string) {
 // under keeps every path inside the lab folder, so a test cannot reach the machine's own files by mistake.
 // asBox turns a path on the machine running the lab into the path a box would call it: the box's own files
 // are the box's root.
+// Both of these cross between two kinds of path and must say which is which. A box's paths have slashes and
+// start at its root; the machine running the lab has its own, and on Windows they have backslashes and a
+// drive letter. Mixing the two reads "C:\\lab\\srv\\app" as a box path and makes nonsense of everything
+// judged on it, which is how every file test of the engine failed on Windows while passing on Linux.
 func (s *fileServer) asBox(p string) string {
-	cut := strings.TrimPrefix(p, s.root)
-	if cut == "" {
+	here := filepath.ToSlash(p)
+	root := filepath.ToSlash(s.root)
+	cut, ok := without(here, root)
+	if !ok || cut == "" || cut == "/" {
 		return "/"
 	}
 	return path.Clean("/" + strings.TrimPrefix(cut, "/"))
 }
 
+// without takes the root off the front of a path on this machine. Windows names the same folder in more than
+// one way and does not care about case, so the comparison there is made without case; anywhere else it is
+// exact, as the filesystem is.
+func without(here, root string) (string, bool) {
+	if runtime.GOOS == "windows" {
+		if len(here) >= len(root) && strings.EqualFold(here[:len(root)], root) {
+			return here[len(root):], true
+		}
+		return here, false
+	}
+	if strings.HasPrefix(here, root) {
+		return strings.TrimPrefix(here, root), true
+	}
+	return here, false
+}
+
 func (s *fileServer) under(raw []byte) string {
-	p := string(raw)
-	clean := path.Clean("/" + strings.TrimPrefix(p, s.root))
-	return path.Join(s.root, clean)
+	asked := filepath.ToSlash(string(raw))
+	cut, _ := without(asked, filepath.ToSlash(s.root))
+	clean := path.Clean("/" + strings.TrimPrefix(cut, "/"))
+	return filepath.Join(s.root, filepath.FromSlash(clean))
 }
 
 func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
@@ -343,7 +374,16 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 			return fxpStatus, status(fxFailure, "no such handle")
 		}
 		if flags&0x4 != 0 {
-			if err := f.Chmod(os.FileMode(r.u32() & 0o7777)); err != nil {
+			// Through the handle where that works, which is what a box does and what keeps this honest when
+			// the name is about to change under it. Windows cannot set permissions through a handle at all,
+			// so there it is done by the name the handle was opened with: that is as far as the machine
+			// running the lab can go, and it is still really done rather than merely answered.
+			mode := os.FileMode(r.u32() & 0o7777)
+			err := f.Chmod(mode)
+			if err != nil {
+				err = os.Chmod(f.Name(), mode)
+			}
+			if err != nil {
 				return fxpStatus, status(codeOf(err), err.Error())
 			}
 		}
