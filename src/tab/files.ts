@@ -286,8 +286,37 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const headSpacer = document.createElement('span');
   headSpacer.className = 'fb-head-glyph';
   head.append(headSpacer, ...byBtns.map((b) => b.btn));
-  here.append(el.path, binBtn, newBtn, sendBtn);
-  at.append(here, tools, head, el.list, el.moving, el.foot);
+  const wayBtn = (what: 'back' | 'forward', title: string, press: () => void): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.className = 'fb-way';
+    b.id = `fb-${what}`;
+    b.type = 'button';
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.append(glyph(what === 'back' ? 'wayBack' : 'wayForward'));
+    b.addEventListener('click', press);
+    return b;
+  };
+  let recentOpen = false;
+  const recentBtn = document.createElement('button');
+  recentBtn.className = 'fb-way fb-recent-btn';
+  recentBtn.id = 'fb-recent';
+  recentBtn.type = 'button';
+  recentBtn.title = 'The folders this tab has been in';
+  recentBtn.setAttribute('aria-label', 'The folders this tab has been in');
+  recentBtn.append(glyph('recent'));
+  recentBtn.addEventListener('click', () => {
+    recentOpen = !recentOpen;
+    said = '';
+    draw();
+  });
+  const backBtn = wayBtn('back', 'The folder before this one (Alt and left, or the mouse\'s own back button)', () => back());
+  const fwdBtn = wayBtn('forward', 'Forward again (Alt and right, or the mouse\'s own forward button)', () => forward());
+  here.append(backBtn, fwdBtn, el.path, recentBtn, binBtn, newBtn, sendBtn);
+  const recentAt = document.createElement('div');
+  recentAt.className = 'fb-recent-menu';
+  recentAt.id = 'fb-recent-menu';
+  at.append(here, recentAt, tools, head, el.list, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
   // His own words about MobaXterm: the terminal zooms and the file browser does not, and that annoys him.
@@ -323,6 +352,32 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (let i = 0; i < SIZES.length; i++) if (Math.abs(SIZES[i]! - want) < Math.abs(SIZES[near]! - want)) near = i;
     setSize(near, false);
   });
+  // The mouse's own back and forward buttons, which is how he moves through folders in every other window he
+  // uses. They are taken on the pane rather than on the list, because they mean the same thing wherever in
+  // the pane the pointer is standing.
+  at.addEventListener('auxclick', (e: MouseEvent) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    if (e.button === 3) back();
+    else forward();
+    e.preventDefault();
+  });
+  // Alt and an arrow, which is the same pair of ways by the keyboard. Alt is the window's own, so this is
+  // read before the list's own arrows, which move where it stands.
+  at.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'ArrowLeft') back();
+    else if (e.key === 'ArrowRight') forward();
+    else return;
+    e.preventDefault();
+  });
+  // Escape shuts the list of folders, wherever in the pane it is pressed.
+  at.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !recentOpen) return;
+    recentOpen = false;
+    draw();
+    e.preventDefault();
+  });
+
   // The keys, taken only while this pane has the focus: the terminal beside it has its own size and its own
   // keys, and a press meant for one must never move the other.
   at.addEventListener('keydown', (e) => {
@@ -347,6 +402,47 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   );
 
   const ask = (a: FileAsk) => asker.ask(a);
+
+  // Where this tab has been, and where it stands in that. He asked for it against MobaXterm, whose path bar
+  // carries a list of everywhere it has been and is how he changes folders: "no drop down forward backward at
+  // all ... this is very important for changing paths". It is this tab's own, as its list size and the grip's
+  // share are, and it holds folders rather than rows.
+  const been: string[] = [];
+  let wasAt = -1;
+  const MOST_KEPT = 60;
+  // goTo is what a press means: a new folder, so anything forward of here is no longer where he is going.
+  // open on its own is the listing itself, used again by the box's own answers and by a retry, and those must
+  // never write history: a folder listed again because something in it changed is not a place he went.
+  const goTo = (path: string): void => {
+    if (path === '') return;
+    if (been[wasAt] !== path) {
+      been.splice(wasAt + 1);
+      been.push(path);
+      if (been.length > MOST_KEPT) been.shift();
+      wasAt = been.length - 1;
+    }
+    open(path);
+  };
+  const canBack = (): boolean => wasAt > 0;
+  const canForward = (): boolean => wasAt >= 0 && wasAt < been.length - 1;
+  const back = (): void => {
+    if (!canBack()) {
+      said = 'This tab has not been anywhere else yet';
+      draw();
+      return;
+    }
+    wasAt -= 1;
+    open(been[wasAt]!);
+  };
+  const forward = (): void => {
+    if (!canForward()) {
+      said = 'This is the last folder this tab opened';
+      draw();
+      return;
+    }
+    wasAt += 1;
+    open(been[wasAt]!);
+  };
 
   const open = (path: string, keepTries = 0) => {
     if (trying) {
@@ -641,6 +737,42 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // text direction to cut from the left moves the leading "/" to the other end of the line.
     el.path.textContent = shorten(here, 46);
     el.path.title = here;
+    // Where this tab has been, in numbers, for the window's own tests to read: a probe that judged the
+    // history from the buttons alone would be judging the buttons.
+    at.dataset['been'] = String(been.length);
+    at.dataset['beenAt'] = String(wasAt);
+    at.dataset['recentOpen'] = recentOpen ? 'yes' : 'no';
+    // The two ways through the folders this tab has been in. A way that leads nowhere is dim rather than
+    // gone: a button that comes and goes under the hand is a button that is pressed by accident.
+    backBtn.disabled = !canBack();
+    fwdBtn.disabled = !canForward();
+    recentBtn.disabled = been.length < 2;
+    recentBtn.dataset['on'] = recentOpen ? 'yes' : 'no';
+    recentAt.replaceChildren();
+    if (recentOpen && been.length > 0) {
+      // Newest first, each folder once: a list of where he has been is not a list of how often he went.
+      const seen = new Set<string>();
+      for (let i = been.length - 1; i >= 0; i--) {
+        const folder = been[i]!;
+        if (seen.has(folder)) continue;
+        seen.add(folder);
+        const b = document.createElement('button');
+        b.className = 'fb-recent-one';
+        b.type = 'button';
+        b.dataset['path'] = folder;
+        if (i === wasAt) b.dataset['on'] = 'yes';
+        b.append(glyph('folder'));
+        const words = document.createElement('span');
+        words.textContent = shorten(folder, 52);
+        words.title = folder;
+        b.append(words);
+        b.addEventListener('click', () => {
+          recentOpen = false;
+          goTo(folder);
+        });
+        recentAt.append(b);
+      }
+    }
     // Which column the list is ordered by, and which way: said on the buttons themselves, in words a reader
     // hears as well as in their look, because a button that is "on" only by its colour says nothing aloud.
     for (const { what, btn } of byBtns) {
@@ -689,12 +821,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // One row above, when there is one: the window's own way up, rather than a "..' among the files.
       const up = parent(here);
       if (up !== '') {
-        frag.append(row({ name: '..', kind: 'folder', size: 0, mode: 0, mtime: 0 }, () => open(up), 'fb-up'));
+        frag.append(row({ name: '..', kind: 'folder', size: 0, mode: 0, mtime: 0 }, () => goTo(up), 'fb-up'));
       }
       for (const r of shown(rows)) {
         // A folder is gone into; a file is opened in the viewer, read-only. Anything else is neither, and is
         // shown with what it is rather than opened at all (plan B4.1).
-        const enter = r.kind === 'folder' ? () => open(join(here, r.name)) : r.kind === 'file' ? () => openFile(join(here, r.name), r.name, r.size) : undefined;
+        const enter = r.kind === 'folder' ? () => goTo(join(here, r.name)) : r.kind === 'file' ? () => openFile(join(here, r.name), r.name, r.size) : undefined;
         frag.append(row(r, enter));
       }
       el.list.append(frag);
@@ -1293,11 +1425,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const here = where || asked;
     if (name === '..') {
       const up = parent(here);
-      return up === '' ? undefined : () => open(up);
+      return up === '' ? undefined : () => goTo(up);
     }
     const r = rows.find((x) => x.name === name);
     if (!r) return undefined;
-    if (r.kind === 'folder') return () => open(join(here, r.name));
+    if (r.kind === 'folder') return () => goTo(join(here, r.name));
     if (r.kind === 'file') return () => openFile(join(here, r.name), r.name, r.size);
     return undefined;
   };
@@ -1569,13 +1701,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
       const up = parent(where || asked);
       if (up === '') return;
-      open(up);
+      goTo(up);
     } else return;
     e.preventDefault();
   });
 
   return {
-    open,
+    open: goTo,
     emptyOldTrash,
     shown: () => where,
     rows: () => rows.length,
@@ -1657,6 +1789,11 @@ export const SHAPES: Record<string, string> = {
   copy: 'M5.5 5.5h7.5v7.5h-7.5zM3 10.5V3h7.5',
   bin: 'M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5',
   back: 'M3.5 8.5h7a2.5 2.5 0 0 0 0-5H7M6 11L3.5 8.5 6 6',
+  // Going back and forward through the folders this tab has been in. Their own glyphs: the one above means
+  // putting a thing back from the trash, which is a different act and may not share a picture with this.
+  wayBack: 'M10 3.5L5.5 8l4.5 4.5',
+  wayForward: 'M6 3.5L10.5 8 6 12.5',
+  recent: 'M4 6.5L8 10.5l4-4',
   // Narrowing the list: a lens, drawn as the one glyph a person already reads as "look for".
   search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3 3',
   // The three columns the list can be ordered by: letters, a stack with weight at its foot, and a clock.
