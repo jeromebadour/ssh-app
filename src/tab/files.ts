@@ -371,6 +371,37 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (let i = 0; i < SIZES.length; i++) if (Math.abs(SIZES[i]! - want) < Math.abs(SIZES[near]! - want)) near = i;
     setSize(near, false);
   });
+  // The path, and every folder above it. He asked for a way to change folders from the path itself, the way
+  // MobaXterm's path carries a list: the caret beside it already opens the folders this tab has been in, and
+  // this is the other half, the folders this one is inside. A left press opens it too, because a path that
+  // can be pressed and does nothing is worse than one that cannot.
+  //
+  // What is deliberately NOT here: anything that types into his shell. "Open this folder in the terminal" is
+  // in his own reference menu and cannot be in this one, because nothing in this app is ever typed into a
+  // shell by the app (plan B2.5, his rule of 2026-11-15).
+  const pathMenu = (x: number, y: number): void => {
+    const now = where || asked;
+    const lines: MenuLine[] = [];
+    const up: string[] = [];
+    for (let f = parent(now); f !== ''; f = parent(f)) {
+      up.push(f);
+      if (up.length >= 12) break;
+    }
+    for (const f of up) lines.push({ glyph: 'up', label: f, run: () => goTo(f) });
+    if (up.length > 0) lines.push({ apart: true });
+    lines.push({ glyph: 'copy', label: 'Copy this folder\u2019s path', run: () => void port.copy(now), id: 'fb-menu-copy-path' });
+    lines.push({ glyph: 'send', label: 'Send a file here', run: () => sendBtn.click() });
+    openMenu(at, x, y, lines, glyph);
+  };
+  el.path.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault();
+    pathMenu(e.clientX, e.clientY);
+  });
+  el.path.addEventListener('click', (e: MouseEvent) => {
+    const box = el.path.getBoundingClientRect();
+    pathMenu(e.clientX, box.bottom);
+  });
+
   // The right button, on the list. There was no menu anywhere in this app: not on a file, not on a folder,
   // not on the empty part of a list, which he called one of the biggest gaps. What is in it is decided by
   // what the press came down on, as his own reference menus do: a folder's and a file's are not the same.
