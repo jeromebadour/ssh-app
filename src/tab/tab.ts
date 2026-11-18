@@ -1,5 +1,5 @@
 // The tab's view: its terminal, its own file browser on the box's files, and where its link stands. It talks to main through the few functions of tabPort and to nothing else.
-import { COPY_MAX, type TabInfo, type TabPort } from '../common/ipc';
+import { COPY_MAX, SAVE_MAX, type TabInfo, type TabPort } from '../common/ipc';
 import { painted, watchView } from '../common/meter-view';
 import { ending } from '../common/link-words';
 import { forBox } from '../common/paste';
@@ -89,6 +89,18 @@ port.onWhole(() => {
   }
   port.copy(all.slice(0, COPY_MAX));
   term.note(`Berth: the whole terminal is copied, ${all.split('\n').length} lines`);
+});
+
+// Ctrl+Shift+S: the whole terminal, offered to be written to a file. The same press rule as Ctrl+Shift+A:
+// main answers the key itself, so a box can neither see it nor make it happen. The view offers the text and
+// nothing else; which file it goes to is main's own, from the system's own chooser.
+port.onSaveAsk(() => {
+  const all = term.takeAll();
+  if (all === '') {
+    term.note('Berth: there is nothing in this terminal to save');
+    return;
+  }
+  port.save('whole', all.slice(0, SAVE_MAX));
 });
 
 // Reading this box's prompt, and from it whether something is running in this tab. It is a reading aid: the

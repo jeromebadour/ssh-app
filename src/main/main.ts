@@ -8,13 +8,14 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, signsWith, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, GRAB_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { FaultLog } from './faultlog';
 import { Boxes, fingerprintOf, TABS_REMEMBERED } from './boxes';
 import { Engine, type EngineAim, type SignAnswer, type SignRequest } from './engine';
 import { Gate } from './gate';
+import { saveName } from './outname';
 import { identifyWith } from './identify';
 import { firstVisitWith, type Visited } from './firstvisit';
 import { KeyProc } from './keyproc';
@@ -254,6 +255,7 @@ let listOnDisk = ''; // where the list is kept: main's own, never a view's word 
 let boxes: Boxes | null = null;
 let signsRefused = 0;
 let copiesRefused = 0; // a tab not in front, or a window not in use, offered text for the clipboard
+let savesRefused = 0; // the same, for text offered to be written to a file
 let overlay = false; // a menu or dialog of the shell is open: the shell is above the tabs
 let openCheck = ''; // the box whose first-connection check is open in a dialog
 const askedAt = new Map<string, string[]>(); // per box: when it was asked who it is
@@ -915,7 +917,10 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
   // The whole terminal, selected and copied. Ctrl+A stays the shell's own, which is the start of the line:
   // taking that from him would be the app typing over a key his hands already know (his words, 2026-11-15).
   const whole = !input.alt && input.shift && (input.key === 'A' || input.key === 'a');
-  if (!digit && !step && !whole) return false;
+  // The whole terminal, written to a file he chooses. Beside Ctrl+Shift+A on purpose: the same reading of a
+  // tab, one to the clipboard and one to a file (SSH-APP-DETAILS 7, "Save output").
+  const save = !input.alt && input.shift && (input.key === 'S' || input.key === 's');
+  if (!digit && !step && !whole && !save) return false;
   // A dialog of the window's own is in front, or the window is not the one being typed into: the press is not
   // this person's doing here, so nothing moves. It is still taken, so no view is given a key meant for main.
   if (overlay || !win?.isFocused()) {
@@ -923,14 +928,14 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
     return true;
   }
   const ids = [...tabs.keys()];
-  if (whole) {
+  if (whole || save) {
     const tab = tabs.get(active);
     if (!tab) {
-      done = 'There is no tab to copy';
+      done = whole ? 'There is no tab to copy' : 'There is no tab to save';
       tellShell();
       return true;
     }
-    sendTo(tab.view, CH.tabWhole, true);
+    sendTo(tab.view, whole ? CH.tabWhole : CH.tabSaveAsk, true);
     return true;
   }
   if (step) {
@@ -1599,6 +1604,49 @@ async function pickDownloads(): Promise<void> {
 // The lab cannot answer the system's own chooser, so the self-test answers it here instead.
 let labChoosesAFolder: (() => string | undefined) | null = null;
 
+// ---- Saving what a tab printed (SSH-APP-DETAILS 7) ----
+
+// The lab cannot answer the system's own chooser, so the self-test answers it here instead, exactly as it
+// does for the folder chooser and the key file.
+let labChoosesSaveFile: (() => string | undefined) | null = null;
+let savingFile = false; // one chooser at a time: a second press while it is open is not a second file
+
+async function saveOutput(tab: Tab, kind: 'whole' | 'block', text: string): Promise<void> {
+  if (!win || savingFile) return;
+  const box = boxes?.get(tab.box?.id ?? '');
+  const suggested = path.join(downloadsInto(), saveName(box?.name ?? `tab ${tab.id}`, tab.place, new Date(), kind));
+  savingFile = true;
+  let file: string | undefined;
+  try {
+    if (labChoosesSaveFile) file = labChoosesSaveFile();
+    else {
+      const answer = await dialog.showSaveDialog(win, { title: kind === 'block' ? 'Save what this command printed' : 'Save what this terminal printed', defaultPath: suggested, buttonLabel: 'Save', filters: [{ name: 'Text', extensions: ['txt'] }], properties: ['createDirectory', 'dontAddToRecent', 'showOverwriteConfirmation'] });
+      file = answer.canceled ? undefined : answer.filePath;
+    }
+  } finally {
+    savingFile = false;
+  }
+  if (file === undefined || file === '') {
+    done = 'No file was chosen; nothing was written';
+    return tellShell();
+  }
+  // Line endings as Windows' own notepad reads them, because that is what he will open the file in. One
+  // kind in, one kind out: the text has already been read from the terminal's own buffer.
+  const body = `${text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')}\r\n`;
+  const lines = text.split('\n').length;
+  try {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, body, 'utf8');
+  } catch (err) {
+    // A file that could not be written is a failure with an id he can read out, the same as any other.
+    const id = faultLog().say({ what: 'save', tab: tab.id, ...(box ? { box: box.id } : {}), detail: `the file could not be written: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}` });
+    done = `The file could not be written (fault ${id})`;
+    return tellShell();
+  }
+  done = `Saved ${lines} ${lines === 1 ? 'line' : 'lines'} to ${path.basename(file)}`;
+  tellShell();
+}
+
 // ---- Fetching a small file so it can be dragged (plan B4.5) ----
 // A file on a box cannot be dragged into anything until it is on this PC, because Windows takes hold of a
 // file and not of an idea of one. So a press on a small file fetches it, into a folder of Berth's own that
@@ -1730,6 +1778,18 @@ ipcMain.on(CH.tabCopy, (e, text: unknown) => {
   const lines = text.split('\n').length;
   done = `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}`;
   tellShell();
+});
+
+// Text from a tab, to be written to a file (SSH-APP-DETAILS 7). The content is the view's; the path is
+// main's own, from the system's own chooser, so a view can name no file on this PC (plan A4's table). The
+// rule for who may offer it is tab:copy's rule, word for word: the tab in front of a window in use, with
+// nothing of the window's own over it.
+ipcMain.on(CH.tabSave, (e, what: unknown, text: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  const kind = what === 'whole' || what === 'block' ? what : '';
+  if (!tab || !fromMainFrameOf(e, tab.origin) || kind === '' || typeof text !== 'string' || text.length === 0 || text.length > SAVE_MAX) return drop('tab:save', e);
+  if (tab.id !== active || overlay || !win?.isFocused()) return void savesRefused++;
+  void saveOutput(tab, kind, text);
 });
 
 ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
@@ -2142,7 +2202,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), chooseSaveFile: (answer: (() => string | undefined) | null) => void (labChoosesSaveFile = answer), savesRefused: () => savesRefused, settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

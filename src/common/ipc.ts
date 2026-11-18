@@ -25,6 +25,8 @@ export const CH = {
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
   tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
   tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
+  tabSaveAsk: 'tab:save-ask', // main to tab view: the whole terminal, to be saved as a file (Ctrl+Shift+S)
+  tabSave: 'tab:save', // tab view to main: text to be written to a file main asks for (plain text, size-limited)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
@@ -70,6 +72,7 @@ export interface GateState {
 
 export const INPUT_MAX = 64 * 1024;
 export const COPY_MAX = 4 * 1024 * 1024; // characters a tab may put on the clipboard at once
+export const SAVE_MAX = 4 * 1024 * 1024; // characters a tab may offer to be written to a file at once
 export const TABS_MAX = 12;
 
 export type EngineState = 'starting' | 'ready' | 'not-answering' | 'gone';
@@ -332,6 +335,10 @@ export interface TabPort {
   // gains a wrong mark and nothing else.
   doing(doing: string, finishedMs: number): void;
   onWhole(cb: () => void): void; // main says Ctrl+Shift+A was pressed: select the whole terminal and copy it
+  // Main says Ctrl+Shift+S was pressed: the whole terminal, to be saved. The view answers with save(), and
+  // never with a path: which file it is stays main's own, from the system's own chooser (plan A4).
+  onSaveAsk(cb: () => void): void;
+  save(what: string, text: string): void; // text offered to be written to a file: 'whole' or 'block'
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
   onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts

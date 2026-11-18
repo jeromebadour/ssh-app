@@ -60,6 +60,8 @@ interface Ctx {
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
   chooseFolder(answer: (() => string | undefined) | null): void;
+  chooseSaveFile(answer: (() => string | undefined) | null): void;
+  savesRefused(): number;
   settingsNow(): { downloads: string; paneSize: number };
   watchFirstVisits(watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => { ok: true; said: string } | { ok: false; cause: string; detail: string }) | null): void;
   dragsAsked(): number;
@@ -2713,7 +2715,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -3244,6 +3246,52 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         press(t.view.webContents, 'A', ['control']);
         const plainReached = await until(async () => (await boxGot()).includes('\u0001'), 3000);
         check('Ctrl+A alone is still the shell\u2019s own, and reaches the box', !inUseForKeys || plainReached, [inUseForKeys, plainReached]);
+      }
+      // Ctrl+Shift+S: the same reading of the tab, written to a file he chose. The chooser is the system's
+      // own and cannot be driven, so the lab answers it here, exactly as it does for the downloads folder.
+      {
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        await until(() => ctx.shellState().active === t.id, 5000);
+        const into = path.join(ctx.downloads, 'saved', 'what the terminal printed.txt');
+        const boxBefore = await boxGot();
+        ctx.chooseSaveFile(() => into);
+        press(t.view.webContents, 'S', ['control', 'shift']);
+        const written = await until(() => stat(into).then(() => true, () => false), 5000);
+        const held = written ? await readFile(into, 'utf8') : '';
+        const said = await text('#status');
+        const boxAfter = await boxGot();
+        check(
+          'Ctrl+Shift+S writes the whole terminal to the file he chose, says how many lines, and the box is given nothing',
+          !inUseForKeys || (written && held.length > 40 && held.includes('\r\n') && !/[^\r]\n/.test(held) && said.includes('Saved') && said.includes('what the terminal printed.txt') && boxAfter === ''),
+          [inUseForKeys, written, held.length, said, JSON.stringify(boxAfter), JSON.stringify(boxBefore)],
+        );
+        // A chooser answered with nothing writes nothing, and says so rather than leaving the press unanswered.
+        ctx.chooseSaveFile(() => undefined);
+        press(t.view.webContents, 'S', ['control', 'shift']);
+        const saidNo = await until(async () => (await text('#status')).includes('No file was chosen'), 5000);
+        check('a chooser answered with nothing writes nothing, and the window says so', !inUseForKeys || saidNo, [inUseForKeys, await text('#status')]);
+        // And the rule for who may offer text to be written is tab:copy's rule: a view that is not the tab in
+        // front is counted and nothing is written, however it asks.
+        const behindTab = ctx.openTab()!; // a plain tab, no box: all this needs is that another tab is in front
+        await until(() => ctx.shellState().active === behindTab.id, 5000);
+        const refusedBefore = ctx.savesRefused();
+        const sneaky = path.join(ctx.downloads, 'saved', 'from a tab behind.txt');
+        ctx.chooseSaveFile(() => sneaky);
+        await js(t.view, `window.tabPort.save('whole', 'a tab behind should not be able to write this')`);
+        await sleep(400);
+        const nothingThere = await stat(sneaky).then(() => false, () => true);
+        check('a tab that is not in front cannot have a file written: it is counted, and nothing is written', ctx.savesRefused() === refusedBefore + 1 && nothingThere, [ctx.savesRefused() - refusedBefore, nothingThere]);
+        // A word for the kind that is neither of the two is a dropped message, not a file.
+        const droppedBefore = ctx.dropped();
+        await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+        await until(() => ctx.shellState().active === t.id, 5000);
+        await js(t.view, `window.tabPort.save('everything', 'not a kind')`);
+        await sleep(300);
+        const noFileEither = await stat(sneaky).then(() => false, () => true);
+        refusedByTheLock++;
+        check('a kind of save that is not one of the two is dropped, and nothing is written', ctx.dropped() === droppedBefore + 1 && noFileEither, [ctx.dropped() - droppedBefore, noFileEither]);
+        ctx.chooseSaveFile(null);
+        ctx.closeTab(behindTab.id);
       }
       // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
       // given a key that was meant for main.
