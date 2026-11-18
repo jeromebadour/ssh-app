@@ -611,7 +611,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       }
       if (p.trashed) {
         const t = p.trashed;
-        bin.said = p.id === askingTrash ? bin.said : `${shorten(t.from.split('/').pop() ?? t.name, 30)} ${bin.open ? 'is back where it was' : 'is in the trash'}`;
+        if (batch) batch.done += 1;
+        bin.said = batch
+          ? `${batch.done} of ${batch.want} in the trash`
+          : p.id === askingTrash
+            ? bin.said
+            : `${shorten(t.from.split('/').pop() ?? t.name, 30)} ${bin.open ? 'is back where it was' : 'is in the trash'}`;
         if (bin.open) bin.rows = bin.rows.filter((x) => x.name !== t.name);
         else open(where || asked); // the folder it left is listed again, so the row goes
       }
@@ -621,8 +626,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         if (bin.open) openTrash();
       }
       if (p.done) {
-        bin.busy = false;
-        if (p.error && !quietly) bin.said = TRASH_WHY[p.error] ?? TRASH_WHY['failed']!;
+        if (batch) {
+          if (p.error) batch.failed += 1;
+          // The strip stays busy until every one of them has been answered for, and what is said at the end
+          // is the count, not whichever of them the box happened to answer last. One that could not go is
+          // said in the same line: a delete that half happened and says nothing is the worst of both.
+          const over = batch.done + batch.failed >= batch.want;
+          bin.busy = !over;
+          if (over) {
+            bin.said = batch.failed === 0 ? `${batch.done} ${batch.done === 1 ? 'thing is' : 'things are'} in the trash` : `${batch.done} in the trash, ${batch.failed} could not go: ${TRASH_WHY[p.error ?? 'failed'] ?? TRASH_WHY['failed']!}`;
+            batch = null;
+          }
+        } else {
+          bin.busy = false;
+          if (p.error && !quietly) bin.said = TRASH_WHY[p.error] ?? TRASH_WHY['failed']!;
+        }
         quietly = false;
       }
       draw();
@@ -965,14 +983,43 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       ask.id = 'fb-ask-delete';
       const head = document.createElement('div');
       head.className = 'fb-ask-head';
-      head.textContent = `Delete ${shorten(goingToTrash.name, 26)}?`;
+      const many = goingToTrash.names.length;
+      head.textContent = many === 1 ? `Delete ${shorten(goingToTrash.names[0]!, 26)}?` : `Delete ${many} things?`;
       const said = document.createElement('div');
       said.className = 'fb-ask-said';
       said.id = 'fb-ask-said';
-      said.textContent =
-        goingToTrash.kind === 'folder'
-          ? 'It goes to this disk\u2019s trash, whole, and can be brought back from there. The box keeps it for 7 days.'
-          : `${size(goingToTrash.size)}. It goes to this disk\u2019s trash and can be brought back from there. The box keeps it for 7 days, so that much stays used.`;
+      // What goes is named, every time. With several, they are named too: a count alone is not something a
+      // person can check, and a delete is the one act here that must never take something he did not mean.
+      const folders = goingToTrash.folders;
+      const bytes = goingToTrash.bytes;
+      const whatGoes =
+        many === 1
+          ? folders === 1
+            ? 'It goes to this disk\u2019s trash, whole, and can be brought back from there. The box keeps it for 7 days.'
+            : `${size(bytes)}. It goes to this disk\u2019s trash and can be brought back from there. The box keeps it for 7 days, so that much stays used.`
+          : `${folders > 0 ? `${folders} ${folders === 1 ? 'folder, whole, and ' : 'folders, whole, and '}${many - folders} ${many - folders === 1 ? 'file' : 'files'}, ` : ''}${size(bytes)}. They go to this disk\u2019s trash and can be brought back from there. The box keeps them for 7 days, so that much stays used.`;
+      said.textContent = whatGoes;
+      let namesAt: HTMLElement | null = null;
+      if (many > 1) {
+        const naming = document.createElement('div');
+        naming.className = 'fb-ask-names';
+        naming.id = 'fb-ask-names';
+        const SHOWN = 8;
+        for (const n of goingToTrash.names.slice(0, SHOWN)) {
+          const one = document.createElement('div');
+          one.className = 'fb-ask-name';
+          one.textContent = shorten(n, 40);
+          one.title = n;
+          naming.append(one);
+        }
+        if (many > SHOWN) {
+          const rest = document.createElement('div');
+          rest.className = 'fb-ask-name fb-ask-rest';
+          rest.textContent = `and ${many - SHOWN} more`;
+          naming.append(rest);
+        }
+        namesAt = naming;
+      }
       const acts = document.createElement('div');
       acts.className = 'fb-ask-acts';
       const keep = document.createElement('button');
@@ -981,7 +1028,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       keep.type = 'button';
       keep.append(glyph('close'));
       const keepWord = document.createElement('span');
-      keepWord.textContent = 'Keep it';
+      keepWord.textContent = many === 1 ? 'Keep it' : 'Keep them';
       keep.append(keepWord);
       keep.addEventListener('click', () => {
         goingToTrash = null;
@@ -993,11 +1040,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       go.type = 'button';
       go.append(glyph('bin'));
       const goWord = document.createElement('span');
-      goWord.textContent = 'Delete it';
+      goWord.textContent = many === 1 ? 'Delete it' : `Delete ${many}`;
       go.append(goWord);
       go.addEventListener('click', () => reallyDelete());
       acts.append(keep, go);
-      ask.append(head, said, acts);
+      ask.append(head, said, ...(namesAt ? [namesAt] : []), acts);
       el.moving.append(ask);
       setTimeout(() => (document.getElementById('fb-ask-keep') as HTMLButtonElement | null)?.focus(), 0);
     }
@@ -1401,7 +1448,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       bye.addEventListener('click', (ev) => {
         ev.stopPropagation();
         place(r.name);
-        askToDelete(r.name);
+        // A row's own button means that row, unless that row is one of several he has chosen: then it means
+        // all of them, because that is what is under his hand and what the foot has been counting for him.
+        askToDelete(chosen.has(r.name) && chosen.size > 1 ? names().filter((n) => chosen.has(n)) : [r.name]);
       });
       const sum = document.createElement('button');
       sum.className = 'fb-get fb-sum';
@@ -1428,7 +1477,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       bye.addEventListener('click', (ev) => {
         ev.stopPropagation();
         place(r.name);
-        askToDelete(r.name);
+        // A row's own button means that row, unless that row is one of several he has chosen: then it means
+        // all of them, because that is what is under his hand and what the foot has been counting for him.
+        askToDelete(chosen.has(r.name) && chosen.size > 1 ? names().filter((n) => chosen.has(n)) : [r.name]);
       });
       e.append(renameBtn(r.name), bye);
     }
@@ -1570,12 +1621,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // Deleting, and the trash it goes into. Nothing is removed: the window asks main, main asks the engine, and
   // the engine moves it into the trash on its own disk. What the window does here is ask first, with what
   // would go in front of the person, and then say where it went (BUILD-RULES 2.20, plan B4.4).
-  const askToDelete = (name: string): void => {
-    const r = rows.find((x) => x.name === name);
-    if (!r) return;
-    goingToTrash = { name, kind: r.kind, size: r.size };
+  const askToDelete = (names: string[]): void => {
+    const want = names.filter((n) => n !== '..' && rows.some((r) => r.name === n));
+    if (want.length === 0) return;
+    const picked = rows.filter((r) => want.includes(r.name));
+    goingToTrash = {
+      names: want,
+      folders: picked.filter((r) => r.kind === 'folder').length,
+      bytes: picked.filter((r) => r.kind === 'file').reduce((n, r) => n + r.size, 0),
+    };
     draw();
   };
+  // What a press on Delete means: everything chosen, or the row it is standing on when nothing is.
+  const toDelete = (): string[] => (chosen.size > 0 ? names().filter((n) => chosen.has(n)) : standing === '' || standing === '..' ? [] : [standing]);
 
   const reallyDelete = (): void => {
     const going = goingToTrash;
@@ -1583,7 +1641,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (!going) return;
     bin.busy = true;
     bin.said = '';
-    asker.ask({ do: 'delete', path: join(where || asked, going.name) });
+    batch = going.names.length > 1 ? { want: going.names.length, done: 0, failed: 0 } : null;
+    for (const name of going.names) asker.ask({ do: 'delete', path: join(where || asked, name) });
+    // Nothing stays chosen that is on its way to the trash: what is chosen is what the next press acts on.
+    chosen = new Set();
+    anchor = '';
     draw();
   };
 
@@ -1696,7 +1758,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   type Binned = { open: boolean; where: string; rows: TrashedRow[]; busy: boolean; said: string };
   let bin: Binned = { open: false, where: '', rows: [], busy: false, said: '' };
   let askingTrash = 0;
-  let goingToTrash: { name: string; kind: string; size: number } | null = null;
+  // What is going to the trash: every name he chose, not the one row the keyboard happened to stand on. A
+  // delete is the one act in this app that must never act on something he did not mean, so the dialog names
+  // what goes and the count is his own count, the one the foot was showing him.
+  let goingToTrash: { names: string[]; folders: number; bytes: number } | null = null;
+  // A batch of deletes in flight: one ask each, and what is said at the end is the count rather than whichever
+  // of them the box happened to answer last.
+  let batch: { want: number; done: number; failed: number } | null = null;
   // Naming something: a new name for what is there, or one new folder. Both are the same panel, because both
   // are one name typed and one press, and the box is not asked until the name could be a name at all.
   let naming: { mode: 'rename' | 'folder'; was: string; name: string; busy: boolean; said: string; id: number } | null = null;
@@ -1769,7 +1837,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const all = names();
     if (e.key === 'Delete') {
-      if (standing !== '' && standing !== '..') askToDelete(standing);
+      askToDelete(toDelete());
     } else if (e.key === 'F2') {
       askToRename(standing);
     } else if (e.key === 'ArrowDown') step(1, e);
