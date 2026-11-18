@@ -113,7 +113,23 @@ type Options struct {
 	Deadlines Deadlines        // zero fields take DefaultDeadlines
 	OnPhase   func(Phase)      // told each phase as it starts; must not block
 	OnBanner  func(msg string) // the box's sign-in text, cut to BannerMax. Text from the box: terminal only
+	// OnAsk is the first visit's only use (plan O2): a box that asks its own questions at sign-in instead
+	// of taking the password plainly. It is given the box's questions and whether each answer is to be
+	// shown as it is typed, and gives back one answer for each, in the same order. It may wait: the
+	// person is being asked. Nil means a box that asks anything but a plain password is refused, which is
+	// what every other kind of sign-in does, because no other kind has a person in front of it.
+	OnAsk func(questions []string, show []bool) ([]string, error)
 }
+
+// AskMax, AskedMax and AnswerMax bound what a box can make the window hold at sign-in. A box is on the other
+// side of a sign-in that has not happened yet, so what it sends here is read with the same suspicion as
+// anything else it sends: enough for a real question and a real code, and no more.
+const (
+	AskMax      = 4   // questions in one ask
+	AskedMax    = 512 // characters in one question
+	AnswerMax   = 256 // characters in one answer
+	AskRoundMax = 8   // asks in one sign-in, so a box cannot keep a person answering for ever
+)
 
 // BannerMax is the most sign-in text taken from a box over the whole of one link, however many messages
 // it arrives in.

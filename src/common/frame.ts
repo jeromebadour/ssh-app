@@ -20,6 +20,9 @@ export const T = {
   Banner: 0x24,
   Exit: 0x25,
   Notice: 0x26,
+  // The first visit only (plan O2): a box's own questions at sign-in, and the answers back.
+  AskQuestions: 0x27,
+  Answers: 0x2a,
   // Files, on a channel of their own so a listing never holds up what is typed.
   FileAsk: 0x28,
   FilePage: 0x29,

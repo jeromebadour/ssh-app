@@ -1198,6 +1198,9 @@ let settingsOpen = false;
 // already pinned: the identity is settled before the field is drawn, which is the whole of the argument. The
 // password is never kept: it arrives on one message, is handed to one short-lived process, and is gone.
 let firstVisitShown: FirstVisitShown | null = null;
+// Set only while a box's own questions are on the screen, and taken away the moment they are answered or the
+// visit ends: there is never a way to hand answers to a sign-in that is not asking for them.
+let answerFirstVisit: ((answers: string[] | null) => void) | null = null;
 // The way a visit is really made, set when the engine's path is known. The lab puts its own in its place.
 let firstVisit: ReturnType<typeof firstVisitWith> = () => Promise.resolve({ ok: false, cause: 'protocol', detail: 'the app is not ready' });
 // The lab has no box that takes a password: what a real one does with a real password is proved against real
@@ -1216,7 +1219,7 @@ function openFirstVisit(id: string): void {
     done = box && box.pin === '' ? 'That box has not been checked yet' : 'That box has already been visited once';
     return tellShell();
   }
-  firstVisitShown = { box: id, name: box.name, user: box.user, addr: addrOf(box), phase: 'asking', said: '', error: '', detail: '' };
+  firstVisitShown = { box: id, name: box.name, user: box.user, addr: addrOf(box), phase: 'asking', said: '', error: '', detail: '', asked: [] };
   overlay = true;
   stack();
   tellShell();
@@ -1244,12 +1247,28 @@ async function runFirstVisit(id: string, password: string): Promise<void> {
   tellShell();
   const aimedAtBox = { addr: addrOf(box), user: box.user, hostKey: box.pin };
   const command = boxes!.block(id);
+  // A box that asks its own questions at sign-in. Only this screen may ask them, and only while this visit
+  // is the one on it: the answers are held for the one sign-in and are never stored, logged or offered again,
+  // exactly as the password is not.
+  const answerThem = (questions: string[], show: boolean[]): Promise<string[] | null> =>
+    new Promise<string[] | null>((give) => {
+      if (firstVisitShown?.box !== id) return give(null);
+      firstVisitShown = { ...firstVisitShown, phase: 'answering', error: '', detail: '', asked: questions.map((q, i) => ({ question: q, show: show[i] === true })) };
+      answerFirstVisit = (answers) => {
+        answerFirstVisit = null;
+        if (firstVisitShown?.box === id) firstVisitShown = { ...firstVisitShown, phase: 'visiting', asked: [] };
+        tellShell();
+        give(answers);
+      };
+      tellShell();
+    });
   const r = labWatchesVisits ? labWatchesVisits({ ...aimedAtBox, password, command }) : await firstVisit(aimedAtBox, password, command, (p: string) => {
     if (firstVisitShown?.box === id && firstVisitShown.phase === 'visiting') {
       firstVisitShown = { ...firstVisitShown, detail: p };
       tellShell();
     }
-  });
+  }, answerThem);
+  answerFirstVisit = null;
   if (firstVisitShown?.box !== id) return; // the screen was closed while it ran
   if (!r.ok) {
     firstVisitShown = { ...firstVisitShown, phase: 'failed', error: r.cause, detail: r.detail };
@@ -1983,7 +2002,19 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     // The password arrives here and goes no further than one short-lived process. It is not written to the
     // list, not to the log, not to the window's state, and not to this variable for longer than this call.
     void runFirstVisit(String(c.box), typeof c.password === 'string' ? c.password : '');
+  } else if (c?.op === 'firstVisitAnswers') {
+    // Answers to a box's own questions, on their way to the one sign-in that asked. They are taken only
+    // while that sign-in is waiting for them and only for the box whose screen is open, and they are held
+    // no longer than the call: not in the list, not in the log, not in the window's state.
+    const give = answerFirstVisit;
+    const asked = firstVisitShown;
+    if (!give || !asked || asked.box !== String(c.box) || asked.phase !== 'answering') return void drop('shell:cmd');
+    const answers = Array.isArray(c.answers) ? c.answers : [];
+    if (answers.length !== asked.asked.length || answers.some((a) => typeof a !== 'string' || a.length > INPUT_MAX)) return void drop('shell:cmd');
+    give(answers.map((a) => String(a)));
   } else if (c?.op === 'firstVisitClose') {
+    // A screen closed while a box is waiting for an answer is an answer of its own: nobody is answering.
+    answerFirstVisit?.(null);
     closeFirstVisit();
   } else if (c?.op === 'settings') {
     // A screen, not an action: opening it changes nothing and closing it changes nothing back.

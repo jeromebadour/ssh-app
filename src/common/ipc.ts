@@ -177,10 +177,15 @@ export interface FirstVisitShown {
   name: string; // and its name, for the screen
   user: string;
   addr: string;
-  phase: '' | 'asking' | 'visiting' | 'proving' | 'done' | 'failed';
+  phase: '' | 'asking' | 'visiting' | 'answering' | 'proving' | 'done' | 'failed';
   said: string; // what the box printed back, escaped and capped: a box's own words
   error: string; // why it did not work, in one word from a written list
   detail: string;
+  // The box asked its own questions at sign-in: a code from a phone, or a question of its own. These are
+  // the box's own words, escaped and capped, shown on this one screen and nowhere else. `show` says whether
+  // the box wants that answer seen as it is typed; an answer the box wants hidden is a password's twin and
+  // is drawn as one.
+  asked: { question: string; show: boolean }[];
 }
 
 export interface ShellState {
@@ -291,6 +296,7 @@ export type ShellCmd =
   | { op: 'closeApp' } // the asking answered: close for real, ending the sessions named
   | { op: 'firstVisit'; box: string } // decision O2: open the one screen that ever asks for a box's password
   | { op: 'firstVisitGo'; box: string; password: string } // use it once, to put Berth's key on that box
+  | { op: 'firstVisitAnswers'; box: string; answers: string[] } // the answers to a box's own questions at sign-in
   | { op: 'firstVisitClose' } // the screen is closed; nothing is kept
   | { op: 'settings'; show: boolean } // open or close the settings; nothing is changed by opening it
   | { op: 'pickDownloads' } // choose where downloads land: main opens the system's own chooser

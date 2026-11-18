@@ -40,6 +40,12 @@ type Config struct {
 	OnUp func(conn *ssh.ServerConn)
 	// Listen is where it listens; empty is a free local port.
 	Listen string
+	// Asks makes it sign a client in by asking questions instead of taking a password plainly, the way a
+	// box with a second factor does. Each round is one list of questions; Answers is what it will take for
+	// them, in the same order. A client that answers the last round right is let in.
+	Asks    [][]string
+	Shown   [][]bool // whether each answer is to be shown as it is typed; missing means hidden
+	Answers [][]string
 }
 
 // Box is a running server.
@@ -589,6 +595,39 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 			}
 			return nil, errors.New("not this key")
 		},
+	}
+	if len(cfg.Asks) > 0 {
+		round := 0
+		sc.KeyboardInteractiveCallback = func(_ ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+			for round < len(cfg.Asks) {
+				questions := cfg.Asks[round]
+				var shown []bool
+				if round < len(cfg.Shown) {
+					shown = cfg.Shown[round]
+				}
+				if len(shown) != len(questions) {
+					shown = make([]bool, len(questions))
+				}
+				got, err := ask("", "", questions, shown)
+				if err != nil {
+					return nil, err
+				}
+				want := []string(nil)
+				if round < len(cfg.Answers) {
+					want = cfg.Answers[round]
+				}
+				if len(got) != len(want) {
+					return nil, errors.New("not the answers")
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						return nil, errors.New("not the answers")
+					}
+				}
+				round++
+			}
+			return &ssh.Permissions{}, nil
+		}
 	}
 	if cfg.Banner != "" {
 		sc.BannerCallback = func(ssh.ConnMetadata) string { return cfg.Banner }

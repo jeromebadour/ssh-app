@@ -26,13 +26,24 @@ const WHY: Record<string, string> = {
   protocol: 'Something went wrong before the box could be asked',
 };
 
-export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password: string): void; onClose(): void }) {
+export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password: string): void; onAnswers(answers: string[]): void; onClose(): void }) {
   const [password, setPassword] = useState('');
+  const [answers, setAnswers] = useState<string[]>([]);
+  const firstAnswer = useRef<HTMLInputElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const v = props.shown;
   const asking = v.phase === 'asking';
+  const answering = v.phase === 'answering';
   const working = v.phase === 'visiting' || v.phase === 'proving';
+  // One field per question, kept for as long as the questions are on screen, so a redraw cannot take the
+  // caret back from under his hands.
+  useEffect(() => {
+    if (answering) {
+      setAnswers(v.asked.map(() => ''));
+      firstAnswer.current?.focus();
+    }
+  }, [answering, v.asked.length]);
   useEffect(() => {
     if (asking) field.current?.focus();
     else if (!working) close.current?.focus();
@@ -89,6 +100,39 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
           </form>
         )}
 
+        {answering && (
+          <form
+            id="first-visit-questions"
+            onSubmit={(e) => {
+              e.preventDefault();
+              props.onAnswers(v.asked.map((_, i) => answers[i] ?? ''));
+            }}
+          >
+            {/* The box's own words. They are drawn as text and nothing else: never markup, never a link,
+                and marked as the box's, because this screen is the window's and the words are not. */}
+            <p class="said" id="first-visit-asked-why">
+              {v.name} is asking for something of its own before it will sign in. These are the box's words:
+            </p>
+            {v.asked.map((q, i) => (
+              <label class="field" key={`${i}:${q.question}`}>
+                <span class="said quiet" data-question={i}>{q.question}</span>
+                <span class="input">
+                  {q.show ? (
+                    <input ref={i === 0 ? firstAnswer : null} id={`first-visit-answer-${i}`} type="text" autocomplete="off" spellcheck={false} value={answers[i] ?? ''} onInput={(e) => setAnswers((was) => was.map((a, j) => (j === i ? (e.target as HTMLInputElement).value : a)))} />
+                  ) : (
+                    /* The box wants this one hidden as it is typed, so it is drawn as a password is. */
+                    <input ref={i === 0 ? firstAnswer : null} id={`first-visit-answer-${i}`} type="password" autocomplete="off" spellcheck={false} value={answers[i] ?? ''} onInput={(e) => setAnswers((was) => was.map((a, j) => (j === i ? (e.target as HTMLInputElement).value : a)))} />
+                  )}
+                </span>
+              </label>
+            ))}
+            <div class="dlg-actions gap-top">
+              <button type="button" class="btn keep-plain" id="first-visit-answers-cancel" onClick={props.onClose}><Glyph name="close" />Don't answer</button>
+              <button type="submit" class="btn primary" id="first-visit-answers-go"><Glyph name="check" />Answer</button>
+            </div>
+          </form>
+        )}
+
         {working && (
           <p class="said" id="first-visit-working">
             <span class="wait-ring" />
@@ -108,7 +152,7 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
           <p class="said problem" id="first-visit-failed">{WHY[v.error] ?? WHY['protocol']}{v.detail ? ` (${v.detail})` : ''}</p>
         )}
 
-        {!asking && !working && (
+        {!asking && !working && !answering && (
           <div class="dlg-actions gap-top">
             <button type="button" class="btn primary" id="first-visit-close" ref={close} onClick={props.onClose}>Done</button>
           </div>

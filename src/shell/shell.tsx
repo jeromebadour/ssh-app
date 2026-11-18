@@ -238,6 +238,7 @@ function Unlocked(props: { s: ShellState }) {
         <FirstVisitDialog
           shown={s.firstVisit}
           onGo={(password) => port.cmd({ op: 'firstVisitGo', box: s.firstVisit!.box, password })}
+          onAnswers={(answers) => port.cmd({ op: 'firstVisitAnswers', box: s.firstVisit!.box, answers })}
           onClose={() => port.cmd({ op: 'firstVisitClose' })}
         />
       )}
