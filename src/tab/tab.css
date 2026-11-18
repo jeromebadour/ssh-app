@@ -40,6 +40,14 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 
 /* Each pane is a thing of its own, with its own head, rather than two boxes leaning on one another. The head
    is where the pane says what it is; what it holds is below. */
+/* The Electron tell (his 15, agreed in the discussion: kill it). The list has a selection of its own — a row
+   is chosen, not its letters — so the browser's text selection sat on top of it meaning nothing, and a press
+   that dragged across two rows dragged a grey ghost of their text instead of the file. It is off for the
+   pane's own furniture: the list, the heads, the path, the tools, the strip under it, the foot and the menu.
+   What a person is meant to read and take away keeps its own selection and is turned back on below: the
+   terminal, which has its own and always has, and anything typed into, which keeps its caret. */
+#files-pane { user-select: none; }
+#files-pane input, #files-pane textarea, #files-pane [contenteditable='true'] { user-select: text; }
 #files-pane, #term-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: 4px; overflow: hidden; }
 /* The files are the lighter surface and the terminal the deeper one. It is the files that move, not the
    terminal: the terminal's own background is the terminal's to paint, and a probe holds it to #141b21.

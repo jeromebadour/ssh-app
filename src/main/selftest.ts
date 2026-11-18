@@ -1565,6 +1565,41 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const aFile = await js<string>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.dataset.kind === 'file')?.dataset.name ?? ''`);
             const aFolder = await js<string>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.dataset.kind === 'folder' && r.dataset.name !== '..')?.dataset.name ?? ''`);
             check('there is a file and a folder to press on', aFile !== '' && aFolder !== '', [aFile, aFolder]);
+            // The Electron tell (his 15). A press dragged across two rows used to take the browser's own text
+            // selection with it, so what left the pointer was a grey ghost of the names rather than the file.
+            // The list has a selection of its own, so there is nothing for the letters to mean. Held by doing
+            // it — a real press, a real drag, a real release — and by what the window computes for the three
+            // places that must differ: the list, which selects rows; the terminal, which has always selected
+            // its own text; and the field he types a search into, which keeps its caret.
+            {
+              // The press is the window's own, not an event made up in the page: a selection is Chromium's to
+              // make, and it makes none for a mousedown a script dispatched. A probe built on dispatched
+              // events here passes whatever the stylesheet says, which is a probe that cannot fail.
+              const two = await js<{ x1: number; y1: number; x2: number; y2: number } | null>(front.view, `(() => {
+                const rows = [...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..');
+                if (rows.length < 2) return null;
+                const a = rows[0].getBoundingClientRect(), b = rows[1].getBoundingClientRect();
+                return { x1: Math.round(a.left + 30), y1: Math.round(a.top + a.height / 2), x2: Math.round(b.left + 90), y2: Math.round(b.top + b.height / 2) };
+              })()`);
+              const w = front.view.webContents;
+              if (two) {
+                w.sendInputEvent({ type: 'mouseDown', x: two.x1, y: two.y1, button: 'left', clickCount: 1 });
+                for (let i = 1; i <= 6; i++) {
+                  w.sendInputEvent({ type: 'mouseMove', x: Math.round(two.x1 + ((two.x2 - two.x1) * i) / 6), y: Math.round(two.y1 + ((two.y2 - two.y1) * i) / 6), button: 'left' });
+                  await sleep(20);
+                }
+                w.sendInputEvent({ type: 'mouseUp', x: two.x2, y: two.y2, button: 'left', clickCount: 1 });
+                await sleep(120);
+              }
+              const dragAcross = two === null ? 'too few rows' : await js<string>(front.view, `(window.getSelection()?.toString() ?? '').trim()`);
+              const picks = await js<{ list: string; row: string; term: string; find: string }>(front.view, `(() => {
+                const g = (q) => { const e = document.querySelector(q); return e ? getComputedStyle(e).userSelect : 'none such element'; };
+                return { list: g('#fb-list'), row: g('#fb-list .fb-row'), term: g('#term'), find: g('#files-pane input') };
+              })()`);
+              check('a press dragged across the list carries no ghost of its letters, and the terminal and the search field keep their own selection',
+                dragAcross === '' && picks.list === 'none' && picks.row === 'none' && picks.term !== 'none' && picks.find === 'text',
+                [dragAcross.slice(0, 60), picks]);
+            }
             const onFile = await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${aFile}"]')`);
             check(`a file's menu offers what a file can do: ${onFile.join(', ')}`, onFile.includes('Open') && onFile.includes('Bring it over') && onFile.includes('Rename') && onFile.includes('Delete') && onFile.includes("The box's own hash"), onFile);
             const keysOn = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-keys')].map((k) => k.textContent)`);
