@@ -104,7 +104,11 @@ export interface Term {
   // and its output can be told from the next at a glance. It is the thing he said matters most about a
   // terminal (2026-11-15 07:32). Returns a way to take it off again.
   // The press on a block: plain takes what it printed to the clipboard, with Shift it goes to a file.
-  blockAt(row: number, width: number, colour: string, press: (toFile: boolean) => void): (() => void) | null;
+  // Returns a way to take the block off again, and a way to ask where its row is now. A row number does not
+  // stay still: once the scrollback is full the oldest lines are dropped and every row below them means a
+  // different line, so a block that kept the number it was made with would copy somebody else's output. The
+  // marker drawn with the block follows its own line, and that is what this asks.
+  blockAt(row: number, width: number, colour: string, press: (toFile: boolean) => void): { off(): void; rowNow(): number } | null;
   // What one block printed: the rows after the prompt at this row, up to the next prompt or the end.
   outputAfter(row: number, until: number): string;
   rows(): number; // how many rows the terminal holds, on screen and scrolled out
@@ -289,11 +293,15 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
           press(ev.shiftKey);
         });
       });
-      return () => {
-        text?.dispose();
-        rule?.dispose();
-        hand?.dispose();
-        marker.dispose();
+      return {
+        off: () => {
+          text?.dispose();
+          rule?.dispose();
+          hand?.dispose();
+          marker.dispose();
+        },
+        // Where this block's own line is now, as the terminal keeps it. -1 once the line has gone.
+        rowNow: () => (marker.isDisposed ? -1 : marker.line),
       };
     },
     whole: () => {
