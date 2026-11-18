@@ -81,7 +81,13 @@ func StartIn(folder, tmux string) (string, error) {
 		if err := plainEnough(folder); err != nil {
 			return "", err
 		}
-		cmd = "cd -- '" + quoted(folder) + "' && " + cmd
+		// The cd is for making the session, not for reaching one that is already there. A place that keeps
+		// running is where a long job lives, and the folder it was started in can be deleted or renamed
+		// while that job runs: a release folder tidied up, a build folder cleaned. Without this, the cd
+		// fails and the whole command fails, so the job goes on running on the box with no way back to it
+		// from here. So the session is asked after first, and the cd is only on the way to making one, where
+		// a folder that is not there is still said at once, exactly as it is for a plain place.
+		cmd = "tmux -L berth -f /dev/null has-session -t '" + tmux + "' 2>/dev/null || cd -- '" + quoted(folder) + "' || exit 2; " + cmd
 	}
 	return cmd, nil
 }
