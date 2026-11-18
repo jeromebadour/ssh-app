@@ -1463,6 +1463,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const from = 0;
             const to = 4;
             check(`Shift and a press takes the whole run between them: ${run.length} rows`, run.length === Math.abs(to - from) + 1 && run.length > 2 && JSON.stringify(run) === JSON.stringify(order.slice(Math.min(from, to), Math.max(from, to) + 1)), [run, order.slice(Math.min(from, to), Math.max(from, to) + 1)]);
+            // What a reader is told, which is not what the eye sees unless one thing writes it. The pass that
+            // settles which row carries the tab stop used to write aria-selected over every row from where the
+            // keyboard stands, so three rows could be chosen, three counted in the foot, and one announced.
+            // Every probe #111 wrote read data-chosen, which was right the whole time.
+            const announced = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row[aria-selected="true"]')].map((r) => r.dataset.name)`);
+            const stops = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.tabIndex === 0).map((r) => r.dataset.name)`);
+            const multi = await js<string>(front.view, `document.getElementById('fb-list')?.getAttribute('aria-multiselectable') ?? ''`);
+            check(`what is announced is what is chosen: ${announced.length} announced against ${run.length} chosen`, JSON.stringify(announced) === JSON.stringify(run) && multi === 'true', [announced, run, multi]);
+            check('and exactly one row carries the tab stop, which is where the keyboard stands and not what is chosen', stops.length === 1, stops);
             // What the foot says about it, which is where he reads how much he is about to move.
             await shot('chosen', 'several files chosen at once, and the foot saying how many and how much', front);
             const footSays = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
@@ -2005,7 +2014,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.getElementById('fb-name-go')?.click()`);
             const renamed = await until(async () => (await names()).includes('syslog.kept'), 15_000);
             const saidSo = await until(async () => (await foot()).includes('is now called'), 15_000);
-            const standsOn = await js<string>(front.view, `document.querySelector('#fb-list .fb-row[aria-selected="true"]')?.dataset?.name ?? ''`);
+            // Where the list stands is the tab stop, not what is announced as chosen: those were one thing
+            // while one row was all there was, and stopped being one when several became possible.
+            const standsOn = await js<string>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.tabIndex === 0)?.dataset?.name ?? ''`);
             const onTheBox = await lab.tell('read var/log/syslog.kept');
             const oldGone = await lab.tell('read var/log/syslog');
             check('a new name is the name on the box as well: the bytes are under it, nothing is under the old one, and the list stands on it', renamed && saidSo && onTheBox['text'] === "a line of the box's own log\n" && oldGone['error'] === 'no such file' && standsOn === 'syslog.kept' && !(await names()).includes('syslog'), [await foot(), onTheBox, oldGone, standsOn]);
