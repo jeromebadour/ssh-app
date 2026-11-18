@@ -71,14 +71,14 @@ ul { list-style: none; }
 .nav-btn .caret { width: 11px; height: 11px; color: var(--text-3); transform: rotate(90deg); }
 .nav-btn.open { color: var(--text); background: var(--panel-2); border-color: var(--main); }
 
-.tabbar { position: relative; z-index: 2; display: flex; align-items: stretch; gap: 14px; padding: 0 10px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.tabbar { position: relative; z-index: 2; display: flex; align-items: stretch; gap: 14px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { display: flex; align-items: center; gap: 8px; flex: none; padding-right: 4px; }
 .mark { width: 26px; height: 26px; }
 .mark-line { fill: none; stroke: var(--text-2); stroke-width: 1.8; stroke-linecap: round; }
 .mark-fill { fill: var(--main); }
 .mark-beam { fill: var(--main); opacity: .35; }
 .wordmark { font-size: 18px; font-weight: 500; letter-spacing: .03em; color: var(--text); }
-.tab-groups { display: flex; align-items: flex-end; gap: 8px; min-width: 0; flex: 1; padding-left: 6px; }
+.tab-groups { display: flex; align-items: flex-end; gap: 8px; min-width: 0; flex: 1; padding-left: 0; }
 
 /* Windows draws no title bar for Berth, so the bar is the title bar: the empty part of it drags the window and
    a double-click on it maximizes, as a title bar does. Everything that can be pressed takes itself back out of
@@ -104,12 +104,20 @@ ul { list-style: none; }
 .win-close:hover { background: var(--remove); color: var(--bg); }
 .win-close:active { background: color-mix(in srgb, var(--remove) 85%, #000); color: var(--bg); }
 .tab-group { display: flex; align-items: flex-end; gap: 2px; }
-.tab { position: relative; display: flex; align-items: center; gap: 7px; height: 36px; min-width: 168px; padding: 0 8px 0 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: var(--r) var(--r) 0 0; background: var(--panel-2); color: var(--text-2); box-shadow: inset 0 3px 0 color-mix(in srgb, var(--hue) 70%, transparent); cursor: pointer; }
+/* A tab is the sheet below it, and it has to look like it. In Berth a tab really owns both panes: that file
+   list and that terminal belong to it and no other tab can touch them, which is the one thing MobaXterm gets
+   wrong and the whole reason this app exists. So the open tab takes the sheet's own colour and loses its
+   bottom edge into it, and the tabs beside it lie flat in the strip with no fill of their own.
+   It was the other way round: every tab carried a fill lighter than the strip, so the ones he was NOT in came
+   forward and the one he was in sat back. */
+.tab { position: relative; display: flex; align-items: center; gap: 7px; height: 36px; min-width: 168px; padding: 0 8px 0 12px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--r) var(--r) 0 0; background: none; color: var(--text-3); box-shadow: none; cursor: pointer; }
+.tab:hover { background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text-2); }
 .tab-box { font-weight: 600; color: var(--hue); }
 .tab-place { color: var(--text-2); }
 .tab-end { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 10px; }
 .tab-x { width: 14px; height: 14px; color: var(--text-3); }
-.tab.active { height: 38px; margin-bottom: -1px; background: var(--bg); color: var(--text); box-shadow: inset 0 3px 0 var(--hue); }
+.tab.active { height: 38px; margin-bottom: -1px; background: var(--bg); border-color: var(--line); color: var(--text); box-shadow: inset 0 3px 0 var(--hue); }
+.tab.active:hover { background: var(--bg); }
 .tab.active .tab-place { color: var(--text); }
 .box-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hue); flex: none; }
 .conn { width: 7px; height: 7px; border-radius: 50%; flex: none; }
