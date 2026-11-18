@@ -29,6 +29,7 @@ export const CH = {
   tabSave: 'tab:save', // tab view to main: text to put in a file he picks, and what it is (plain text, size-limited)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
+  tabDragAll: 'tab:drag-all', // tab view to main: several of them at once, each named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
@@ -347,7 +348,8 @@ export interface TabPort {
   // and main asks him where it goes (the same rule the key file and the downloads folder follow, plan B2.7).
   save(text: string, what: string): void;
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
-  drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
+  drag(ask: number): void;
+  dragAll(asks: number[]): void; // several files this tab brought over, dragged out together // begin dragging out the file this tab's own ask brought over; a view names no path
   onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts
   resize(cols: number, rows: number): void;
   copy(text: string): void;

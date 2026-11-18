@@ -1440,6 +1440,35 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const onTheBox = await lab.tell('hashof var/log/dragme.log');
             const same = createHash('sha256').update(itsBytes).digest('hex') === onTheBox['sha256'];
             check('the press hands main a number, and main hands the system the file it chose: in the download folder, under the name it gave it, holding what the box holds', handed && saidSo && handedOver.startsWith(ctx.downloads) && path.basename(handedOver).startsWith('dragme.log') && same && ctx.dragsAsked() === asked + 1, [handedOver.replace(ctx.downloads, '<downloads>'), saidSo, same]);
+            // Several at once. A second file is brought over, and the strip then offers one line that stands
+            // for both: pressing it hands main both numbers, and main hands the system both files.
+            {
+              await lab.tell('bigfile /var/log/dragme-two.log 24000');
+              await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+              await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('dragme-two.log'), 10_000);
+              // Listing a folder clears the lines of what has finished, which is the pane's own doing and
+              // right: so both files are brought over after that listing, not one before it and one after.
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"] .fb-bring')?.click()`);
+              await until(async () => js<boolean>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one[draggable="true"]')].some((e) => (e.textContent ?? '').includes('dragme.log'))`), 30_000);
+              const only = await js<boolean>(front.view, `document.getElementById('fb-drag-all') !== null`);
+              check('with one file here there is no line for dragging several: the file\u2019s own line already does it', !only, [only, await foot()]);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme-two.log"] .fb-bring')?.click()`);
+              const both = await until(async () => js<boolean>(front.view, `document.getElementById('fb-drag-all')?.getAttribute('draggable') === 'true'`), 30_000);
+              check('with two here the strip offers one line that stands for both, and it is the handle', both, await foot());
+              handedOver = '';
+              const askedBefore = ctx.dragsAsked();
+              await js(front.view, `document.getElementById('fb-drag-all')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+              const handedBoth = await until(() => handedOver !== '', 6000);
+              const names = handedOver.split('\n');
+              check('dragging that line hands the system both files, each the one main decided on', handedBoth && names.length === 2 && names.every((f) => f.startsWith(ctx.downloads)) && names.some((f) => path.basename(f).startsWith('dragme') && !path.basename(f).startsWith('dragme-two')) && names.some((f) => path.basename(f).startsWith('dragme-two.log')) && ctx.dragsAsked() === askedBefore + 1, [names.map((f) => f.replace(ctx.downloads, '<downloads>')), ctx.dragsAsked() - askedBefore]);
+              // The row's own file is put back as the last thing handed over, because what comes next is
+              // about that one file leaving the download folder.
+              handedOver = '';
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="dragme.log"]')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+              await until(() => handedOver !== '', 6000);
+            }
             // The download folder is his, so a file can be moved or deleted between landing and the hand
             // reaching for it. Main looks for it again before handing it over, and the window says so.
             {
@@ -1473,12 +1502,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // and nothing is handed over. This is the whole of what a taken-over view could try.
             handedOver = '';
             const droppedBefore = ctx.dropped();
+            // Counted from here, not from far above: what this probe says is that none of these asks caused
+            // a drag, and a count taken before other drags would be saying something else as well.
+            const dragsBefore = ctx.dragsAsked();
             const other = [...ctx.tabs.values()].find((t) => t.id !== front.id);
             await js(front.view, `(window.tabPort.drag(987654), window.tabPort.drag(0), window.tabPort.drag(-1), window.tabPort.drag('a'))`);
             if (other) await js(other.view, `window.tabPort.drag(1)`);
             await sleep(400);
             refusedByTheLock += other ? 5 : 4;
-            check('a view can drag out nothing it was not given: every made-up number is dropped and nothing is handed over', handedOver === '' && ctx.dropped() === droppedBefore + (other ? 5 : 4) && ctx.dragsAsked() === asked + 1, [handedOver, ctx.dropped() - droppedBefore, ctx.dragsAsked() - asked]);
+            check('a view can drag out nothing it was not given: every made-up number is dropped and nothing is handed over', handedOver === '' && ctx.dropped() === droppedBefore + (other ? 5 : 4) && ctx.dragsAsked() === dragsBefore, [handedOver, ctx.dropped() - droppedBefore, ctx.dragsAsked() - dragsBefore]);
             // A tab that closes takes what it could drag with it, so a number cannot outlive its tab. The spare
             // tab has to bring a file over for this to be about anything: a tab that never fetched one would
             // hold nothing either way, and the probe would pass however the closing was written.
@@ -2743,7 +2775,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,dragAll,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

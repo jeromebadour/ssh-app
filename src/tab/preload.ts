@@ -55,6 +55,9 @@ const port: TabPort = {
   drag(ask) {
     ipcRenderer.send(CH.tabDrag, Number(ask));
   },
+  dragAll(asks) {
+    ipcRenderer.send(CH.tabDragAll, (Array.isArray(asks) ? asks : []).map((a) => Number(a)));
+  },
   onSettings(cb) {
     ipcRenderer.on(CH.tabSettings, (_e, s) => cb(s));
   },
