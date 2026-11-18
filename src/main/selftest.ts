@@ -1549,6 +1549,41 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // One press gives the folder back.
             await clickOn('#fb-find-clear', front);
             const back = await until(async () => (await names()).join() === byName.join(), 5000);
+
+            // ---- What is chosen is what the delete takes. ----
+            // #111 gave the list a selection and the delete went on acting on the one row the keyboard stood
+            // on, while the foot counted five. A delete that takes one of five, or takes five when the dialog
+            // named one, is the worst thing this app could do, so the dialog names every one of them.
+            const chooseThese = async (which: string[]): Promise<void> => {
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${which[0]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`);
+              for (const n of which.slice(1)) await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${n}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))`);
+            };
+            const here = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.dataset.name)`);
+            const three = here.slice(0, 3);
+            check('there are three files to take', three.length === 3, here);
+            await chooseThese(three);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))`);
+            await until(async () => (await js<number>(front.view, `document.getElementById('fb-ask-delete') ? 1 : 0`)) === 1, 4000);
+            const askHead = await js<string>(front.view, `document.querySelector('#fb-ask-delete .fb-ask-head')?.textContent ?? ''`);
+            const askNames = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-ask-names .fb-ask-name')].map((n) => n.title || n.textContent)`);
+            check(`the dialog says how many go and names every one of them: ${askHead}`, askHead === 'Delete 3 things?' && JSON.stringify(askNames.slice().sort()) === JSON.stringify(three.slice().sort()), [askHead, askNames, three]);
+            // Keeping them keeps all three, and keeps them chosen.
+            await clickOn('#fb-ask-keep', front);
+            await sleep(200);
+            const afterKeep = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`);
+            check('keeping them keeps every one', three.every((n) => afterKeep.includes(n)), [three, afterKeep]);
+            // And deleting them takes all three, to the trash, and says so as a count.
+            await chooseThese(three);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))`);
+            await until(async () => (await js<number>(front.view, `document.getElementById('fb-ask-go') ? 1 : 0`)) === 1, 4000);
+            await clickOn('#fb-ask-go', front);
+            const allGone = await until(async () => { const n = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`); return three.every((x) => !n.includes(x)); }, 15_000);
+            const saidCount = await until(async () => (await foot()).includes('in the trash'), 15_000) ? await foot() : await foot();
+            check(`all three go, and the foot says the count rather than one name: ${saidCount.includes('3 things are in the trash') ? '3 things are in the trash' : saidCount.slice(0, 80)}`, allGone && saidCount.includes('3 things are in the trash'), [allGone, saidCount.slice(0, 120)]);
+            // And they are really in the trash on the box, each of them, not gone from it.
+            const inBin = await lab.tell('read var/log/.berth-trash');
+            check('and the box itself holds a trash with them in it', inBin !== undefined, inBin);
+
             check('one press on the clear gives the whole folder back', back && (await js<string>(front.view, `document.getElementById('fb-find')?.value ?? 'x'`)) === '', [back]);
             // And moving to another folder does not carry the filter into it.
             await js(front.view, `(document.getElementById('fb-find').value = 'log', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);

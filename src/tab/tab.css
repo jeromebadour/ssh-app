@@ -195,6 +195,10 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-ask { padding: 8px 0 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .fb-ask-head { color: #d7dee4; font-weight: 500; }
 .fb-ask-said { margin-top: 4px; color: #96a3ae; }
+/* What goes, named one by one, when several go at once. A count alone is not something a person can check. */
+.fb-ask-names { max-height: 8.5em; overflow: auto; margin: 6px 0 0; padding: 6px 8px; border-radius: 3px; background: color-mix(in srgb, #c3ccd3 6%, transparent); }
+.fb-ask-name { color: #c3ccd3; font-family: 'Plex Mono', monospace; font-size: 11px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-ask-rest { color: #808d99; font-family: inherit; }
 .fb-ask-acts { display: flex; gap: 8px; margin-top: 8px; }
 .fb-ask-keep, .fb-ask-go { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 0; border-radius: 3px; font: inherit; font-size: 11px; cursor: pointer; }
 .fb-ask-keep { background: color-mix(in srgb, #c3ccd3 10%, transparent); color: #d7dee4; }
