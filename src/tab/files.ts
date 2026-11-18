@@ -31,6 +31,7 @@ const DOWNLOAD_WHY: Record<string, string> = {
   'no-answer': 'The box did not answer',
   'no-link': 'There is no link to the box',
   stopped: 'It was stopped before it began',
+  'link-gone': 'The link to the box went while it was coming over',
   failed: 'It could not be brought over',
 };
 
@@ -50,6 +51,7 @@ const SEND_WHY: Record<string, string> = {
   'nothing-chosen': 'No file was chosen',
   kept: 'The file on the box was left as it was',
   stopped: 'It was stopped before it began',
+  'link-gone': 'The link to the box went while it was going over',
   failed: 'It could not be sent',
 };
 
