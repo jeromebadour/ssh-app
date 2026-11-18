@@ -25,6 +25,8 @@ export const CH = {
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
   tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
   tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
+  tabSaveAsk: 'tab:save-ask', // main to tab view: hand over the whole terminal to be saved as a file (Ctrl+Shift+S)
+  tabSave: 'tab:save', // tab view to main: text to put in a file he picks, and what it is (plain text, size-limited)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
@@ -70,6 +72,9 @@ export interface GateState {
 
 export const INPUT_MAX = 64 * 1024;
 export const COPY_MAX = 4 * 1024 * 1024; // characters a tab may put on the clipboard at once
+// Characters a tab may hand over for a file at once. A terminal holds 30,000 rows, so the whole of one is
+// well inside this; what it holds off is a page handing main something no person ever typed or read.
+export const SAVE_MAX = 8 * 1024 * 1024;
 export const TABS_MAX = 12;
 
 export type EngineState = 'starting' | 'ready' | 'not-answering' | 'gone';
@@ -336,6 +341,10 @@ export interface TabPort {
   // gains a wrong mark and nothing else.
   doing(doing: string, finishedMs: number): void;
   onWhole(cb: () => void): void; // main says Ctrl+Shift+A was pressed: select the whole terminal and copy it
+  onSaveAsk(cb: () => void): void; // main says Ctrl+Shift+S was pressed: hand over the whole terminal to save
+  // Text for a file. The view never names a file: it hands over what to write and what to call it in words,
+  // and main asks him where it goes (the same rule the key file and the downloads folder follow, plan B2.7).
+  save(text: string, what: string): void;
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void; // begin dragging out the file this tab's own ask brought over; a view names no path
   onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts

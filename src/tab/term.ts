@@ -92,6 +92,10 @@ export interface Term {
   // Everything the terminal holds, selected and given back: what Ctrl+Shift+A copies. Ctrl+A is the shell's
   // own and is never taken from him.
   takeAll(): string;
+  // The same text, read from the buffer and nothing selected. Selecting is what copies in this app, so the
+  // whole terminal on its way to a file must not go through a selection: saving a file is not a press that
+  // may quietly take over what is on his clipboard.
+  whole(): string;
   // The lines the box has printed since this was last asked, with the one the cursor sits on marked: what
   // reads the shape of a prompt (src/tab/blocks.ts). It is given lines from the terminal's own buffer, where
   // every escape sequence has already been acted on, so nothing reading them has to understand a terminal.
@@ -99,7 +103,8 @@ export interface Term {
   // One block: the prompt at this row is drawn in the box's own colour, with a line above it, so one command
   // and its output can be told from the next at a glance. It is the thing he said matters most about a
   // terminal (2026-11-15 07:32). Returns a way to take it off again.
-  blockAt(row: number, width: number, colour: string, copy: () => void): (() => void) | null;
+  // The press on a block: plain takes what it printed to the clipboard, with Shift it goes to a file.
+  blockAt(row: number, width: number, colour: string, press: (toFile: boolean) => void): (() => void) | null;
   // What one block printed: the rows after the prompt at this row, up to the next prompt or the end.
   outputAfter(row: number, until: number): string;
   rows(): number; // how many rows the terminal holds, on screen and scrolled out
@@ -251,7 +256,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       term.selectAll();
       return term.getSelection();
     },
-    blockAt: (row, width, colour, copy) => {
+    blockAt: (row, width, colour, press) => {
       // A marker follows its row as the terminal scrolls, which is what makes a decoration stay with the
       // command it belongs to rather than with a place on the screen.
       const b = term.buffer.active;
@@ -275,13 +280,13 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
         if (el.dataset['berth'] === 'copy') return;
         el.dataset['berth'] = 'copy';
         el.classList.add('berth-block-copy');
-        el.title = 'Copy what this command printed';
+        el.title = 'Copy what this command printed. Hold Shift to save it as a file';
         el.setAttribute('role', 'button');
-        el.setAttribute('aria-label', 'Copy what this command printed');
+        el.setAttribute('aria-label', 'Copy what this command printed, or hold Shift to save it as a file');
         el.addEventListener('mousedown', (ev) => ev.stopPropagation()); // a press here is not a selection
         el.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          copy();
+          press(ev.shiftKey);
         });
       });
       return () => {
@@ -290,6 +295,12 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
         hand?.dispose();
         marker.dispose();
       };
+    },
+    whole: () => {
+      const b = term.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+      return lines.join('\n').replace(/\s+$/, '');
     },
     outputAfter: (row, until) => {
       const b = term.buffer.active;
