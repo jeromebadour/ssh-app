@@ -41,7 +41,10 @@ const safeJson = (body: Uint8Array): Record<string, unknown> => {
   }
 };
 
-export function firstVisitWith(bin: string, hashesFile: string) {
+// The limit is a parameter so a probe can drive this very function rather than a copy of it: the fault it
+// stands against was a line of this file, and a test beside it that re-implements the arming would have gone
+// on passing with that line put back. Nothing in the app passes it; main takes the real one.
+export function firstVisitWith(bin: string, hashesFile: string, limitMs: number = HARD_LIMIT_MS) {
   return (box: { addr: string; user: string; hostKey: string }, password: string, command: string, onPhase: (p: string) => void, onAsk?: (questions: string[], show: boolean[]) => Promise<string[] | null>): Promise<Visited> =>
     new Promise<Visited>((resolve) => {
       let settled = false;
@@ -70,7 +73,7 @@ export function firstVisitWith(bin: string, hashesFile: string) {
           limit = setTimeout(() => {
             child.kill();
             fail('timed-out', 'the visit did not end');
-          }, HARD_LIMIT_MS);
+          }, limitMs);
         };
         armLimit();
         const end = (): void => {
