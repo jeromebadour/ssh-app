@@ -408,6 +408,43 @@ func (a *attempt) enter(p Phase, limit time.Duration) {
 }
 
 // endIf closes the connection for cause, if the attempt is still in phase p.
+// asking and answered hold a phase's deadline off while a person answers a box's own questions, and start
+// it again when they have. A deadline here is meant for a machine's answer, and a person reading a code off
+// a phone is slower than anything else in a sign-in: without this, the wait a box's questions really get is
+// the phase's few seconds and not the three minutes the first visit's own program allows. The phase itself
+// is set to the one that is really happening, so the window says signing in rather than key exchange while
+// he types.
+func (a *attempt) asking(p Phase) {
+	a.mu.Lock()
+	if a.ended != "" || a.phase == Up {
+		a.mu.Unlock()
+		return
+	}
+	if a.timer != nil {
+		a.timer.Stop()
+		a.timer = nil
+	}
+	said := a.phase != p
+	a.phase = p
+	a.mu.Unlock()
+	if said {
+		a.tell(p)
+	}
+}
+
+func (a *attempt) answered(limit time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ended != "" || a.phase == Up {
+		return
+	}
+	p := a.phase
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+	a.timer = time.AfterFunc(limit, func() { a.endIf(p, TimedOut) })
+}
+
 func (a *attempt) endIf(p Phase, cause Cause) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
