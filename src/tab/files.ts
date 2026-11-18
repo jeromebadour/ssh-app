@@ -266,7 +266,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   find.append(findField, clearFind);
   // One button a column: pressing the one already in use turns the order around, which is how every file list
   // a person has used behaves (BUILD-RULES 2.13: reuse, never reinvent).
-  const byBtns: { what: By; btn: HTMLButtonElement }[] = (['name', 'size', 'changed'] as By[]).map((what) => {
+  const byBtns: { what: By; btn: HTMLButtonElement; label: HTMLSpanElement }[] = (['name', 'size', 'changed'] as By[]).map((what) => {
     const btn = document.createElement('button');
     btn.className = 'fb-by';
     btn.id = `fb-by-${what}`;
@@ -286,7 +286,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       sort(rows);
       draw();
     });
-    return { what, btn };
+    return { what, btn, label };
   });
   tools.append(find);
   // The heads of the columns, each one over the column it orders, which is where every file list a person has
@@ -898,8 +898,35 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     return r.filter((x) => x.name === '..' || x.name.toLowerCase().includes(want));
   };
 
+  // Every size in the column is said in one unit, the unit the biggest file in the folder asks for. Four rows
+  // reading 1.1 KB, 942 B, 913 B, 5.8 KB are four rows nothing can be compared across by eye, which is the
+  // whole reason a column of numbers is a column (measured on his own screen, 2026-11-18). The unit is named
+  // once, on the head, and the rows carry digits alone so they line up under it. A file too small to show a
+  // tenth of that unit says so rather than reading zero, because a file with bytes in it is not empty.
+  const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let unit = { name: 'B', div: 0 }; // div 0: nothing in this folder has a size, so the head says Size alone
+  const unitFor = (r: FileRow[]): { name: string; div: number } => {
+    const most = Math.max(0, ...r.filter((x) => x.kind === 'file').map((x) => x.size));
+    if (most <= 0) return { name: 'B', div: 0 };
+    let at = 0;
+    let div = 1;
+    while (most / div >= 1000 && at < UNITS.length - 1) {
+      div *= 1000;
+      at++;
+    }
+    return { name: UNITS[at] ?? 'B', div };
+  };
+  const inUnit = (n: number): string => {
+    if (unit.div <= 1) return String(n);
+    const v = n / unit.div;
+    if (v === 0) return '0';
+    if (v < 0.1) return '<0.1';
+    return v < 100 ? v.toFixed(1) : String(Math.round(v));
+  };
+
   const draw = () => {
     const here = where || asked;
+    unit = unitFor(shown(rows));
     // Whether the rows themselves hold the keyboard, and not merely something inside the list: the heads of
     // the columns live in the list now, so asking the list would count a press on a head as the rows having
     // the focus, and the redraw that press causes would then take the keyboard off whatever it was really
@@ -948,7 +975,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     // Which column the list is ordered by, and which way: said on the buttons themselves, in words a reader
     // hears as well as in their look, because a button that is "on" only by its colour says nothing aloud.
-    for (const { what, btn } of byBtns) {
+    for (const { what, btn, label } of byBtns) {
+      if (what === 'size') label.textContent = unit.div === 0 ? 'Size' : `Size (${unit.name})`;
       const on = by === what && !bin.open;
       btn.dataset['on'] = on ? 'yes' : 'no';
       btn.dataset['down'] = on && down ? 'yes' : 'no';
@@ -1597,7 +1625,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // order he has to take on trust, and a size set in the name's own weight shouts as loud as the name.
     const right = document.createElement('span');
     right.className = 'fb-size';
-    right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? size(r.size) : r.kind;
+    right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? inUnit(r.size) : r.kind;
+    if (r.kind === 'file') right.title = size(r.size);
     const when = document.createElement('span');
     when.className = 'fb-when';
     when.textContent = r.name === '..' || r.mtime <= 0 ? '' : whenShort(r.mtime);

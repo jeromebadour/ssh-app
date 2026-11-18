@@ -148,7 +148,9 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Size and time are what a name is read against, not things to be read first: quieter, smaller, and in the
    face numbers line up in, so a column of them reads down. */
-.fb-size, .fb-when { color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .84em; text-align: right; white-space: nowrap; overflow: hidden; }
+/* Digits of one width, so a column of numbers lines up under the unit its head names and can be read down
+   rather than row by row. */
+.fb-size, .fb-when { color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .84em; text-align: right; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 .fb-when { text-align: left; padding-left: .3em; }
 /* A folder is the thing you go into, so it carries the weight; anything that is neither a file nor a folder
    says what it is in its own place rather than being opened. */

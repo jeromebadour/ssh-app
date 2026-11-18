@@ -12,16 +12,17 @@ export function whenAs(seconds: number): string {
   return day(new Date(seconds * 1000));
 }
 
-// The same moment, short enough for a column in a narrow list: today's files by their time, this year's by
-// day and month, older ones by their date.
+// The same moment, short enough for a column in a narrow list: today's files by their time alone, because the
+// day is today and saying so wastes the width the name wants; everything else by its date and its time, with
+// the year in two digits. A date with no time on it cannot answer the question the column is there for, which
+// is which of two files is the newer, and his own MobaXterm shows both in less width than this.
 export function whenShort(seconds: number): string {
   if (seconds <= 0) return '';
   const at = new Date(seconds * 1000);
   const now = new Date();
-  const sameDay = at.toDateString() === now.toDateString();
-  if (sameDay) return `${two(at.getHours())}:${two(at.getMinutes())}`;
-  if (at.getFullYear() === now.getFullYear()) return `${two(at.getMonth() + 1)}-${two(at.getDate())}`;
-  return day(at);
+  const clock = `${two(at.getHours())}:${two(at.getMinutes())}`;
+  if (at.toDateString() === now.toDateString()) return clock;
+  return `${two(at.getFullYear() % 100)}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${clock}`;
 }
 
 // Every time this app draws is the time on his own clock (section 1 of the details: shown in the PC's zone,

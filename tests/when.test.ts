@@ -26,20 +26,31 @@ test("today's file is said by his own clock, not by UTC", () => {
   });
 });
 
-test('a file from earlier this year is said by the day his calendar shows', () => {
+test('a file from earlier this year is said by the day his calendar shows, and by its time', () => {
   inIstanbul(() => {
     const now = new Date();
     // Half past midnight is where UTC and his own clock disagree about the day.
     const justAfterMidnight = new Date(now.getFullYear(), 0, 14, 0, 30, 0);
-    assert.equal(whenShort(justAfterMidnight.getTime() / 1000), '01-14');
+    const yy = String(now.getFullYear() % 100).padStart(2, '0');
+    assert.equal(whenShort(justAfterMidnight.getTime() / 1000), `${yy}-01-14 00:30`);
     assert.equal(justAfterMidnight.toISOString().slice(5, 10), '01-13'); // what UTC would have said
+  });
+});
+
+// Two files an hour apart on the same old day are told apart only by the time, which is why it is there.
+test('two files on one old day are told apart by their times', () => {
+  inIstanbul(() => {
+    const morning = new Date(2024, 4, 9, 8, 5, 0);
+    const evening = new Date(2024, 4, 9, 20, 5, 0);
+    assert.equal(whenShort(morning.getTime() / 1000), '24-05-09 08:05');
+    assert.equal(whenShort(evening.getTime() / 1000), '24-05-09 20:05');
   });
 });
 
 test('an older file is said by its own date, in his zone', () => {
   inIstanbul(() => {
     const old = new Date(2020, 2, 7, 1, 15, 0); // 7 March 2020, 01:15 in Istanbul
-    assert.equal(whenShort(old.getTime() / 1000), '2020-03-07');
+    assert.equal(whenShort(old.getTime() / 1000), '20-03-07 01:15');
     assert.equal(whenAs(old.getTime() / 1000), '2020-03-07');
     assert.equal(old.toISOString().slice(0, 10), '2020-03-06'); // what UTC would have said
   });
