@@ -1714,9 +1714,33 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // was left, so the name was the only thing that could give, and the one column on the right said
             // whatever the order happened to be.
             const headNames = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-head .fb-by')].map((b) => b.textContent.trim())`);
-            check('the list has a head over each of its columns, each saying what it orders', JSON.stringify(headNames) === JSON.stringify(['Name', 'Size', 'Modified']), headNames);
+            // The size head names the unit the whole column is in, so what it says is Size and that unit.
+            check('the list has a head over each of its columns, each saying what it orders', headNames[0] === 'Name' && /^Size \((B|KB|MB|GB|TB|PB)\)$/.test(headNames[1] ?? '') && headNames[2] === 'Modified' && headNames.length === 3, headNames);
             const everyRowHasBoth = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..' && r.dataset.kind === 'file').every((r) => r.querySelector('.fb-size')?.textContent.trim() && r.querySelector('.fb-when')?.textContent.trim())`);
             check('and every file carries both its size and its time, whatever the list is ordered by', everyRowHasBoth, everyRowHasBoth);
+            // One unit for the whole column, named once on the head, with digits alone in the rows. A column
+            // whose rows each carry their own unit cannot be read down: 1.1 KB over 942 B over 913 B is three
+            // units in three rows and nothing comparable by eye (his own screen, 2026-11-18). This folder holds
+            // a file of megabytes and files of a few bytes, so it is the case that decides it: the small ones
+            // must say they are small, not read as nothing.
+            const sizeCol = await js<{ head: string; cells: string[]; bytes: number[] }>(front.view, `(() => {
+              const rows = [...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file');
+              return {
+                head: document.getElementById('fb-by-size')?.textContent?.trim() ?? '',
+                cells: rows.map((r) => r.querySelector('.fb-size')?.textContent?.trim() ?? ''),
+                bytes: rows.map((r) => Number(r.dataset.bytes)),
+              };
+            })()`);
+            const unitNamed = /^Size \((B|KB|MB|GB|TB|PB)\)$/.test(sizeCol.head);
+            const digitsOnly = sizeCol.cells.every((c) => /^(<0\.1|\d+(\.\d)?)$/.test(c));
+            const noneReadsNothing = sizeCol.cells.every((c, i) => !(sizeCol.bytes[i]! > 0 && c === '0'));
+            const smallOnesSaySo = sizeCol.cells.includes('<0.1');
+            check('every size in the column is in the one unit its head names, as digits alone, and a file with bytes in it never reads nothing', unitNamed && digitsOnly && noneReadsNothing && smallOnesSaySo && sizeCol.cells.length > 2, sizeCol);
+            // The date a file was changed, short enough for the column and still able to answer which of two
+            // files is the newer: a day and a time for anything but today, the time alone for today's.
+            const whens = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.querySelector('.fb-when')?.textContent?.trim() ?? '')`);
+            const everyWhenReads = whens.length > 2 && whens.every((w) => /^\d\d:\d\d$|^\d\d-\d\d-\d\d \d\d:\d\d$/.test(w));
+            check('and every time it says is a time, with its day on it unless the day is today', everyWhenReads, whens);
             // The zoom, which is the press he can wreck the list with. Every step of it, not one: the first
             // version of this probe pressed Ctrl and plus once, held that nothing was cut, and passed, while
             // at 150 and 200 per cent the name was cut to nothing and the time column came out wider than it.
