@@ -241,12 +241,26 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
     if (menu) props.act.menu(true);
   };
 
+  // Three rows (his, 2026-11-18 night). The nav is what he does to the app; the strip below it is what he is
+  // working in. One row made them fight: the Boxes button sat among his tabs, and everything the app could do
+  // was folded inside that one menu because there was nowhere else for it to be.
+  //
+  // The nav is the window's title bar, so it drags and carries the window's own three buttons at its end.
+  // **The strip deliberately does not drag.** It did when it was one row, and a region Windows drags by
+  // swallows the press before the page sees it, so the right button on the strip's empty part could not have
+  // worked on his machine however well it worked under a dispatched event in the lab.
   return (
+    <>
+      <header class="nav" id="nav">
+        <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
+        <button type="button" class={`nav-btn boxes-btn ${menu === 'boxes' ? 'open' : ''}`} id="boxes" aria-haspopup="menu" aria-expanded={menu === 'boxes'} onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}>
+          <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />
+        </button>
+        <button type="button" class="nav-btn" id="settings-open" onClick={() => { showMenu(''); props.act.settings(); }}><Glyph name="settings" />Settings</button>
+        <span class="nav-rest" />
+        <WindowButtons maximized={props.s.maximized} act={props.act} />
+      </header>
     <header class="tabbar" id="bar" onContextMenu={stripMenu}>
-      <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
-      <button type="button" class={`boxes-btn ${menu === 'boxes' ? 'open' : ''}`} id="boxes" aria-haspopup="menu" aria-expanded={menu === 'boxes'} onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}>
-        <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />
-      </button>
       <div class="tab-groups" ref={groupsEl} style={{ '--n': n }}>
         {groups.map((g) => {
           if (!folded.has(g.key)) {
@@ -277,10 +291,10 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
         })}
         <button type="button" class="new-tab" id="new" aria-label="Open a box" onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}><Glyph name="plus" /></button>
       </div>
-      <WindowButtons maximized={props.s.maximized} act={props.act} />
       {menu === 'boxes' && <BoxMenu s={props.s} act={props.act} done={() => showMenu('')} />}
       {menu !== '' && <div class="menu-away" onPointerDown={() => showMenu('')} />}
     </header>
+    </>
   );
 }
 
@@ -370,7 +384,6 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
       })}
       <div class="bm-foot">
         <button type="button" class="bm-add" id="add-box-open" onClick={() => { props.done(); props.act.addBox(); }}><Glyph name="plus" />Add box</button>
-        <button type="button" class="bm-add bm-settings" id="settings-open" onClick={() => { props.done(); props.act.settings(); }}><Glyph name="settings" />Settings</button>
       </div>
     </div>
   );

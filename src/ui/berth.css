@@ -49,11 +49,29 @@ ul { list-style: none; }
   stroke-width: var(--glyph-stroke); stroke-linecap: var(--glyph-cap); stroke-linejoin: var(--glyph-join);
 }
 
-.window { position: relative; height: 100vh; display: grid; grid-template-rows: 46px 1fr var(--status-h); }
+.window { position: relative; height: 100vh; display: grid; grid-template-rows: 34px 36px 1fr var(--status-h); }
 .body { position: relative; display: grid; grid-template-columns: clamp(400px, 29vw, 540px) 1fr; min-height: 0; }
 
-/* ---------- tab bar ---------- */
-.tabbar { position: relative; z-index: 2; display: flex; align-items: stretch; gap: 14px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+/* ---------- the nav, and the tab strip under it ---------- */
+/* Two rows, not one (his, 2026-11-18 night). What he does to the app is in the nav; what he is working in is
+   the strip. In one row they fought: the Boxes button stood among his tabs, and everything the app could do
+   was folded inside that one menu because there was nowhere else to put it.
+   The nav is thin on purpose. His laptop is 1366x650 and every row of chrome comes off the terminal, so this
+   is one row of controls and never a ribbon. */
+.nav { position: relative; z-index: 3; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 0 0 12px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.nav .brand { padding-right: 6px; }
+.nav .mark { width: 20px; height: 20px; }
+.nav .wordmark { font-size: 15px; }
+.nav-rest { flex: 1; min-width: 0; }
+/* One shape for everything in the nav, so Boxes and Settings read as the same kind of thing. Quiet until the
+   pointer is on it: the nav is furniture, and furniture that shouts competes with the window's own content. */
+.nav-btn { display: flex; align-items: center; gap: 7px; height: 24px; padding: 0 9px; border-radius: var(--r); color: var(--text-2); background: none; border: 1px solid transparent; font-size: 13px; }
+.nav-btn:hover { color: var(--text); background: var(--panel-2); border-color: var(--line); }
+.nav-btn .glyph { width: 14px; height: 14px; }
+.nav-btn .caret { width: 11px; height: 11px; color: var(--text-3); transform: rotate(90deg); }
+.nav-btn.open { color: var(--text); background: var(--panel-2); border-color: var(--main); }
+
+.tabbar { position: relative; z-index: 2; display: flex; align-items: stretch; gap: 14px; padding: 0 10px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { display: flex; align-items: center; gap: 8px; flex: none; padding-right: 4px; }
 .mark { width: 26px; height: 26px; }
 .mark-line { fill: none; stroke: var(--text-2); stroke-width: 1.8; stroke-linecap: round; }
@@ -65,8 +83,13 @@ ul { list-style: none; }
 /* Windows draws no title bar for Berth, so the bar is the title bar: the empty part of it drags the window and
    a double-click on it maximizes, as a title bar does. Everything that can be pressed takes itself back out of
    that, or it could be dragged instead of pressed. */
-.tabbar { -webkit-app-region: drag; }
-.tabbar button, .tabbar .tab, .tabbar .tab-group, .tabbar .boxes-btn, .box-menu, .fold-menu, .menu-away { -webkit-app-region: no-drag; }
+/* The nav is the title bar: its empty part drags the window and a double-click on it maximizes, as a title
+   bar does. Everything pressable takes itself back out of that, or it would be dragged instead of pressed.
+   **The tab strip is deliberately not a drag region.** It was one while it was the title bar, and a region
+   Windows drags by swallows the press before the page ever sees it, so the right button on the strip's empty
+   part could not have worked on his machine however well it answered a dispatched event in the lab. */
+.nav { -webkit-app-region: drag; }
+.nav button, .nav .nav-btn, .win-buttons, .box-menu, .fold-menu, .menu-away { -webkit-app-region: no-drag; }
 /* The strip above the screens shown before the lock opens: it draws nothing of its own, holds the three window
    buttons at its right-hand end, and drags the window everywhere else. */
 .win-strip { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 5; display: flex; justify-content: flex-end; -webkit-app-region: drag; }
@@ -532,7 +555,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .gate-center { justify-content: center; }
 .gate-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
 .tab-close { display: grid; place-items: center; }
-.tabbar.scaffold { height: 44px; }
+.tabbar.scaffold { height: 36px; }
 /* Every tab stays in sight. Tabs are 168 wide, or their words' width, while there is room; in a narrower window, or with more tabs, they
    all narrow together and their words are cut with a mark, the place first. None ever slides past the edge, and
    the button that opens one more stays where it can be pressed (found 2026-11-16: at 1024 wide, tabs six and
@@ -583,7 +606,7 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 
 /* ---------- the window, unlocked: the bar and the status line are the shell's; the middle is the tab in front ---------- */
 html[data-gate='unlocked'], html[data-gate='unlocked'] body { background: transparent; }
-.window.live { grid-template-rows: 46px 1fr 30px; }
+.window.live { grid-template-rows: 34px 36px 1fr 30px; }
 .window.live .middle { position: relative; display: grid; place-items: center; min-height: 0; }
 .window.live .middle:has(.first-use) { background: var(--bg); }
 .first-use { display: flex; flex-direction: column; align-items: center; gap: 22px; }
