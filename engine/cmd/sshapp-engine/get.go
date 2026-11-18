@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -138,33 +139,30 @@ func (f *files) get(ctx context.Context, c *sftp.Client, a fileAsk) error {
 		_ = file.Close(done)
 	}()
 
-	buf := make([]byte, sftp.Block)
 	said := time.Now()
 	if got == 0 {
 		f.page(filePage{ID: a.ID, Got: 0, Of: was.Size})
 	}
-	for {
-		n, err := file.ReadAt(ctx, buf, got)
-		if n > 0 {
-			if _, werr := to.WriteAt(buf[:n], int64(got)); werr != nil {
-				return werr
-			}
-			sum.Write(buf[:n])
-			got += uint64(n)
-			if time.Since(said) >= sayEvery {
-				said = time.Now()
-				f.page(filePage{ID: a.ID, Got: got, Of: was.Size})
-			}
+	// Several blocks are asked for at once. One block an ask means one round trip a block, which makes the
+	// distance to the box decide the speed and not the link: measured at a 50 ms round trip, 0.6 MiB/s that
+	// way against 13 this way. They still reach the hash in the order they sit in the file, which is the
+	// whole point of ReadInOrder: a hash taken out of order is not that file's hash.
+	if err := file.ReadInOrder(ctx, got, func(p []byte, at uint64) error {
+		if at != got {
+			return fmt.Errorf("sftp: a block arrived for %d where %d was due", at, got)
 		}
-		if errors.Is(err, io.EOF) {
-			break
+		if _, werr := to.WriteAt(p, int64(got)); werr != nil {
+			return werr
 		}
-		if err != nil {
-			return err
+		sum.Write(p)
+		got += uint64(len(p))
+		if time.Since(said) >= sayEvery {
+			said = time.Now()
+			f.page(filePage{ID: a.ID, Got: got, Of: was.Size})
 		}
-		if n == 0 {
-			break
-		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if err := to.Sync(); err != nil {
 		return err

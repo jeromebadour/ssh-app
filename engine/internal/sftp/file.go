@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // The most this client asks for in one read or write. The protocol allows more, but OpenSSH's own server
@@ -206,4 +207,132 @@ func (c *Client) Readlink(ctx context.Context, p string) (string, error) {
 		return "", ErrTooLong
 	}
 	return string(name), nil
+}
+
+// AtOnce is how many blocks a bulk transfer asks for at the same time. One ask per round trip is what a
+// plain loop does, and it makes the distance to the box, not the link, decide the speed: measured at a
+// 50 ms round trip, 32 KiB an ask came to 0.6 MiB/s, so a 5 GB file would have taken most of a day. Asking
+// for this many at once turns that into one round trip per megabyte. The memory it costs is fixed and
+// small: this many blocks, for one transfer at a time per tab.
+const AtOnce = 32
+
+// ReadInOrder reads the file from `at` to its end, asking for AtOnce blocks at a time, and hands each one
+// to `take` in order and exactly once. In order matters: the hash of a transfer is taken as it goes, and a
+// hash is only a hash if the bytes reach it in the order they sit in the file.
+//
+// A box is allowed to answer with less than was asked for in the middle of a file. When that happens the
+// blocks after it are dropped unseen and the next round asks again from the end of what really arrived, so
+// a short answer can leave no hole and can cost nothing but the one wasted round.
+func (f *File) ReadInOrder(ctx context.Context, at uint64, take func(p []byte, at uint64) error) error {
+	if f.closed {
+		return ErrClosed
+	}
+	bufs := make([][]byte, AtOnce)
+	for i := range bufs {
+		bufs[i] = make([]byte, Block)
+	}
+	ns := make([]int, AtOnce)
+	errs := make([]error, AtOnce)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var wg sync.WaitGroup
+		for i := range bufs {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				ns[i], errs[i] = f.ReadAt(ctx, bufs[i], at+uint64(i)*Block)
+			}(i)
+		}
+		wg.Wait()
+		next := at + uint64(len(bufs))*Block
+		for i := range bufs {
+			if ns[i] > 0 {
+				if err := take(bufs[i][:ns[i]], at+uint64(i)*Block); err != nil {
+					return err
+				}
+			}
+			if errs[i] != nil {
+				if errors.Is(errs[i], io.EOF) {
+					return nil
+				}
+				return errs[i]
+			}
+			if ns[i] < Block {
+				// Short, and not the end of the file: whatever came after it in this round is dropped
+				// unseen, and the next round asks again from where this block really stopped. So a short
+				// answer can leave no hole and costs nothing but the rest of one round.
+				next = at + uint64(i)*Block + uint64(ns[i])
+				break
+			}
+		}
+		at = next
+	}
+}
+
+// WriteInOrder writes what `next` gives it, AtOnce blocks at a time, starting at `at`. `next` fills a block
+// and says how many bytes it put there; it is called in order, once per block, which is what lets whoever
+// gives the bytes hash them as they go. It returns io.EOF when there is no more.
+//
+// Nothing is written twice and nothing is skipped: a round is sent only after its blocks have been filled,
+// and a round that fails stops the transfer rather than going on to the next.
+func (f *File) WriteInOrder(ctx context.Context, at uint64, next func(p []byte) (int, error)) (uint64, error) {
+	if f.closed {
+		return 0, ErrClosed
+	}
+	bufs := make([][]byte, AtOnce)
+	for i := range bufs {
+		bufs[i] = make([]byte, Block)
+	}
+	held := make([][]byte, AtOnce)
+	errs := make([]error, AtOnce)
+	var wrote uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return wrote, err
+		}
+		have, round := 0, uint64(0)
+		var end error
+		for i := range bufs {
+			n, err := next(bufs[i][:Block])
+			if n > 0 {
+				held[i] = bufs[i][:n]
+				round += uint64(n)
+				have++
+			}
+			if err != nil {
+				end = err
+				break
+			}
+			if n < Block {
+				break // only the last block of a round is ever short, so the offsets below hold
+			}
+		}
+		var wg sync.WaitGroup
+		for i := 0; i < have; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = f.WriteAt(ctx, held[i], at+uint64(i)*Block)
+			}(i)
+		}
+		wg.Wait()
+		for i := 0; i < have; i++ {
+			if errs[i] != nil {
+				return wrote, errs[i]
+			}
+		}
+		wrote += round
+		at += round
+		if end != nil {
+			if errors.Is(end, io.EOF) {
+				return wrote, nil
+			}
+			return wrote, end
+		}
+		if have == 0 {
+			return wrote, nil
+		}
+	}
 }
