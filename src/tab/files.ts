@@ -1048,6 +1048,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       one.append(words);
       el.moving.append(one);
     }
+    // Several files at once. A file is dragged out as the transfer that brought it, so a drag of several is
+    // a drag of several of those: one line, above the lines it stands for, carrying every file in the strip
+    // that is here and still here. It appears only when there are two, because with one the line for that
+    // one file already does it (BUILD-RULES 2.4: a line that comes and goes must not move the lines below).
+    const ready = [...bringing].filter(([, b]) => b.canDrag);
+    if (ready.length > 1) {
+      const all = document.createElement('div');
+      all.className = 'fb-moving-one fb-drag-all';
+      all.id = 'fb-drag-all';
+      dragAll(all, ready.map(([id]) => id), `${ready.length} files`);
+      const words = document.createElement('span');
+      words.textContent = `${ready.length} files are here: drag them out together`;
+      all.append(words);
+      el.moving.append(all);
+    }
     for (const [id, b] of bringing) {
       const one = document.createElement('div');
       one.className = 'fb-moving-one';
@@ -1086,6 +1101,23 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       said = `${shorten(what, 28)} is being dragged out`;
       draw();
       port.drag(ask);
+    });
+    e.addEventListener('dragend', () => {
+      delete e.dataset['dragging'];
+    });
+  };
+
+  // The same, for several at once: the window still holds numbers and never a path, and main hands the
+  // system every file those numbers brought over, in one drag.
+  const dragAll = (e: HTMLElement, asks: number[], what: string): void => {
+    e.draggable = true;
+    e.title = `Drag ${what} out of this window`;
+    e.addEventListener('dragstart', (ev) => {
+      ev.preventDefault();
+      e.dataset['dragging'] = 'yes';
+      said = `${what} are being dragged out`;
+      draw();
+      port.dragAll(asks);
     });
     e.addEventListener('dragend', () => {
       delete e.dataset['dragging'];

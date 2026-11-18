@@ -1673,6 +1673,45 @@ ipcMain.on(CH.tabDrag, (e: IpcMainEvent, ask: unknown) => {
   void handOver(tab, ask, file);
 });
 
+// Several of them at once. The same rule as one: the view holds numbers, main holds the paths, and only a
+// file this tab really brought over and that is really still there is handed to the system (plan B2.7).
+ipcMain.on(CH.tabDragAll, (e: IpcMainEvent, asks: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:drag-all', e);
+  if (!Array.isArray(asks) || asks.length < 2 || asks.length > MOST_AT_ONCE) return drop('tab:drag-all', e);
+  const files: string[] = [];
+  for (const ask of asks) {
+    if (typeof ask !== 'number' || !Number.isInteger(ask) || ask < 1) return drop('tab:drag-all', e);
+    const file = draggable.get(comingKey(tab.id, ask));
+    if (file === undefined) return drop('tab:drag-all', e);
+    if (!files.includes(file)) files.push(file);
+  }
+  void handOverAll(tab, files);
+});
+
+async function handOverAll(tab: Tab, files: string[]): Promise<void> {
+  const here: string[] = [];
+  for (const file of files) {
+    try {
+      const f = await stat(file);
+      if (f.isFile()) here.push(file);
+    } catch {
+      // A file that has gone since it landed is left out of the drag rather than handed over as nothing.
+    }
+  }
+  if (tabs.get(tab.id) !== tab) return;
+  if (here.length === 0) {
+    done = 'None of those files is still where it landed';
+    return tellShell();
+  }
+  dragsAsked++;
+  if (labWatchesDrags) return labWatchesDrags(here.join('\n'));
+  const icon = await app.getFileIcon(here[0]!, { size: 'normal' }).catch(() => nativeImage.createEmpty());
+  // Electron's own type wants one file as well as the list; the list is what the system is given, and the
+  // first of them is named as that one so the two can never disagree.
+  if (tabs.get(tab.id) === tab) tab.view.webContents.startDrag({ file: here[0]!, files: here, icon });
+}
+
 // What main knows about a file is what it knew when the file landed, and the download folder is his: a file
 // can be moved, renamed or deleted between landing and the hand reaching for it. So it is looked for again
 // before it is handed to the system, and if it has gone the window says so rather than handing over a path to
