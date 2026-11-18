@@ -57,6 +57,8 @@ interface Ctx {
   faults(): Promise<{ written: number; lost: number; waiting: number; lately: { id: string; what: string }[]; file: string }>;
   told(): { decided: number; shown: number };
   chooseToSend(answer: (() => string | string[] | undefined) | null): void;
+  savesTo(answer: (() => string | undefined) | null): void;
+  saves(): { refused: number; to: string };
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
   chooseFolder(answer: (() => string | undefined) | null): void;
@@ -2741,7 +2743,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -3257,6 +3259,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         // what Ctrl+Shift+A copies is the tab he is looking at, not the one a probe happens to hold.
         await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
         await until(() => ctx.shellState().active === t.id, 5000);
+        // Whether the window is in use is asked here, not once at the top of all the key probes: a machine
+        // that hands out focus can take it away again between one press and the next, and a precondition
+        // read long before the press it guards turns a probe about the app into a probe about the machine.
+        ctx.win.focus();
+        const inUse = await until(() => ctx.win.isFocused() && !ctx.overlayOn(), 4000);
         const before = await clipboard.readText();
         const boxBefore = await boxGot();
         press(t.view.webContents, 'A', ['control', 'shift']);
@@ -3265,13 +3272,46 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const boxAfter = await boxGot();
         check(
           'Ctrl+Shift+A copies the whole terminal, and the box is given nothing',
-          !inUseForKeys || (copiedWhole && onClipboard.length > 40 && boxAfter === ''),
-          [inUseForKeys, copiedWhole, onClipboard.length, JSON.stringify(boxAfter), JSON.stringify(boxBefore)],
+          !inUse || (copiedWhole && onClipboard.length > 40 && boxAfter === ''),
+          [inUse, ...keysCouldWork(), copiedWhole, onClipboard.length, JSON.stringify(boxAfter), JSON.stringify(boxBefore)],
         );
+        // Ctrl+Shift+S: the same terminal into a file he picks. The page hands over the text; where it goes
+        // is asked by main, and the lab answers that chooser here because it cannot press its buttons.
+        {
+          const there = (f: string): Promise<boolean> => stat(f).then(() => true, () => false);
+          const into = path.join(os.tmpdir(), `berth-saved-${randomBytes(5).toString('hex')}.txt`);
+          ctx.savesTo(() => into);
+          const clipBeforeSave = await clipboard.readText();
+          press(t.view.webContents, 'S', ['control', 'shift']);
+          // Waiting on the window's own word, not on the file appearing: a file exists from the first byte
+          // written, and reading it then is reading something half written.
+          const written = (await until(() => ctx.shellState().done.startsWith('Saved '), 5000)) && (await there(into));
+          const held = written ? await readFile(into, 'utf8') : '';
+          check('Ctrl+Shift+S saves the whole terminal into the file he picked, and the box is given nothing', !inUse || (written && held.length > 40 && held.startsWith(onClipboard.slice(0, 60)) && (await boxGot()) === ''), [inUse, ...keysCouldWork(), written, held.length, onClipboard.length]);
+          check('saving leaves the clipboard exactly as it was: it is a file, not a copy', (await clipboard.readText()) === clipBeforeSave, [clipBeforeSave.length, (await clipboard.readText()).length]);
+          check('and the window says what was saved, naming the file', !inUse || (ctx.shellState().done.startsWith('Saved ') && ctx.shellState().done.includes(path.basename(into))), ctx.shellState().done);
+          // Nothing is written behind his back: the chooser answered with nothing means no file at all.
+          const andNot = path.join(os.tmpdir(), `berth-saved-${randomBytes(5).toString('hex')}.txt`);
+          ctx.savesTo(() => undefined);
+          press(t.view.webContents, 'S', ['control', 'shift']);
+          await until(() => ctx.shellState().done === 'Nothing was saved', 5000);
+          check('a chooser he answers with nothing writes no file at all, and the window says so', !inUse || (ctx.shellState().done === 'Nothing was saved' && !(await there(andNot))), ctx.shellState().done);
+          // Under a dialog of the window's own the key is not acted on at all, so nothing is handed over.
+          const refusedBefore = ctx.saves().refused;
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: true })`);
+          await sleep(100);
+          const blocked = path.join(os.tmpdir(), `berth-saved-${randomBytes(5).toString('hex')}.txt`);
+          ctx.savesTo(() => blocked);
+          press(t.view.webContents, 'S', ['control', 'shift']);
+          await sleep(400);
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: false })`);
+          check('with a dialog over the tab nothing is saved', !(await there(blocked)) && ctx.saves().refused === refusedBefore, [await there(blocked), ctx.saves().refused - refusedBefore]);
+          ctx.savesTo(null);
+        }
         // And Ctrl+A alone is the shell's: it reaches the box exactly as it always did.
         press(t.view.webContents, 'A', ['control']);
         const plainReached = await until(async () => (await boxGot()).includes('\u0001'), 3000);
-        check('Ctrl+A alone is still the shell\u2019s own, and reaches the box', !inUseForKeys || plainReached, [inUseForKeys, plainReached]);
+        check('Ctrl+A alone is still the shell\u2019s own, and reaches the box', !inUse || plainReached, [inUse, ...keysCouldWork(), plainReached]);
       }
       // A dialog of the window's own is in front: the press is not acted on, it is counted, and no view is
       // given a key that was meant for main.

@@ -43,6 +43,12 @@ const port: TabPort = {
   onWhole(cb) {
     ipcRenderer.on(CH.tabWhole, () => cb());
   },
+  onSaveAsk(cb) {
+    ipcRenderer.on(CH.tabSaveAsk, () => cb());
+  },
+  save(text, what) {
+    ipcRenderer.send(CH.tabSave, String(text), String(what));
+  },
   onFilePage(cb) {
     ipcRenderer.on(CH.tabFilePage, (_e, page) => cb(page));
   },
