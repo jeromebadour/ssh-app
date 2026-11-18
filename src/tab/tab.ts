@@ -113,7 +113,7 @@ let saidDoing = '';
 // A prompt is drawn once: one redrawn as he types is the same block, not another one. The number is the
 // mark's own and never a row, because rows move under everything once the terminal is full and starts
 // forgetting its oldest lines.
-const drawn = new Map<number, () => void>();
+const drawn = new Map<number, { off(): void; rowNow(): number }>();
 let hue = '';
 let blocksFault = ''; // what stopped a block being drawn, if anything: the lab reads it
 let copied = ''; // what the last press on a block's copy did, for the lab
@@ -133,9 +133,14 @@ const drawBlocksNow = (): void => {
     if (drawn.has(m.id)) continue;
     // What this block printed is read when the press happens, not now: the command may still be running,
     // and the rows under it are the box's to fill until its prompt comes back.
-    const off = term.blockAt(m.row, m.width, hue, (toFile) => {
+    const block = term.blockAt(m.row, m.width, hue, (toFile) => {
+      // Where this block and the next one are now, not where they were when they were drawn: once the
+      // scrollback is full the oldest lines go and every row below them means a different line, so the
+      // numbers they were made with would have copied somebody else's output.
+      const from = drawn.get(m.id)?.rowNow() ?? m.row;
       const next = blocks.marks.find((x) => x.id > m.id);
-      const text = term.outputAfter(m.row, next ? next.row : term.rows());
+      const until = next ? (drawn.get(next.id)?.rowNow() ?? next.row) : term.rows();
+      const text = from < 0 || (until >= 0 && until <= from) ? '' : term.outputAfter(from, until < 0 ? term.rows() : until);
       // A press that did nothing says so, in Berth's own line: a button that looks as if it worked when it
       // did nothing is the silence this app is built not to have.
       if (text === '') term.note(`Berth: that command printed nothing, so nothing was ${toFile ? 'saved' : 'copied'}`);
@@ -144,19 +149,33 @@ const drawBlocksNow = (): void => {
       copied = text === '' ? 'nothing' : toFile ? 'saving' : 'copied';
       document.documentElement.dataset['copied'] = copied;
     });
-    if (off) drawn.set(m.id, off);
+    if (block) drawn.set(m.id, block);
   }
   // What the reading no longer holds is taken off, oldest first: a decoration is a thing on a screen, and
   // the ones belonging to commands long scrolled away are not worth keeping.
   const oldest = blocks.marks[0]?.id ?? 0;
-  for (const [id, off] of [...drawn]) {
+  for (const [id, block] of [...drawn]) {
     if (id >= oldest) continue;
-    off();
+    block.off();
     drawn.delete(id);
   }
 };
 
+// The whole of the reading, guarded. Only the drawing was: the reading of the buffer, the prompt matching
+// and the word to main were not, and all three run inside the path that takes a box's output. A reading aid
+// may never be the thing that stops a terminal from drawing what a box said (plan A5, B3), and "I found
+// nothing in them that throws today" is not the same as a guard.
 const readShape = (): void => {
+  try {
+    readShapeNow();
+  } catch (err) {
+    shapeFault = err instanceof Error ? err.message : String(err);
+    document.documentElement.dataset['shape'] = shapeFault;
+  }
+};
+let shapeFault = '';
+
+const readShapeNow = (): void => {
   const got = term.since(seenRow);
   seenRow = got.next;
   for (const [i, l] of got.lines.entries()) blocks.sawLine(l.text, l.atCursor, got.next - (got.lines.length - 1 - i));

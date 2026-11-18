@@ -552,6 +552,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     if (p.id !== asking) return; // a page of a listing already left behind
     if (typeof p.where === 'string') where = p.where;
+    // The box has said where this tab is, so the one thing Berth does on a box without being asked can
+    // happen now rather than against a name that is not a path.
+    if (where !== '' && emptyWhenKnown) {
+      emptyWhenKnown = false;
+      emptyOldTrash();
+    }
     if (p.space) space = p.space;
     if (p.rows && p.rows.length > 0) {
       rows = rows.concat(p.rows);
@@ -1328,7 +1334,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       return;
     }
     for (const b of bringing.values()) {
-      if (b.name === name && b.ended === '') return; // already on its way
+      if (b.name === name && b.ended === '') {
+        // Already on its way. A press that looked as if it did nothing is the silence this app is built
+        // not to have, so the line that is already there is named rather than the press being swallowed.
+        said = `${shorten(name, 28)} is already on its way over`;
+        draw();
+        return;
+      }
     }
     const id = asker.ask({ do: 'get', path: join(where || asked, name) });
     bringing.set(id, { name, way: 'in', got: 0, of: r.size, began: performance.now(), at: performance.now(), rate: 0, landed: '', mark: '', markWhy: '', renamed: '', replaced: false, asking: '', tookUpAt: 0, ended: '', canDrag: false });
@@ -1424,11 +1436,20 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // cannot hold a trash, because a tab coming up is not the place to say so.
   let emptiedOnce = false;
   let quietly = false;
+  // What has been in this disk's trash longer than the box keeps things goes once per tab. It waits for the
+  // box to have said where the tab really is: a tab opened at the account's home asks for ".", which is not
+  // a path, so the engine refused it and the emptying quietly never happened for any such tab. What decides
+  // which disk the trash is on is the folder the box named, not the one we asked for.
+  let emptyWhenKnown = false;
   const emptyOldTrash = (): void => {
     if (emptiedOnce) return;
+    if (where === '') {
+      emptyWhenKnown = true;
+      return;
+    }
     emptiedOnce = true;
     quietly = true;
-    asker.ask({ do: 'empty', path: where || asked });
+    asker.ask({ do: 'empty', path: where });
   };
 
   const emptyTrash = (): void => {

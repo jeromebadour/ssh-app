@@ -513,8 +513,16 @@ function closeLink(open: boolean): void {
     lastOpened = asked.url;
     done = `Opened ${asked.host} in the browser`;
     // The app opens nothing itself: the address is handed to Windows, which opens it where the person's
-    // own browser is. Nothing of Berth goes with it.
-    void osShell.openExternal(asked.url).catch(() => undefined);
+    // own browser is. Nothing of Berth goes with it. Whether Windows really did it is Windows' answer, and
+    // it is said: "Opened" over a browser that never came is the silence this app is built not to have.
+    const host = asked.host;
+    void osShell.openExternal(asked.url).then(
+      () => undefined,
+      (err: unknown) => {
+        done = `${host} could not be opened: ${err instanceof Error ? err.message : String(err)}`;
+        tellShell();
+      },
+    );
   } else if (asked) done = 'The address was not opened';
   tellShell();
 }
@@ -1160,10 +1168,12 @@ ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
     if (typeof name !== 'string' || !aName(name)) return drop('tab:file-ask', e);
     if (!tab.engine.askFiles({ id, do: what, path: where, name })) return drop('tab:file-ask', e);
     filesAsked.set(what, (filesAsked.get(what) ?? 0) + 1);
+    filesAskedWhere.set(what, where);
     return;
   }
   if (!tab.engine.askFiles({ id, do: what, path: where })) return drop('tab:file-ask', e);
   filesAsked.set(what, (filesAsked.get(what) ?? 0) + 1);
+  filesAskedWhere.set(what, where);
 
 });
 // One name a person typed for something on a box: a name on its own. A slash would make it a path, and a
@@ -1178,8 +1188,11 @@ const aName = (name: string): boolean => {
   return true;
 };
 
-// What a view has asked of its box's files, by kind, for the lab to say which asks really left main.
+// What a view has asked of its box's files, by kind, for the lab to say which asks really left main, and
+// the path of the last of each kind: a probe that counts asks alone cannot tell an ask that did something
+// from one the engine was always going to refuse.
 const filesAsked = new Map<string, number>();
+const filesAskedWhere = new Map<string, string>();
 
 // ---- Downloads: what main decides (plan B4.2, B4.3) ----
 // One folder holds everything brought over from a box, so a download can never land anywhere else and a person
@@ -2329,7 +2342,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');
