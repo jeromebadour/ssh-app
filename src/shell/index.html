@@ -4,10 +4,14 @@
     <meta charset="utf-8" />
     <title>Berth</title>
     <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="menu.css" />
     <link rel="stylesheet" href="berth.css" />
   </head>
   <body>
     <div id="app"></div>
+    <!-- Where the window's own menus are drawn. Outside the app, because the app is redrawn whenever anything
+         changes and a menu is not part of what it draws; it would be swept away mid-press. -->
+    <div id="shell-menus"></div>
     <script src="shell.js"></script>
   </body>
 </html>

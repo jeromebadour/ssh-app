@@ -198,7 +198,7 @@ const tooSmall = (r: Reading) => r.size < 14.5 || r.weight < 450 || r.ratio < 4.
 // nothing is half the line gone, and nothing in the build would ever have said so.
 interface MenuMark { where: string; lines: number; unknown: string[] }
 const menuGlyphs = (view: WebContentsView, where: string) => js<MenuMark>(view, `(() => {
-  const ones = [...document.querySelectorAll('#fb-menu .fb-menu-one')];
+  const ones = [...document.querySelectorAll('.fb-menu-one')];
   // What the pane draws when it does not know the name, taken from the pane itself rather than written out
   // here: a probe holding a copy of the shape would pass the day the shape changed.
   const miss = window.berthGlyphPath ? window.berthGlyphPath('a-name-no-pane-has') : '';
@@ -206,8 +206,12 @@ const menuGlyphs = (view: WebContentsView, where: string) => js<MenuMark>(view, 
     where: ${JSON.stringify(where)},
     lines: ones.length,
     unknown: ones.filter((o) => {
-      const d = o.querySelector('.fb-glyph path')?.getAttribute('d') ?? '';
-      return d === '' || (miss !== '' && d === miss);
+      // Any shape at all, under whichever class the surface draws glyphs with: a line with nothing drawn on
+      // it is the fault being looked for, and so is one drawn with the shape used for a name nobody has.
+      const g = o.querySelector('svg');
+      const drawn = g ? [...g.querySelectorAll('path, rect, circle, ellipse, line, polyline, polygon')] : [];
+      const d = drawn.map((e) => e.getAttribute('d') ?? e.tagName).join('|');
+      return drawn.length === 0 || (miss !== '' && d === miss);
     }).map((o) => ${JSON.stringify(where)} + ': ' + (o.querySelector('.fb-menu-words')?.textContent ?? '?')),
   };
 })()`);
@@ -1090,6 +1094,43 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             f.length >= 2 && f.every((x) => x.words > 0 && x.words <= 3 && x.glyph !== 'none' && x.glyph === x.colour)
             && !!rtt && /^\d+ ms$/.test(rtt.text) && !!pq && pq.text === 'post-quantum' && pq.colour !== rtt.colour,
             f);
+        }
+        // The right button on the tab strip. The menu component moved out of the pane to src/ui/menu.ts so
+        // that the window itself could use the same one: a menu per surface would be the same mistake as the
+        // panes themselves were. Held on both halves, and on the thing a shared component makes possible to
+        // get wrong: the window has to be drawn above its tabs while a menu is open, and put back when it
+        // goes, or the next menu opens behind the tab it is about.
+        {
+          const strip = async (what: string): Promise<string[]> => {
+            await js(ctx.shell, `(() => { const e = ${what}; const r = e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(r.left + 6), clientY: Math.round(r.top + 6) })); })()`);
+            await sleep(180);
+            return js<string[]>(ctx.shell, `[...document.querySelectorAll('#shell-menus .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+          };
+          const shutIt = (): Promise<unknown> => js(ctx.shell, `document.querySelector('#shell-menus .fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+          const onTab = await strip(`document.querySelector('[data-tab]')`);
+          await sweepMenu(ctx.shell, 'the tab strip, on a tab');
+          await shot('tab-menu', 'the right button on a tab, drawn by the one menu the whole window shares', null);
+          const aboveWhileOpen = shellOnTop();
+          // The lines about the tabs beside this one are there only when there are tabs beside it: a menu
+          // never shows a thing that cannot be used (BUILD-RULES 2.8), so the claim is held against how many
+          // tabs are really open rather than against a number written here.
+          const openTabs = ctx.shellState().tabs.length;
+          const besides = openTabs > 1 ? onTab.some((w) => w.startsWith('Close the other')) : !onTab.some((w) => w.startsWith('Close the other'));
+          check(`the right button on a tab offers what can be done to it and the ones beside it (${openTabs} open): ${onTab.join(', ')}`,
+            onTab.includes('Close this tab') && besides && onTab.some((w) => w.startsWith('Edit ')) && aboveWhileOpen,
+            [onTab, openTabs, aboveWhileOpen]);
+          // Nothing in it may rename a tab or set its colour: both are his to decide (SSH-APP §7), and a
+          // line invented for either would be a line that means nothing in this app.
+          check('and nothing in it was invented: no rename, no colour, no duplicate', !onTab.some((w) => /rename|colour|color|duplicate/i.test(w)), onTab);
+          await shutIt();
+          await sleep(120);
+          check('and the window is put back behind its tabs when the menu goes', !shellOnTop(), '');
+          const onStrip = await strip(`document.getElementById('bar')`);
+          await sweepMenu(ctx.shell, 'the tab strip, empty part');
+          check(`the right button on the empty part of the strip is about the strip: ${onStrip.join(', ')}`,
+            onStrip.includes('Open a box') && onStrip.includes('Settings') && !onStrip.includes('Close this tab'), onStrip);
+          await shutIt();
+          await sleep(120);
         }
         // The terminal is framed in its box's colour too. The tabs carry it already; the thing a person types
         // into did not, so with two boxes open there was nothing in the terminal itself to say which it was.

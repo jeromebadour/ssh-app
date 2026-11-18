@@ -7,7 +7,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { BoxView, ShellState, TabInfo } from '../common/ipc';
 import { ending } from '../common/link-words';
-import { Glyph } from './glyphs';
+import { Glyph, glyphNode } from './glyphs';
+import { openMenu, type MenuLine } from './menu';
 import { Mark } from './marks';
 
 export interface BarActions {
@@ -200,8 +201,48 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
     );
   };
 
+  // The right button on the tab strip: on a tab, what can be done to that tab and the ones beside it; on the
+  // empty part, what the strip itself is for. The same component the panes use, drawn in a layer of its own
+  // outside the app, because the app is redrawn whenever anything changes and would sweep a menu away
+  // mid-press.
+  //
+  // What is deliberately not in it, and waits for him: Rename tab and Set tab colour, which his reference
+  // menu has and Berth has nowhere to put, because a tab is named by its box and its place and takes its
+  // colour from its box; Duplicate tab, because a place that keeps running is one session on the box and one
+  // tab here, so what a second tab on it would mean is not decided; and Reopen the last closed tab, which
+  // would need a record of what was closed that nothing in the app keeps.
+  const stripMenu = (e: MouseEvent) => {
+    const layer = document.getElementById('shell-menus');
+    if (!layer) return;
+    const on = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-tab]');
+    const id = Number(on?.dataset['tab'] ?? '');
+    const tabs = props.s.tabs;
+    const lines: MenuLine[] = [];
+    if (on && Number.isFinite(id)) {
+      const t = tabs.find((x) => x.id === id);
+      const after = tabs.slice(tabs.findIndex((x) => x.id === id) + 1);
+      const others = tabs.filter((x) => x.id !== id);
+      lines.push({ glyph: 'close', label: 'Close this tab', danger: true, run: () => props.act.close(id), id: 'tab-menu-close' });
+      if (others.length > 0) lines.push({ glyph: 'close', label: `Close the other ${others.length === 1 ? 'tab' : `${others.length} tabs`}`, danger: true, run: () => { for (const x of others) props.act.close(x.id); }, id: 'tab-menu-others' });
+      if (after.length > 0) lines.push({ glyph: 'close', label: `Close the ${after.length === 1 ? 'one' : after.length} to the right`, danger: true, run: () => { for (const x of after) props.act.close(x.id); }, id: 'tab-menu-right' });
+      if (t?.box) {
+        lines.push({ apart: true });
+        lines.push({ glyph: 'edit', label: `Edit ${t.box.name}`, run: () => props.act.editBox(t.box!.id), id: 'tab-menu-edit' });
+      }
+    } else {
+      lines.push({ glyph: 'plus', label: 'Open a box', run: () => showMenu('boxes'), id: 'tab-menu-open' });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'settings', label: 'Settings', run: () => props.act.settings(), id: 'tab-menu-settings' });
+    }
+    e.preventDefault();
+    // While a menu is open the window has to be above its tabs, or the menu is drawn behind the one it is
+    // about. The same switch every other menu in the shell throws, put back however the menu goes.
+    const menu = openMenu(layer, e.clientX, e.clientY, lines, glyphNode, () => props.act.menu(false));
+    if (menu) props.act.menu(true);
+  };
+
   return (
-    <header class="tabbar" id="bar">
+    <header class="tabbar" id="bar" onContextMenu={stripMenu}>
       <div class="brand"><Mark /><span class="wordmark">Berth</span></div>
       <button type="button" class={`boxes-btn ${menu === 'boxes' ? 'open' : ''}`} id="boxes" aria-haspopup="menu" aria-expanded={menu === 'boxes'} onClick={() => showMenu(menu === 'boxes' ? '' : 'boxes')}>
         <Glyph name="boxes" />Boxes<Glyph name="chevron" class="caret" />

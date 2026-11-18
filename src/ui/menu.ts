@@ -46,7 +46,17 @@ export function menuIsOpen(): boolean {
  * near the right edge it opens to the left of the point, near the bottom it opens upwards, and if it is
  * taller than the room it has it scrolls rather than running off.
  */
-export function openMenu(within: HTMLElement, x: number, y: number, lines: MenuLine[], glyph: (name: string) => SVGSVGElement): Menu | null {
+export function openMenu(
+  within: HTMLElement,
+  x: number,
+  y: number,
+  lines: MenuLine[],
+  glyph: (name: string) => SVGSVGElement,
+  // Said once, however the menu went: a press on a line, Escape, a press outside, a scroll outside, Tab or
+  // the window being resized. The shell needs it, because while any menu is open the window has to be drawn
+  // above its tabs and something has to put that back.
+  onShut?: () => void,
+): Menu | null {
   const items = lines.filter((l): l is MenuItem => !apart(l));
   if (items.length === 0) return null;
   shutMenu();
@@ -122,6 +132,7 @@ export function openMenu(within: HTMLElement, x: number, y: number, lines: MenuL
     window.removeEventListener('resize', shut);
     menu.remove();
     if (open?.menu === menu) open = null;
+    onShut?.();
     // The focus goes back where it was, or the menu takes the keyboard with it when it goes.
     if (cameFrom && cameFrom.isConnected) cameFrom.focus();
   };

@@ -1,5 +1,6 @@
 // The glyph set, drawn on a 16-unit grid. Stroke width and line ends come from the direction (CSS), so one set of
 // shapes carries three different hands. Each action has its own shape; no two actions share one.
+import { render } from 'preact';
 import type { JSX } from 'preact';
 
 const shapes: Record<string, JSX.Element> = {
@@ -81,6 +82,18 @@ const shapes: Record<string, JSX.Element> = {
   winRestore: <><path d="M5.5 5.5V4.4A1 1 0 0 1 6.5 3.5h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1.1" /><rect x="3.5" y="5.5" width="7" height="7" rx="1" /></>,
   winClose: <><path d="M4 4l8 8M12 4l-8 8" /></>,
 };
+
+// The same shape, as a DOM node rather than a vnode, for the menu component: it builds its lines itself and
+// is handed whatever the surface around it draws glyphs with. Rendered through Glyph rather than reaching
+// into `shapes`, so the window and its tabs cannot end up with two ideas of what a glyph is. A name this set
+// does not have draws an empty svg, which the self-test's sweep reads as a glyph that says nothing.
+export function glyphNode(name: string): SVGSVGElement {
+  const box = document.createElement('div');
+  render(<Glyph name={name} />, box);
+  const svg = box.firstElementChild as SVGSVGElement;
+  svg.remove();
+  return svg;
+}
 
 export function Glyph(props: { name: keyof typeof shapes | string; class?: string; label?: string }) {
   const shape = shapes[props.name];
