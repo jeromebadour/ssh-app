@@ -83,6 +83,11 @@ export interface Term {
   words(text: string): void; // a box's words that are not a program's output (its sign-in text): drawn, never obeyed
   size(): { cols: number; rows: number };
   fit(): boolean; // true when the size changed
+  // How large its letters are, in the same eight steps the file list beside it uses, so the two panes answer
+  // the same keys the same way. Returns where it ended up and, when a press changed nothing, which end it is
+  // standing at: a press that changes nothing still has to answer (BUILD-RULES 2.18).
+  zoom(to: 'in' | 'out' | 'own'): { at: number; end: 'small' | 'large' | 'own' | '' };
+  zoomAt(): number;
   focus(): void;
   text(): string; // everything on screen and scrolled out, for the lab
   held(): number; // how many lines the terminal is holding, on screen and scrolled out
@@ -218,9 +223,27 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     return true;
   };
 
+  // The same eight steps as the file list, around the terminal's own 13.5px. A terminal is read for hours,
+  // so the steps are the pane's and not the browser's zoom, which would take the whole view and the list
+  // with it.
+  const STEPS = [0.75, 0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
+  let stepAt = STEPS.indexOf(1);
+  const BASE = 13.5;
+  const zoom = (to: 'in' | 'out' | 'own'): { at: number; end: 'small' | 'large' | 'own' | '' } => {
+    const want = to === 'own' ? STEPS.indexOf(1) : stepAt + (to === 'in' ? 1 : -1);
+    const next = Math.min(STEPS.length - 1, Math.max(0, want));
+    const at = Math.round(STEPS[next]! * 100);
+    if (next === stepAt) return { at, end: next === 0 ? 'small' : next === STEPS.length - 1 ? 'large' : 'own' };
+    stepAt = next;
+    term.options.fontSize = Math.round(BASE * STEPS[stepAt]! * 10) / 10;
+    return { at, end: '' };
+  };
+
   return {
     ready,
     write: (bytes, done) => term.write(bytes, done),
+    zoom,
+    zoomAt: () => Math.round(STEPS[stepAt]! * 100),
     // A line of Berth's own always starts a line of its own: a box's output rarely ends at a line's end.
     note: (text) => term.write(`${term.buffer.active.cursorX > 0 ? '\r\n' : ''}\x1b[2m${inert(text).replace(/[\r\n\t]+/g, ' ')}\x1b[0m\r\n`),
     words: (text) => term.write(inert(text)),

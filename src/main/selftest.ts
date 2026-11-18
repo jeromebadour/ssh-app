@@ -2808,6 +2808,60 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const did = await js<string>(behind.view, `document.documentElement.dataset.copied ?? ''`);
             const onClipboard = await clipboard.readText();
             check('one press on a block copies what that command printed, and nothing of the command itself', did === 'copied' && onClipboard.includes('nothing was run') && !onClipboard.includes('demo@lab-box'), [did, onClipboard.slice(0, 120)]);
+            // The terminal's own size (his 13: "no zoom in/out in terminal at all"). The press is the
+            // window's own, and it is held on all four things at once: the letters really grow, the box is
+            // told the new size in cells, the head says what size it is at, and nothing of the press reaches
+            // the shell. That last one is the standing rule of this whole app, and Ctrl with a minus is a
+            // character a box would otherwise be sent.
+            {
+              const look = (): Promise<{ px: number; cols: number; said: string; hidden: boolean }> => js(behind.view, `(() => {
+                const z = document.getElementById('term-zoom');
+                const s = window.berthTerm.size();
+                return { px: Number(getComputedStyle(document.querySelector('.xterm-rows')).fontSize.replace('px', '')), cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
+              })()`);
+              const w = behind.view.webContents;
+              const press = async (key: string) => {
+                w.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: ['control'] });
+                w.sendInputEvent({ type: 'char', keyCode: key, modifiers: ['control'] });
+                w.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: ['control'] });
+                await sleep(260);
+              };
+              await js(behind.view, `window.berthTerm.focus()`);
+              await sleep(120);
+              // What reached the shell is asked of the box itself, which hands back the bytes it was given
+              // and forgets them. Comparing what is on screen cannot do this: the lab's shell answers a
+              // control character with nothing printed, so the screen reads the same either way and a probe
+              // built on it holds nothing at all. Drained first, so what comes back is these presses alone.
+              await lab.tell('received');
+              const typedNothing = async (): Promise<string> => {
+                await sleep(250);
+                return Buffer.from(String((await lab.tell('received'))['hex'] ?? ''), 'hex').toString('latin1');
+              };
+              const own = await look();
+              await press('=');
+              await press('=');
+              const bigger = await look();
+              check('Ctrl and plus makes the terminal\u2019s letters bigger, tells the box the new size in cells, and says what size it is at',
+                bigger.px > own.px && bigger.cols < own.cols && !bigger.hidden && /^1[1-9]\d%$|^\d{3}%$/.test(bigger.said), [own, bigger]);
+              // The box hands back what it was given and forgets it, so it is read once and held, never
+              // once for the claim and again for the detail: that reads empty on the failure it explains.
+              await shot('term-zoom', 'the terminal at its own size and larger, by the same keys as the list', behind);
+              const gotBigger = await typedNothing();
+              check('and not one byte of those presses reached the shell', gotBigger === '', JSON.stringify(gotBigger));
+              // Ctrl with a minus is the one of the three that a terminal library may turn into a character
+              // for the box, so it is pressed here too rather than only the two that are harmless.
+              await press('-');
+              const smaller = await look();
+              check('Ctrl and minus makes them smaller again', smaller.px < bigger.px, [bigger, smaller]);
+              const gotSmaller = await typedNothing();
+              check('and that press sent the box no more than the others did', gotSmaller === '', JSON.stringify(gotSmaller));
+              await press('0');
+              const back = await look();
+              check('Ctrl and nought puts it back to its own size, and the head stops saying one',
+                Math.abs(back.px - own.px) < 0.6 && back.cols === own.cols && back.hidden, [own, back]);
+              const gotOwn = await typedNothing();
+              check('and still not one byte of it reached the shell', gotOwn === '', JSON.stringify(gotOwn));
+            }
             await shot('blocks', 'one command and its output told from the next', behind);
           }
 

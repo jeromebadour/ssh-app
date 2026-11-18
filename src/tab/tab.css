@@ -61,6 +61,8 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 #files-head, #term-head { flex: none; display: flex; align-items: center; gap: 6px; height: 25px; padding: 0 10px; color: #96a3ae; font-size: 11.5px; border-bottom: 1px solid var(--line); }
 #files-head { background: color-mix(in srgb, #c3ccd3 4%, transparent); }
 #term-head { color: color-mix(in srgb, var(--hue) 55%, #c3ccd3); background: color-mix(in srgb, var(--hue) 9%, transparent); border-bottom-color: color-mix(in srgb, var(--hue) 35%, var(--line)); }
+#term-zoom { margin-left: auto; font-variant-numeric: tabular-nums; color: #c3ccd3; }
+#term-zoom[hidden] { display: none; }
 .pane-glyph { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 
 /* The grip. A hairline that is wider to the hand than to the eye, lit while it is held or reached by the

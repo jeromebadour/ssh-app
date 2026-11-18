@@ -414,6 +414,45 @@ const refit = (): void => {
   told = `${cols}x${rows}`;
   port.resize(cols, rows);
 };
+// The terminal's own size, by the same keys and the same wheel the file list beside it answers (his 13: "no
+// zoom in/out in terminal at all"). They are taken on the terminal's own host, so a press meant for one pane
+// never moves the other, and before the library sees them: Ctrl and a minus is a character a box would be
+// sent, and the browser's own zoom would take the whole view, list and all.
+const zoomSaid = document.getElementById('term-zoom') as HTMLSpanElement;
+const showZoom = (at: number, end: string): void => {
+  zoomSaid.hidden = at === 100 && end === '';
+  zoomSaid.textContent = end === 'small' ? 'as small as it goes' : end === 'large' ? 'as large as it goes' : `${at}%`;
+  if (at === 100 && end === 'own') { zoomSaid.hidden = false; zoomSaid.textContent = 'its own size'; }
+};
+const zoomBy = (to: 'in' | 'out' | 'own'): void => {
+  const r = term.zoom(to);
+  showZoom(r.at, r.end);
+  // A cell has a new size, so the box is told the new one: a box drawing to the old size draws over itself.
+  refit();
+};
+host.addEventListener(
+  'keydown',
+  (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    const bigger = e.key === '+' || e.key === '=';
+    const smaller = e.key === '-' || e.key === '_';
+    const same = e.key === '0';
+    if (!bigger && !smaller && !same) return;
+    e.preventDefault();
+    e.stopPropagation();
+    zoomBy(same ? 'own' : bigger ? 'in' : 'out');
+  },
+  true,
+);
+host.addEventListener(
+  'wheel',
+  (e) => {
+    if (!e.ctrlKey || e.deltaY === 0) return;
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 'in' : 'out');
+  },
+  { passive: false, capture: true },
+);
 new ResizeObserver(refit).observe(host);
 void term.ready.then(() => {
   ready = true;
