@@ -488,3 +488,30 @@ func TestAnAnswerToSomethingGivenUpOnDoesNotEndTheLink(t *testing.T) {
 		t.Fatalf("after a late answer to a request given up on, the link gave %v", err)
 	}
 }
+
+// The owner's name comes out of the long form a box prints for `ls -l`, which is the only place the protocol
+// carries it in words. That line is a convention and not a promise, so what matters as much as reading it is
+// giving nothing back when the line is not that shape: a word taken from the wrong field would be shown to a
+// person as the owner of his file, and he would have no way of knowing it was guessed.
+func TestOwnerOfTheLongForm(t *testing.T) {
+	for _, c := range []struct {
+		long, want string
+	}{
+		{"-rw-r--r--   1 root     wheel          28 Nov 19 02:00 syslog", "root"},
+		{"drwxr-xr-x   4 ubuntu   ubuntu       4096 Oct 15 11:20 ledger", "ubuntu"},
+		{"lrwxrwxrwx   1 1000     1000           11 Oct 15 11:20 current -> syslog", "1000"},
+		{"-rw-------   1 www-data www-data    198411 Jan  3  2025 access.log", "www-data"},
+		// Not that shape, so nothing: a box that answers its own way is not read as if it were OpenSSH.
+		{"", ""},
+		{"syslog", ""},
+		{"a line a box made up with plenty of fields in it but no mode", ""},
+		{"-rw-r--r-- root wheel 28 syslog", ""},
+		{"?rw-r--r--   1 root     wheel          28 Nov 19 02:00 syslog", ""},
+		{"-rw-r--r-   1 root     wheel          28 Nov 19 02:00 syslog", ""},
+		{"-rw-r--r--   1 ro\x01ot    wheel          28 Nov 19 02:00 syslog", ""},
+	} {
+		if got := ownerOf(c.long); got != c.want {
+			t.Errorf("ownerOf(%q) = %q, wanted %q", c.long, got, c.want)
+		}
+	}
+}

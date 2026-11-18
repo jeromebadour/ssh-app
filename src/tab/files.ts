@@ -266,14 +266,19 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   find.append(findField, clearFind);
   // One button a column: pressing the one already in use turns the order around, which is how every file list
   // a person has used behaves (BUILD-RULES 2.13: reuse, never reinvent).
-  const byBtns: { what: By; btn: HTMLButtonElement; label: HTMLSpanElement }[] = (['name', 'size', 'changed'] as By[]).map((what) => {
+  // Who owns a file, as the box says it: the name when it gave one in words, the number when it gave only a
+  // number, and nothing at all when it said neither. An owner of 0 is root on every Unix box there is, so a
+  // box that said nothing must never come out as root (on his own screen MobaXterm shows both, root for one
+  // file and 1000 for another, which is exactly this).
+  const ownerOf = (r: FileRow): string => (r.owner !== undefined && r.owner !== '' ? r.owner : r.hasid === true && r.uid !== undefined ? String(r.uid) : '');
+  const byBtns: { what: By; btn: HTMLButtonElement; label: HTMLSpanElement }[] = (['name', 'size', 'changed', 'owner'] as By[]).map((what) => {
     const btn = document.createElement('button');
     btn.className = 'fb-by';
     btn.id = `fb-by-${what}`;
     btn.type = 'button';
-    btn.append(glyph(what === 'name' ? 'name' : what === 'size' ? 'size' : 'clock'));
+    btn.append(glyph(what === 'name' ? 'name' : what === 'size' ? 'size' : what === 'owner' ? 'user' : 'clock'));
     const label = document.createElement('span');
-    label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : 'Modified';
+    label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : what === 'owner' ? 'Owner' : 'Modified';
     btn.append(label);
     btn.addEventListener('click', () => {
       // The same column again turns the order around; another column starts it the way that column is usually
@@ -281,7 +286,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (by === what) down = !down;
       else {
         by = what;
-        down = what !== 'name';
+        down = what !== 'name' && what !== 'owner';
       }
       sort(rows);
       draw();
@@ -869,7 +874,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // How the list is ordered, and what of it is shown. Folders always come before files, whichever column the
   // order is by: a folder is a place to go and a file is a thing to act on, and mixing them by size would put
   // a place to go in the middle of a list of things. The order is this tab's own and lasts as long as the tab.
-  type By = 'name' | 'size' | 'changed';
+  type By = 'name' | 'size' | 'changed' | 'owner';
   let by: By = 'name';
   let down = false; // the biggest, the newest, or Z first
   const sort = (r: FileRow[]) => {
@@ -883,7 +888,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // written as both rather than one, because a comparison that reads one side only answers differently
       // depending on which side it is given, and a comparator that does that puts a list in no order at all.
       const bothFolders = a.kind === 'folder' && b.kind === 'folder';
-      const same = by === 'name' || bothFolders ? collator.compare(a.name, b.name) : by === 'size' ? a.size - b.size : a.mtime - b.mtime;
+      // Ordered by owner, the folders are ordered by owner too: an owner is a thing a folder has, unlike a
+      // size, so there is nothing here to hold them apart by.
+      const same = by === 'owner' ? collator.compare(ownerOf(a), ownerOf(b)) : by === 'name' || bothFolders ? collator.compare(a.name, b.name) : by === 'size' ? a.size - b.size : a.mtime - b.mtime;
       // A tie is broken by name, always, so the same folder comes out in the same order every time it is read.
       return (down ? -same : same) || collator.compare(a.name, b.name);
     });
@@ -981,7 +988,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       btn.dataset['on'] = on ? 'yes' : 'no';
       btn.dataset['down'] = on && down ? 'yes' : 'no';
       btn.setAttribute('aria-pressed', String(on));
-      const which = what === 'name' ? (down ? 'Z to A' : 'A to Z') : what === 'size' ? (down ? 'biggest first' : 'smallest first') : down ? 'newest first' : 'oldest first';
+      const which = what === 'name' || what === 'owner' ? (down ? 'Z to A' : 'A to Z') : what === 'size' ? (down ? 'biggest first' : 'smallest first') : down ? 'newest first' : 'oldest first';
       btn.title = on ? `Ordered by ${what}, ${which}. Press to turn it around` : `Order by ${what}`;
       btn.setAttribute('aria-label', btn.title);
     }
@@ -1631,11 +1638,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // its colour, which is where it belongs.
     right.textContent = r.kind === 'file' ? inUnit(r.size) : '';
     if (r.kind === 'file') right.title = size(r.size);
+    const who = document.createElement('span');
+    who.className = 'fb-owner';
+    who.textContent = r.name === '..' ? '' : ownerOf(r);
     const when = document.createElement('span');
     when.className = 'fb-when';
     when.textContent = r.name === '..' || r.mtime <= 0 ? '' : whenShort(r.mtime);
     if (r.name !== '..' && r.mtime > 0) when.title = `last changed ${whenAs(r.mtime)}`;
-    e.append(name, right, when);
+    e.append(name, right, when, who);
     // A file this tab has already brought over is draggable from its own row too, not only from the strip:
     // the row is where a person is looking when they decide to take it somewhere.
     const brought = r.kind === 'file' ? broughtOver(r.name) : undefined;
@@ -2201,10 +2211,13 @@ export const SHAPES: Record<string, string> = {
   recent: 'M4 6.5L8 10.5l4-4',
   // Narrowing the list: a lens, drawn as the one glyph a person already reads as "look for".
   search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3 3',
-  // The three columns the list can be ordered by: letters, a stack with weight at its foot, and a clock.
+  // The four columns the list can be ordered by: letters, a stack with weight at its foot, a clock, and a
+  // person. The person is the same shape the shell draws for a person, so the two windows do not each have
+  // their own idea of what one looks like.
   name: 'M3.5 4.5h9M3.5 8h6M3.5 11.5h3',
   size: 'M4.5 3.5h7M3.5 7h9M2.5 10.5h11M2.5 13h11',
   clock: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.5l2.5 1.5',
+  user: 'M8 3a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4',
   // Naming: a pencil for a new name, and the same folder as above with a plus in it for a new folder. Both
   // are the shape a person already reads as the thing, and neither is a word in a picture.
   rename: 'M9.5 3.5l3 3-6 6h-3v-3zM8 5l3 3',

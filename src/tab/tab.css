@@ -116,7 +116,9 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    pushing a size off the end, and every size sits under every other size. The columns are set in em of the
    pane's own size, so the whole list grows and shrinks together: at 115 per cent the names used to collapse to
    "r.." while the sizes kept their full width, which is what he saw. */
-.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em minmax(11em, 1fr) auto auto; align-items: center; gap: .66em; padding: 0 .84em; }
+/* Glyph, name, size, when, owner. The name takes what is left and never less than 11em; the three columns
+   after it take exactly what they need, and when the row outgrows the pane the pane scrolls to it. */
+.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em minmax(11em, 1fr) auto auto auto; align-items: center; gap: .66em; padding: 0 .84em; }
 /* Nothing gives way: the list scrolls sideways instead (his, 2026-11-18 night, from MobaXterm's own answer).
    It used to hide the time and then the size when the pane grew narrow. Two things were wrong with that. On
    his own screen, at the width he actually works at, the heads had already lost their words and the modified
@@ -150,8 +152,11 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    face numbers line up in, so a column of them reads down. */
 /* Digits of one width, so a column of numbers lines up under the unit its head names and can be read down
    rather than row by row. */
-.fb-size, .fb-when { color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .84em; text-align: right; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.fb-size, .fb-when, .fb-owner { color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .84em; text-align: right; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 .fb-when { text-align: left; padding-left: .3em; }
+/* The owner is a word, not a number, so it reads from the left and is cut at the end like a name rather
+   than in the middle. */
+.fb-owner { text-align: left; padding-left: .3em; text-overflow: ellipsis; max-width: 9em; }
 /* A folder is the thing you go into, so it carries the weight; anything that is neither a file nor a folder
    says what it is in its own place rather than being opened. */
 .fb-folder .fb-name { color: #c3ccd3; font-weight: 500; }

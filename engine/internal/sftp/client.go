@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,10 +73,14 @@ type Attrs struct {
 }
 
 // IsDir and the rest read the mode, and say what they do not know rather than guessing.
-func (a Attrs) known() bool  { return a.Has&attrPermissions != 0 }
-func (a Attrs) IsDir() bool  { return a.known() && a.Mode&0o170000 == 0o040000 }
-func (a Attrs) IsFile() bool { return a.known() && a.Mode&0o170000 == 0o100000 }
-func (a Attrs) IsLink() bool { return a.known() && a.Mode&0o170000 == 0o120000 }
+func (a Attrs) known() bool { return a.Has&attrPermissions != 0 }
+
+// HasOwner says whether the box gave an owner at all, so a window can tell an owner of 0, which is root
+// on every Unix box there is, from an owner the box never said.
+func (a Attrs) HasOwner() bool { return a.Has&attrUIDGID != 0 }
+func (a Attrs) IsDir() bool    { return a.known() && a.Mode&0o170000 == 0o040000 }
+func (a Attrs) IsFile() bool   { return a.known() && a.Mode&0o170000 == 0o100000 }
+func (a Attrs) IsLink() bool   { return a.known() && a.Mode&0o170000 == 0o120000 }
 
 // Kind is what the file is, in one word, for a window to show. A thing that is neither a regular file nor a
 // folder is named rather than opened (plan B4.1).
@@ -106,6 +111,38 @@ func (a Attrs) Kind() string {
 type Entry struct {
 	Name  string
 	Attrs Attrs
+	// Who owns it, by name, when the box said so in words. The protocol carries the owner as a number and
+	// nothing else; the name is only ever in the long form a box prints for `ls -l`, which is a convention
+	// and not a promise, so it is taken when the line has that shape and left empty when it does not. A
+	// window that has no name shows the number, which is what every other client does.
+	Owner string
+}
+
+// ownerOf reads the owner out of the long form a box prints for `ls -l`:
+//
+//	-rw-r--r--   1 root     wheel          28 Nov 19 02:00 syslog
+//
+// Field three. Nothing is guessed: a line that does not begin with a mode of ten characters, or that has too
+// few fields, gives nothing back rather than a word taken from the wrong place.
+func ownerOf(long string) string {
+	f := strings.Fields(long)
+	if len(f) < 8 || len(f[0]) != 10 {
+		return ""
+	}
+	switch f[0][0] {
+	case '-', 'd', 'l', 'b', 'c', 'p', 's':
+	default:
+		return ""
+	}
+	if len(f[2]) > 64 {
+		return ""
+	}
+	for _, r := range f[2] {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return f[2]
 }
 
 // Space is what a box says about the disk a folder is on.

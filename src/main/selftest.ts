@@ -1370,10 +1370,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
             // A file is put back a year, for the column that says when a file was changed. Every file this lab
             // makes is made now, so without this the column holds only today's shape, and a column that dropped
-            // the date entirely would read exactly the same. The folder is re-listed just below, so this costs
-            // no navigation of its own. It is syslog and not one of the odd-named ones because a Windows runner
-            // cannot hold those names at all, and this must hold on both.
+            // the date entirely would read exactly the same. And that same file is answered for with no long
+            // form, as some boxes really do, so the Owner column holds a name on every row but that one and a
+            // bare number on it: the pair he sees on his own screen. Both are syslog and not one of the
+            // odd-named files because a Windows runner cannot hold those names at all, and these must hold on
+            // both. The folder is re-listed just below, so this costs no navigation of its own.
             await lab.tell('aged var/log/syslog 400');
+            await lab.tell('bare syslog');
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -1721,7 +1724,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // whatever the order happened to be.
             const headNames = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-head .fb-by')].map((b) => b.textContent.trim())`);
             // The size head names the unit the whole column is in, so what it says is Size and that unit.
-            check('the list has a head over each of its columns, each saying what it orders', headNames[0] === 'Name' && /^Size \((B|KB|MB|GB|TB|PB)\)$/.test(headNames[1] ?? '') && headNames[2] === 'Modified' && headNames.length === 3, headNames);
+            check('the list has a head over each of its columns, each saying what it orders', headNames[0] === 'Name' && /^Size \((B|KB|MB|GB|TB|PB)\)$/.test(headNames[1] ?? '') && headNames[2] === 'Modified' && headNames[3] === 'Owner' && headNames.length === 4, headNames);
             const everyRowHasBoth = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..' && r.dataset.kind === 'file').every((r) => r.querySelector('.fb-size')?.textContent.trim() && r.querySelector('.fb-when')?.textContent.trim())`);
             check('and every file carries both its size and its time, whatever the list is ordered by', everyRowHasBoth, everyRowHasBoth);
             // One unit for the whole column, named once on the head, with digits alone in the rows. A column
@@ -1749,6 +1752,21 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // Two files are enough to prove it, and two is all a Windows runner has here: it cannot hold the
             // odd names the rest of this folder is made of.
             check('every size in the column is in the one unit its head names, as digits alone, and a file with bytes in it never reads nothing', unitNamed && digitsOnly && noneReadsNothing && smallOnesSaySo && sizeCol.cells.length >= 2, sizeCol);
+            // Who owns a file, which is the column he works by: he is root across a fleet, and a row whose
+            // owner he cannot see is a row he cannot act on. A box that says the owner in words is shown the
+            // word; one that says only a number is shown the number; and a box that says neither is shown
+            // nothing, because an owner of 0 is root and a missing owner drawn as root would be a lie. All
+            // three are on screen here: this lab answers in words for every file but one.
+            const owners = await js<Record<string, string>>(front.view, `(() => {
+              const out = {};
+              for (const r of document.querySelectorAll('#fb-list .fb-row')) out[r.dataset.name] = r.querySelector('.fb-owner')?.textContent?.trim() ?? '(no cell)';
+              return out;
+            })()`);
+            const named = Object.entries(owners).filter(([n]) => n !== '..' && n !== 'syslog');
+            const everyRowSaysWho = named.length >= 2 && named.every(([, w]) => /^[A-Za-z][\w.-]*$/.test(w));
+            check('every row says who owns it, in the words the box used', everyRowSaysWho && owners['..'] === '', owners);
+            // And the one the box named no owner for in words falls back to the number it did give.
+            check('a box that gives only a number for the owner is shown that number, not a name it never said', /^\d+$/.test(owners['syslog'] ?? ''), owners['syslog']);
             // The date a file was changed, short enough for the column and still able to answer which of two
             // files is the newer: a day and a time for anything but today, the time alone for today's. One file
             // was put back a year when the lab made them, so both shapes are on screen here: a column that

@@ -410,6 +410,13 @@ export interface FileRow {
   size: number;
   mode: number;
   mtime: number;
+  // Who owns it. The protocol carries the owner as a number alone; the name is only ever in the long form a
+  // box prints for `ls -l`, so it is there when the box wrote that line in the usual shape and absent when it
+  // did not. A window shows the name, falls back to the number, and shows nothing when the box said neither:
+  // an owner of 0 is root, so a missing owner must never be drawn as one.
+  owner?: string;
+  uid?: number;
+  hasid?: boolean;
 }
 
 // How many files one chooser may hand over to one box at a time. A person picking a folder's worth gets them

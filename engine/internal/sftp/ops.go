@@ -113,7 +113,10 @@ func (c *Client) List(ctx context.Context, dir string, page func([]Entry) error)
 		out := make([]Entry, 0, n)
 		for i := uint32(0); i < n; i++ {
 			name := r.str()
-			r.str() // the long form a box prints for `ls -l`, which this app never shows: it draws its own rows
+			// The long form a box prints for `ls -l`. The app draws its own rows and never shows this line,
+			// but it is the only place the owner's name is carried: the protocol itself has the owner as a
+			// number alone.
+			long := r.str()
 			at := takeAttrs(r)
 			if !r.ok() {
 				return ErrShort
@@ -121,14 +124,15 @@ func (c *Client) List(ctx context.Context, dir string, page func([]Entry) error)
 			if len(name) > MaxNameLen {
 				return ErrTooLong
 			}
-			bytes += len(name) + 64
+			owner := ownerOf(string(long))
+			bytes += len(name) + len(owner) + 64
 			entries++
 			if entries > MaxEntries || bytes > MaxListBytes {
 				return ErrTooMany
 			}
 			// "." and ".." are the folder itself and the one above it; the window offers its own way up.
 			if s := string(name); s != "." && s != ".." {
-				out = append(out, Entry{Name: s, Attrs: at})
+				out = append(out, Entry{Name: s, Attrs: at, Owner: owner})
 			}
 		}
 		if len(out) > 0 {

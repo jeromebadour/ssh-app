@@ -8,11 +8,14 @@ package hostile
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -281,7 +284,10 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		for _, e := range left {
 			fi, err := e.Info()
 			w.str(e.Name())
-			w.str(e.Name())
+			// The long form a real box prints for `ls -l`, which is the only place the protocol carries the
+			// owner's name in words. This box used to send the bare name here, so the app could only ever see
+			// the number, and the path that reads a name was never run against a box at all.
+			w.str(longForm(e.Name(), fi, err))
 			if err != nil {
 				w.b = append(w.b, 0, 0, 0, 0)
 				continue
@@ -704,3 +710,68 @@ var readsWithNothing atomic.Bool
 
 // AnswerReadsWithNothing turns that on and off.
 func (b *Box) AnswerReadsWithNothing(on bool) { readsWithNothing.Store(on) }
+
+// Files this box answers for with the bare name in place of the long form, as some boxes really do: then the
+// app has no owner in words and falls back to the number, which is what a person sees beside a named owner on
+// a box whose accounts it cannot name.
+var bareLong sync.Map
+
+// Bare makes this box answer for one file with no long form, by its name alone.
+func Bare(name string) { bareLong.Store(name, true) }
+
+// longForm writes the line a box prints for `ls -l`: mode, links, owner, group, size, when, name.
+func longForm(name string, fi os.FileInfo, err error) string {
+	if err != nil {
+		return name
+	}
+	if _, bare := bareLong.Load(name); bare {
+		return name
+	}
+	uid, gid, have := ownerOf(fi)
+	if !have {
+		return name
+	}
+	who := strconv.FormatUint(uint64(uid), 10)
+	if u, uerr := user.LookupId(who); uerr == nil && u.Username != "" {
+		who = u.Username
+	}
+	grp := strconv.FormatUint(uint64(gid), 10)
+	if g, gerr := user.LookupGroupId(grp); gerr == nil && g.Name != "" {
+		grp = g.Name
+	}
+	return fmt.Sprintf("%s %3d %-8s %-8s %8d %s %s", modeLine(fi.Mode()), 1, who, grp, fi.Size(), fi.ModTime().Format("Jan _2 15:04"), name)
+}
+
+// modeLine is the ten characters a box puts at the front of an `ls -l` line. Go's own FileMode.String writes
+// a capital L for a link and letters of its own for the rest, which no box on earth prints: a lab that writes
+// Go's form is a lab that does not stand in for a box, and the app reading it would be read against a line it
+// will never meet.
+func modeLine(m os.FileMode) string {
+	kind := byte('-')
+	switch {
+	case m&os.ModeDir != 0:
+		kind = 'd'
+	case m&os.ModeSymlink != 0:
+		kind = 'l'
+	case m&os.ModeNamedPipe != 0:
+		kind = 'p'
+	case m&os.ModeSocket != 0:
+		kind = 's'
+	case m&os.ModeCharDevice != 0:
+		kind = 'c'
+	case m&os.ModeDevice != 0:
+		kind = 'b'
+	}
+	out := []byte{kind}
+	for shift := 6; shift >= 0; shift -= 3 {
+		bits := m.Perm() >> uint(shift)
+		for i, ch := range []byte{'r', 'w', 'x'} {
+			if bits&(1<<uint(2-i)) != 0 {
+				out = append(out, ch)
+			} else {
+				out = append(out, '-')
+			}
+		}
+	}
+	return string(out)
+}

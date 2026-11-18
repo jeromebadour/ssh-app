@@ -77,6 +77,12 @@ type fileRow struct {
 	Size  uint64 `json:"size"`
 	Mode  uint32 `json:"mode"`
 	MTime uint32 `json:"mtime"`
+	// Who owns it: the name when the box said one in words, and the number it always carries. A window shows
+	// the name and falls back to the number, which is what a person sees on a box whose accounts it cannot
+	// name. Both are left out of the line when the box said neither, rather than being sent as a false zero.
+	Owner string `json:"owner,omitempty"`
+	UID   uint32 `json:"uid,omitempty"`
+	HasID bool   `json:"hasid,omitempty"`
 }
 
 type spaceShown struct {
@@ -238,7 +244,7 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		buf := make([]fileRow, 0, rowsPerPage)
 		if err := c.List(ctx, where, func(e []sftp.Entry) error {
 			for _, x := range e {
-				buf = append(buf, row(x.Name, x.Attrs))
+				buf = append(buf, row(x.Name, x.Attrs, x.Owner))
 				if len(buf) >= rowsPerPage {
 					f.page(filePage{ID: a.ID, Rows: buf})
 					buf = make([]fileRow, 0, rowsPerPage)
@@ -401,7 +407,7 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		if err != nil {
 			return err
 		}
-		r := row(to, at)
+		r := row(to, at, "")
 		f.page(filePage{ID: a.ID, Attrs: &r})
 		return nil
 	case "folder":
@@ -423,7 +429,7 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		if err != nil {
 			return err
 		}
-		r := row(made, at)
+		r := row(made, at, "")
 		f.page(filePage{ID: a.ID, Attrs: &r})
 		return nil
 	case "stat":
@@ -431,7 +437,7 @@ func (f *files) run(ctx context.Context, a fileAsk) error {
 		if err != nil {
 			return err
 		}
-		r := row(a.Path, at)
+		r := row(a.Path, at, "")
 		f.page(filePage{ID: a.ID, Attrs: &r})
 		return nil
 	case "space":
@@ -463,8 +469,8 @@ func boxName(name string) error {
 	return nil
 }
 
-func row(name string, a sftp.Attrs) fileRow {
-	return fileRow{Name: name, Kind: a.Kind(), Size: a.Size, Mode: a.Mode, MTime: a.MTime}
+func row(name string, a sftp.Attrs, owner string) fileRow {
+	return fileRow{Name: name, Kind: a.Kind(), Size: a.Size, Mode: a.Mode, MTime: a.MTime, Owner: owner, UID: a.UID, HasID: a.HasOwner()}
 }
 
 // detailOf is the real reason, for a person looking at a failure that says only "failed". It is cut to a

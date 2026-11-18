@@ -209,6 +209,17 @@ func main() {
 				continue
 			}
 			say(map[string]any{"aged": parts[0], "to": when.UTC().Format(time.RFC3339)})
+		case "bare":
+			// This box answers for one file with no long form, by its name alone, as some boxes really do. The
+			// app then has no owner in words for it and falls back to the number, which is the case his own
+			// MobaXterm shows beside a named owner: root on one row and 1000 on another.
+			name := strings.TrimSpace(rest)
+			if name == "" {
+				say(map[string]any{"error": "a file name"})
+				continue
+			}
+			hostile.Bare(name)
+			say(map[string]any{"bare": name})
 		case "pages":
 			say(map[string]any{"pages": hostile.Pages()})
 		case "filepace":
