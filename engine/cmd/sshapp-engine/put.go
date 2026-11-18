@@ -168,40 +168,47 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	if sent == 0 {
 		f.page(filePage{ID: a.ID, Got: 0, Of: size})
 	}
-	for {
-		if err := ctx.Err(); err != nil {
+	// What has already gone over is read and hashed here and sent nowhere: the hash at the end covers the
+	// whole file, so a put made of two tries is checked as one file.
+	for read < sent {
+		want := uint64(len(buf))
+		if left := sent - read; left < want {
+			want = left
+		}
+		n, err := io.ReadFull(from, buf[:want])
+		if n > 0 {
+			sum.Write(buf[:n])
+			read += uint64(n)
+		}
+		if err != nil {
 			return err
 		}
-		n, err := from.Read(buf)
+	}
+	// And the rest goes over with several blocks of it on the way at once. One block an ask means one round
+	// trip a block, which makes the distance to the box decide the speed: 0.6 MiB/s at a 50 ms round trip,
+	// where this gives 13. The blocks are filled here, in order, which is what lets the hash be taken as it
+	// goes.
+	wrote, werr := to.WriteInOrder(ctx, sent, func(p []byte) (int, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n, err := from.Read(p)
 		if n > 0 {
-			if read+uint64(n) > sent {
-				begin := uint64(0)
-				if read < sent {
-					begin = sent - read
-				}
-				if _, werr := to.WriteAt(ctx, buf[begin:n], read+begin); werr != nil {
-					return werr
-				}
-				if read+uint64(n) > sent {
-					sent = read + uint64(n)
-				}
-			}
-			sum.Write(buf[:n])
+			sum.Write(p[:n])
 			read += uint64(n)
 			if time.Since(said) >= sayEvery {
 				said = time.Now()
 				f.page(filePage{ID: a.ID, Got: read, Of: size})
 			}
 		}
-		if errors.Is(err, io.EOF) {
-			break
+		if err == nil && n == 0 {
+			return 0, io.EOF
 		}
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			break
-		}
+		return n, err
+	})
+	sent += wrote
+	if werr != nil {
+		return werr
 	}
 	// The permissions the file will wear, put on before it is in place, so it is never in place wearing the
 	// wrong ones for even a moment.
