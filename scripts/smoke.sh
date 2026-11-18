@@ -168,7 +168,13 @@ case "$mode" in
     # copy saved beside it is what opens.
     [ -s "$prof/profile/list.berth.previous" ] || fail "no copy was saved beside the list, so there is nothing to restore from"
     mkdir -p "$work/pictures" && chmod 777 "$work/pictures"
-    printf '\xff' | dd of="$prof/profile/list.berth" bs=1 seek=200 conv=notrunc status=none
+    # The byte is changed, not set: writing 0xff over a byte that was already 0xff changes nothing, the list
+    # opens as it always did, and the probe fails for a reason that is nobody's fault and happens about once
+    # in every 256 runs. (It did, on 2026-11-18, and passed on a re-run of the very same commit.)
+    was=$(dd if="$prof/profile/list.berth" bs=1 skip=200 count=1 status=none | od -An -tu1 | tr -d ' ')
+    now=$(( (was + 1) % 256 ))
+    printf "$(printf '\\x%02x' "$now")" | dd of="$prof/profile/list.berth" bs=1 seek=200 conv=notrunc status=none
+    [ "$(dd if="$prof/profile/list.berth" bs=1 skip=200 count=1 status=none | od -An -tu1 | tr -d ' ')" != "$was" ] || fail "the list was not damaged, so the way back from a damaged list would not be tried"
     selftest_mode=gate-restore selftest_profile="$prof" selftest_pictures="$work/pictures" selftest "$log" "$pkg/Berth" --lab
 
     # Children end with their parent: main is ended by force, and its engines must be gone within five seconds.
