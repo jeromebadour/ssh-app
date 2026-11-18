@@ -131,7 +131,12 @@ func FirstVisit(ctx context.Context, t Target, password string, command string, 
 				}
 				show := make([]bool, len(asked))
 				copy(show, echos)
+				// A person is being asked now, so the phase's own deadline waits for them: see asking and
+				// answered. Everything else about the attempt is untouched, the cancel included, so the
+				// window's Cancel still ends it at once.
+				a.asking(SigningIn)
 				answers, aerr := opt.OnAsk(asked, show)
+				a.answered(d.SignIn)
 				if aerr != nil {
 					askedElse = true
 					return nil, aerr

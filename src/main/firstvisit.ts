@@ -41,7 +41,10 @@ const safeJson = (body: Uint8Array): Record<string, unknown> => {
   }
 };
 
-export function firstVisitWith(bin: string, hashesFile: string) {
+// The limit is a parameter so a probe can drive this very function rather than a copy of it: the fault it
+// stands against was a line of this file, and a test beside it that re-implements the arming would have gone
+// on passing with that line put back. Nothing in the app passes it; main takes the real one.
+export function firstVisitWith(bin: string, hashesFile: string, limitMs: number = HARD_LIMIT_MS) {
   return (box: { addr: string; user: string; hostKey: string }, password: string, command: string, onPhase: (p: string) => void, onAsk?: (questions: string[], show: boolean[]) => Promise<string[] | null>): Promise<Visited> =>
     new Promise<Visited>((resolve) => {
       let settled = false;
@@ -56,22 +59,35 @@ export function firstVisitWith(bin: string, hashesFile: string) {
         if (fault) return fail('protocol', fault);
         const child = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'], env: {}, windowsHide: true });
         const decoder = new FrameDecoder();
-        const limit = setTimeout(() => {
-          child.kill();
-          fail('timed-out', 'the visit did not end');
-        }, HARD_LIMIT_MS);
+        // The visit's own limit, which can be put down while he is answering a box's questions and taken up
+        // again afterwards. It is made afresh each time rather than refreshed: a timeout that has been
+        // cleared does not come back from refresh(), so after the first question the limit was gone for
+        // good and a visit that never ended would have waited for ever with nothing said.
+        let limit: NodeJS.Timeout | null = null;
+        const stopLimit = (): void => {
+          if (limit) clearTimeout(limit);
+          limit = null;
+        };
+        const armLimit = (): void => {
+          stopLimit();
+          limit = setTimeout(() => {
+            child.kill();
+            fail('timed-out', 'the visit did not end');
+          }, limitMs);
+        };
+        armLimit();
         const end = (): void => {
-          clearTimeout(limit);
+          stopLimit();
           child.stdin.end();
         };
         child.stderr.on('data', () => undefined);
         child.stdin.on('error', () => undefined);
         child.on('error', (err) => {
-          clearTimeout(limit);
+          stopLimit();
           fail('protocol', `could not start: ${err.message}`);
         });
         child.on('exit', (code) => {
-          clearTimeout(limit);
+          stopLimit();
           fail('protocol', `ended with code ${code ?? -1} and no answer`);
         });
         child.stdout.on('data', (chunk: Buffer) => {
@@ -101,7 +117,7 @@ export function firstVisitWith(bin: string, hashesFile: string) {
                 child.kill();
                 return fail('protocol', 'asked nothing at all');
               }
-              clearTimeout(limit);
+              stopLimit();
               void onAsk(asked, asked.map((_, i) => show[i] === true)).then(
                 (answers) => {
                   if (settled) return;
@@ -109,7 +125,7 @@ export function firstVisitWith(bin: string, hashesFile: string) {
                     child.kill();
                     return fail('cancelled', 'the questions were not answered');
                   }
-                  limit.refresh();
+                  armLimit();
                   child.stdin.write(encodeFrame(T.Answers, Buffer.from(JSON.stringify({ answers: answers.map((a) => String(a).slice(0, ANSWER_MAX)) }))));
                 },
                 () => {

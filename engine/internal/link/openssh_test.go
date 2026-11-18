@@ -393,6 +393,61 @@ func TestOpenSSH(t *testing.T) {
 				run(t, mustDial(t, honest, lab.user), "tmux -L berth kill-server 2>/dev/null; rm -f "+mark+"; true", 10*time.Second)
 			})
 
+			// A place that keeps running is where a long job lives, and the folder it was started in can go
+			// while the job does not: a release folder tidied up, a build folder cleaned. The place must
+			// still open onto that job. Before the cd was moved off the way to an existing session, the cd
+			// failed and the whole command failed with it, so the job ran on with no way back to it.
+			t.Run("a tmux place whose folder has gone still opens onto its job", func(t *testing.T) {
+				if _, err := tryRun(mustDial(t, honest, lab.user), "command -v tmux", 10*time.Second); err != nil {
+					t.Fatalf("the lab box has no tmux: %v", err)
+				}
+				where := "/tmp/berth-gone-" + strconv.Itoa(os.Getpid())
+				mark := where + ".log"
+				run(t, mustDial(t, honest, lab.user), "rm -rf "+where+" "+mark+"; mkdir -p "+where+"; tmux -L berth kill-server 2>/dev/null; true", 10*time.Second)
+				first := mustDial(t, honest, lab.user)
+				sh, err := first.OpenShell(ShellOptions{Folder: where, Tmux: "goner", Term: "xterm-256color", Cols: 100, Rows: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { _, _ = io.Copy(io.Discard, sh) }()
+				time.Sleep(2 * time.Second)
+				if _, err := sh.Write([]byte("(while true; do echo x >> " + mark + "; sleep 0.2; done) &\n")); err != nil {
+					t.Fatal(err)
+				}
+				deadline := time.Now().Add(20 * time.Second)
+				for {
+					if n := strings.TrimSpace(run(t, mustDial(t, honest, lab.user), "wc -l < "+mark+" 2>/dev/null || echo 0", 10*time.Second)); n != "" && n != "0" {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("the job in the tmux place never started writing")
+					}
+					time.Sleep(300 * time.Millisecond)
+				}
+				first.Close()
+				// The folder goes, the job does not.
+				run(t, mustDial(t, honest, lab.user), "rm -rf "+where, 10*time.Second)
+				second := mustDial(t, honest, lab.user)
+				again, err := second.OpenShell(ShellOptions{Folder: where, Tmux: "goner", Term: "xterm-256color", Cols: 100, Rows: 30})
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { _, _ = io.Copy(io.Discard, again) }()
+				select {
+				case <-again.Exited():
+					code, _ := again.ExitStatus()
+					t.Fatalf("the place did not open onto its own session: the shell ended at once, status %d", code)
+				case <-time.After(3 * time.Second):
+				}
+				sessions := strings.TrimSpace(run(t, mustDial(t, honest, lab.user), "tmux -L berth ls 2>&1 | wc -l", 10*time.Second))
+				if sessions != "1" {
+					t.Fatalf("this app's tmux server holds %s sessions; wanted the one place's", sessions)
+				}
+				again.Close()
+				second.Close()
+				run(t, mustDial(t, honest, lab.user), "tmux -L berth kill-server 2>/dev/null; rm -f "+mark+"; true", 10*time.Second)
+			})
+
 			t.Run("a folder that is not there: the shell does not start, and says so", func(t *testing.T) {
 				l, err := Dial(context.Background(), honest, lab.user, Options{})
 				if err != nil {

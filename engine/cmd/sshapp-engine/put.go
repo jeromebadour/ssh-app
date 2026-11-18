@@ -252,18 +252,27 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 	if !ownerKept {
 		why = "it is wearing a different owner than the file it replaced: this account may not set one"
 	}
+	// Whatever the hash says is said as well as the owner and never instead of it: a send that could
+	// neither keep the owner nor be checked has two things worth knowing, and overwriting the first with
+	// the second left the owner it is now wearing unsaid.
+	alsoWhy := func(reason string) string {
+		if why == "" {
+			return reason
+		}
+		return why + "; " + reason
+	}
 	here := hex.EncodeToString(sum.Sum(nil))
 	there, err := f.l.Hash(ctx, link.SHA256, temp)
 	switch {
 	case errors.Is(err, link.ErrNameNotSafe):
-		mark, why = "not-checked", "its name cannot be put in a command on a box"
+		mark, why = "not-checked", alsoWhy("its name cannot be put in a command on a box")
 	case errors.Is(err, link.ErrNoHash):
-		mark, why = "not-checked", "the box answered with no hash"
+		mark, why = "not-checked", alsoWhy("the box answered with no hash")
 	case err != nil:
 		if ctx.Err() != nil {
 			return err
 		}
-		mark, why = "not-checked", say(err)
+		mark, why = "not-checked", alsoWhy(say(err))
 	case there != here:
 		// What arrived is not what was sent, and the file on the PC did not move under us: nothing is put in
 		// place, and the temporary file goes.

@@ -387,6 +387,11 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		// which owner, which is the whole of what the app decides.
 		if askedOwner {
 			ownerAsked.Store(&askedOwnerIs{name: filepath.Base(f.Name()), uid: askedUID, gid: askedGID})
+			// A box where this account may not set an owner at all, which is every box he is not root on.
+			// It is the ordinary answer there, not a fault, and what the app does with it is the point.
+			if refusesOwner.Load() {
+				return fxpStatus, status(fxPermissionDenied, "not the owner")
+			}
 		}
 		if flags&0x4 != 0 {
 			// Through the handle where that works, which is what a box does and what keeps this honest when
@@ -674,6 +679,12 @@ func OwnerAsked() (name string, uid, gid uint32, asked bool) {
 
 // ForgetOwnerAsked clears it, so one test cannot read another's.
 func ForgetOwnerAsked() { ownerAsked.Store(nil) }
+
+// refusesOwner makes the box refuse to set an owner, as a box does for any account but root.
+var refusesOwner atomic.Bool
+
+// RefuseTheOwner turns that on and off.
+func (b *Box) RefuseTheOwner(on bool) { refusesOwner.Store(on) }
 
 // readsWithNothing makes the box answer every read with no bytes at all, and never say the file has ended.
 var readsWithNothing atomic.Bool

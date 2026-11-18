@@ -1492,6 +1492,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const handedBoth = await until(() => handedOver !== '', 6000);
               const names = handedOver.split('\n');
               check('dragging that line hands the system both files, each the one main decided on', handedBoth && names.length === 2 && names.every((f) => f.startsWith(ctx.downloads)) && names.some((f) => path.basename(f).startsWith('dragme') && !path.basename(f).startsWith('dragme-two')) && names.some((f) => path.basename(f).startsWith('dragme-two.log')) && ctx.dragsAsked() === askedBefore + 1, [names.map((f) => f.replace(ctx.downloads, '<downloads>')), ctx.dragsAsked() - askedBefore]);
+              // One of several leaving the download folder between the line being drawn and the hand
+              // reaching for it. The rest still go, and the one that went is said: a drag that quietly
+              // hands over one of two is a drag he would believe was two.
+              {
+                const two = names.find((f) => path.basename(f).startsWith('dragme-two'))!;
+                const one = names.find((f) => f !== two)!;
+                await rm(two, { force: true });
+                handedOver = '';
+                const couldDrag = ctx.canDrag(front.id);
+                const askedAgain = ctx.dragsAsked();
+                await js(front.view, `document.getElementById('fb-drag-all')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+                const handedOne = await until(() => handedOver !== '', 6000);
+                const saidHowMany = await until(async () => (await text('#status')).includes('Dragging 1 of 2'), 6000);
+                const saidWhich = await until(async () => (await foot()).includes('not in the download folder any more'), 6000);
+                check(
+                  'one of several gone from the download folder: the rest are handed over, that one is said, and its line stops offering it',
+                  handedOne && handedOver === one && saidHowMany && saidWhich && ctx.canDrag(front.id) === couldDrag - 1 && ctx.dragsAsked() === askedAgain + 1,
+                  [handedOver.replace(ctx.downloads, '<downloads>'), await text('#status'), saidWhich, ctx.canDrag(front.id) - couldDrag],
+                );
+              }
               // The row's own file is put back as the last thing handed over, because what comes next is
               // about that one file leaving the download folder.
               handedOver = '';
@@ -2542,7 +2562,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const wentBox = !ctx.boxes.list.some((b) => b.id === id);
         const wentKey = Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id);
         const wentTabs = ![...ctx.tabs.values()].some((t) => t.box?.id === id);
-        const said = (await text('#status-done')).includes('Deleted lab-box-renamed');
+        // Waited for, not read once: main's own list loses the box before the window has been told, so a
+        // single read here is a race with the window and not a question about the app.
+        const said = await until(async () => (await text('#status-done')).includes('Deleted lab-box-renamed'), 5000);
         check('Delete: the box, its key and its tabs go together, and the window says so', wentBox && wentKey && wentTabs && said, [{ wentBox, wentKey, wentTabs, said }, ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
 
         lab.end();
@@ -3555,7 +3577,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await until(async () => (((await lab.tell('seen'))['sessions'] ?? []) as unknown[]).length > before.length, 20_000);
           const now = ((await lab.tell('seen'))['sessions'] ?? []) as { Command?: string }[];
           const asked = now.slice(before.length).map((x) => x.Command ?? '').find((c) => c !== '');
-          const want = `cd -- '/var/log/it'\\''s here' && exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build'`;
+          // The session is asked after before the cd, so a place whose folder has gone is still reached:
+          // the cd is on the way to making a session, not on the way to one that is already there.
+          const want = `tmux -L berth -f /dev/null has-session -t 'build' 2>/dev/null || cd -- '/var/log/it'\\''s here' || exit 2; exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build'`;
           check('and the box is asked for this app\u2019s own tmux server and the place\u2019s session, and nothing else', asked === want, [asked, want]);
           // One session on the box is one tab here: opening it again would attach the same tmux session to
           // two tabs, which tmux then draws at the smaller of the two sizes and types into both at once.

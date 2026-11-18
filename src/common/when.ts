@@ -9,7 +9,7 @@ export function whenAs(seconds: number): string {
   if (ago < 5400) return `${Math.round(ago / 60)} minutes ago`;
   if (ago < 36 * 3600) return `${Math.round(ago / 3600)} hours ago`;
   if (ago < 30 * 86400) return `${Math.round(ago / 86400)} days ago`;
-  return new Date(seconds * 1000).toISOString().slice(0, 10);
+  return day(new Date(seconds * 1000));
 }
 
 // The same moment, short enough for a column in a narrow list: today's files by their time, this year's by
@@ -19,7 +19,14 @@ export function whenShort(seconds: number): string {
   const at = new Date(seconds * 1000);
   const now = new Date();
   const sameDay = at.toDateString() === now.toDateString();
-  if (sameDay) return at.toISOString().slice(11, 16);
-  if (at.getFullYear() === now.getFullYear()) return at.toISOString().slice(5, 10);
-  return at.toISOString().slice(0, 10);
+  if (sameDay) return `${two(at.getHours())}:${two(at.getMinutes())}`;
+  if (at.getFullYear() === now.getFullYear()) return `${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+  return day(at);
 }
+
+// Every time this app draws is the time on his own clock (section 1 of the details: shown in the PC's zone,
+// stored in UTC, 24-hour). So these are built from the parts of a date as this PC reads them and never from
+// its ISO form, which is UTC: a file changed at 09:30 in Istanbul said 06:30, and one changed just after
+// midnight said yesterday's date beside today's own "today".
+const two = (n: number): string => String(n).padStart(2, '0');
+const day = (at: Date): string => `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
