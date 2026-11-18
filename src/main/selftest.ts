@@ -1714,6 +1714,24 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check(`one press starts a transfer for every file chosen, not for the one the keyboard stands on: ${two.join(' and ')}`, bothNamed && linesBefore >= 0, [two, lines.slice(0, 160)]);
               check('and with two of them here, the line that drags them out together is there', await until(() => has('#fb-drag-all', front), 15_000), '');
             }
+            // ---- The path knows the way up. ----
+            // The caret beside the path already opens the folders this tab has been in. This is the other
+            // half, the folders this one is inside, which is how a path bar is used for changing folders.
+            // What is deliberately not in it: anything that types into his shell.
+            const pathAt = await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`);
+            await js(front.view, `document.querySelector('.fb-path').dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 40, clientY: 40 }))`);
+            await sleep(160);
+            const upFolders = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+            const wantUp: string[] = [];
+            for (let f = pathAt.slice(0, pathAt.lastIndexOf('/')); f !== ''; f = f.slice(0, f.lastIndexOf('/'))) wantUp.push(f === '' ? '/' : f);
+            check(`pressing the path offers every folder it is inside: ${upFolders.join(', ')}`, wantUp.length > 0 && wantUp.every((f) => upFolders.includes(f)) && upFolders.includes('Copy this folder\u2019s path'), [upFolders, wantUp]);
+            check('and nothing in it types into his shell', !upFolders.some((w) => /terminal|shell|cd /i.test(w)), upFolders);
+            // Pressing one of them goes there.
+            const goUpTo = wantUp[0]!;
+            await js(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one')].find((b) => b.querySelector('.fb-menu-words').textContent === ${JSON.stringify(goUpTo)}).click()`);
+            check(`and pressing one goes there: ${goUpTo}`, await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`)) === goUpTo, 10_000), await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`));
+            await clickOn('#fb-back', front);
+            await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`)) === pathAt, 10_000);
 
             // ---- What is chosen is what the delete takes. ----
             // #111 gave the list a selection and the delete went on acting on the one row the keyboard stood
