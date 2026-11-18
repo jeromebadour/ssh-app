@@ -65,7 +65,7 @@ const act = {
 
 // What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
 // the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
-type Dialog = { kind: 'none' } | { kind: 'add'; req: number } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number };
+type Dialog = { kind: 'none' } | { kind: 'add'; req: number; from?: string } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number };
 
 let nextReq = 1;
 
@@ -138,7 +138,7 @@ function Unlocked(props: { s: ShellState }) {
       if (b && !b.pinned) port.cmd({ op: 'check', box });
       else port.cmd({ op: 'open', box, place });
     },
-    addBox: () => setDialog({ kind: 'add', req: nextReq++ }),
+    addBox: (from) => setDialog({ kind: 'add', req: nextReq++, ...(from === undefined ? {} : { from }) }),
     editBox: (box) => setDialog({ kind: 'edit', box, req: nextReq++ }),
     removeBox: (box) => setDialog({ kind: 'remove', box }),
     menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
@@ -150,6 +150,18 @@ function Unlocked(props: { s: ShellState }) {
   const adding = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req !== dialog.req;
   const refusal = (dialog.kind === 'add' || dialog.kind === 'edit') && s.added?.req === dialog.req && !s.added.ok ? s.added : null;
   const editing = dialog.kind === 'edit' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
+  // Adding a box made from another (Duplicate, his walkthrough decision of 2026-11-15). It carries what two
+  // boxes on one machine really share: where it is, who signs in, where it starts and its places. It carries
+  // nothing that is one box's alone: not its key, which every box makes for itself, and not its pinned
+  // identity, which is a claim this new box has never made and would have to make for itself at its check.
+  // The name is the only field that cannot be the same, so it is offered with a free one already in it.
+  const copying = dialog.kind === 'add' && dialog.from !== undefined ? s.boxes.find((b) => b.id === dialog.from) : undefined;
+  const freeName = (want: string): string => {
+    const taken = new Set(s.boxes.map((b) => b.name));
+    if (!taken.has(want)) return want;
+    for (let n = 2; n < 100; n++) if (!taken.has(`${want} ${n}`)) return `${want} ${n}`;
+    return '';
+  };
   const removing = dialog.kind === 'remove' ? s.boxes.find((b) => b.id === dialog.box) : undefined;
   const changedTab = dialog.kind === 'changed' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
   const closingTab = dialog.kind === 'closing' ? s.tabs.find((t) => t.id === dialog.tab) : undefined;
@@ -177,7 +189,7 @@ function Unlocked(props: { s: ShellState }) {
                 ))}
               </div>
             )}
-            <button type="button" class={`btn ${s.boxes.length === 0 ? 'primary' : 'quiet'}`} id="first-add" onClick={act.addBox}><Glyph name="plus" />Add box</button>
+            <button type="button" class={`btn ${s.boxes.length === 0 ? 'primary' : 'quiet'}`} id="first-add" onClick={() => act.addBox()}><Glyph name="plus" />Add box</button>
             </>)}
           </div>
         )}
@@ -195,7 +207,9 @@ function Unlocked(props: { s: ShellState }) {
       </footer>
       {dialog.kind === 'add' && (
         <AddBoxDialog
+          key={copying?.id ?? 'new'}
           taken={s.boxes.map((b) => b.name)}
+          {...(copying ? { start: { name: freeName(copying.name), colour: copying.colour, host: copying.host, port: String(copying.port), user: copying.user, folder: copying.folder, places: copying.places.map((p) => (p.tmux === true ? { name: p.name, folder: p.folder, tmux: true } : { name: p.name, folder: p.folder })) } } : {})}
           working={adding && pendingAdd === dialog.req}
           refused={refusal?.fields ?? {}}
           error={refusal && Object.keys(refusal.fields).length === 0 ? refusal.error : ''}

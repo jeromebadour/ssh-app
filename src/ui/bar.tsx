@@ -15,7 +15,7 @@ export interface BarActions {
   select(id: number): void;
   close(id: number): void;
   open(box: string, place: string): void; // a pinned box: a tab; a box never checked: its check
-  addBox(): void;
+  addBox(from?: string): void; // from: a box to make this one from (Duplicate)
   editBox(box: string): void;
   removeBox(box: string): void;
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
@@ -302,6 +302,31 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
     props.done();
     props.act.open(box.id, place);
   };
+  // The right button on a box, which is where his walkthrough of 2026-11-15 put Connect, Edit, Duplicate and
+  // Delete. Edit and Delete are already on the row as buttons, because nothing in this app hides behind a
+  // right press; the menu is the second way to them and adds the two that have nowhere else to be. A box
+  // that was never checked has no tab to open: picking it opens its check, so the menu says that rather than
+  // offering something that would not happen.
+  const boxMenu = (e: MouseEvent, b: BoxView) => {
+    const layer = document.getElementById('shell-menus');
+    if (!layer) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const lines: MenuLine[] = [];
+    if (b.pinned) {
+      lines.push({ glyph: 'box', label: 'Open it in a new tab', run: () => open(b, ''), id: 'box-menu-open' });
+      for (const p of b.places) lines.push({ glyph: 'place', label: `Open ${p.name}`, run: () => open(b, p.name) });
+    } else {
+      lines.push({ glyph: 'identity', label: 'Check it before the first sign-in', run: () => open(b, ''), id: 'box-menu-check' });
+    }
+    lines.push({ apart: true });
+    lines.push({ glyph: 'edit', label: 'Edit it', run: () => { props.done(); props.act.editBox(b.id); }, id: 'box-menu-edit' });
+    lines.push({ glyph: 'copy', label: 'Make another from it', run: () => { props.done(); props.act.addBox(b.id); }, id: 'box-menu-duplicate' });
+    lines.push({ apart: true });
+    lines.push({ glyph: 'stop', label: 'Delete it', danger: true, run: () => { props.done(); props.act.removeBox(b.id); }, id: 'box-menu-remove' });
+    const menu = openMenu(layer, e.clientX, e.clientY, lines, glyphNode, () => props.act.menu(false));
+    if (menu) props.act.menu(true);
+  };
   const shown = props.s.boxes.filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()));
   const openNow = (id: string) => props.s.tabs.filter((t) => t.box?.id === id);
   return (
@@ -312,7 +337,7 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
         const open1 = openNow(b.id);
         const state = open1.length === 0 ? '' : open1.some((t) => ['gone', 'silent', 'stopped'].includes(tabLook(t).mark)) ? 'reconnecting' : 'connected';
         return (
-          <div class={`bm-row ${places === b.id ? 'hot' : ''}`} key={b.id} role="menuitem" data-box={b.name} style={{ '--hue': `var(--box-${b.colour})` }} onClick={() => open(b, '')} onPointerEnter={() => setPlaces(b.places.length > 0 && b.pinned ? b.id : '')}>
+          <div class={`bm-row ${places === b.id ? 'hot' : ''}`} key={b.id} role="menuitem" data-box={b.name} style={{ '--hue': `var(--box-${b.colour})` }} onClick={() => open(b, '')} onContextMenu={(e) => boxMenu(e, b)} onPointerEnter={() => setPlaces(b.places.length > 0 && b.pinned ? b.id : '')}>
             <span class="box-dot" />
             <span class="bm-name">{b.name}</span>
             {!b.pinned && <Glyph name="identity" class="bm-unchecked" label="not checked yet" />}
