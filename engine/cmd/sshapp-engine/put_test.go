@@ -383,3 +383,52 @@ func TestAFileBeingReplacedKeepsItsOwner(t *testing.T) {
 		t.Fatalf("it asked for %d:%d where the file it replaced was %d:%d (on %q)", askedUID, askedGID, uid, gid, name)
 	}
 }
+
+// A send that can neither keep the owner nor be checked has two things worth knowing, and the row must say
+// both. The owner's words were written first and the hash's words were written over them, so on a box where
+// this account may not set an owner and that cannot hash either — a restricted account on an old box, which
+// is both of these at once — the file landed wearing a different owner and nothing said so.
+func TestASendSaysBothTheOwnerAndTheHashWhenNeitherWorked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a box reports no owner of this shape on Windows, so there is none to put back")
+	}
+	hostile.ForgetOwnerAsked()
+	r, box := withFiles(t)
+	writeOnTheBox(t, box, "conf.txt", 40)
+	if _, _, have := hostileOwnerOf(mustStat(t, filepath.Join(box, "conf.txt"))); !have {
+		t.Skip("this machine does not say who owns a file")
+	}
+	from, want := writeOnThePC(t, 1_200)
+	r.box.RefuseTheOwner(true)
+	defer r.box.RefuseTheOwner(false)
+	r.box.AnswerCommandsWith("this box prints no hash at all\n")
+
+	ask(t, r, map[string]any{"id": 73, "do": "put", "path": "/", "name": "conf.txt", "from": from, "replace": true})
+	ps := pages(r.wait("the send", ended(73)), 73)
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
+	}
+	if last(ps, "mark") != "not-checked" {
+		t.Fatalf("a box that cannot hash must leave it unchecked: %v", ps)
+	}
+	why, _ := last(ps, "markWhy").(string)
+	if !strings.Contains(why, "owner") {
+		t.Fatalf("the owner it is now wearing was left unsaid: %q", why)
+	}
+	if !strings.Contains(why, "hash") {
+		t.Fatalf("the hash's own reason was lost: %q", why)
+	}
+	// And the file really is there, whole: neither of those is a reason to lose the send.
+	if b, _ := os.ReadFile(filepath.Join(box, "conf.txt")); string(b) != string(want) {
+		t.Fatal("what the box holds is not what was sent")
+	}
+}
+
+func mustStat(t *testing.T, at string) os.FileInfo {
+	t.Helper()
+	st, err := os.Stat(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
