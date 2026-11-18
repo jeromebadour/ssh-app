@@ -1679,30 +1679,45 @@ ipcMain.on(CH.tabDragAll, (e: IpcMainEvent, asks: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:drag-all', e);
   if (!Array.isArray(asks) || asks.length < 2 || asks.length > MOST_AT_ONCE) return drop('tab:drag-all', e);
-  const files: string[] = [];
+  // Each ask is carried with its own number, because a file that has gone is answered on its own line and
+  // a line cannot be found again from a path alone.
+  const want: { ask: number; file: string }[] = [];
   for (const ask of asks) {
     if (typeof ask !== 'number' || !Number.isInteger(ask) || ask < 1) return drop('tab:drag-all', e);
     const file = draggable.get(comingKey(tab.id, ask));
     if (file === undefined) return drop('tab:drag-all', e);
-    if (!files.includes(file)) files.push(file);
+    if (!want.some((w) => w.file === file)) want.push({ ask, file });
   }
-  void handOverAll(tab, files);
+  void handOverAll(tab, want);
 });
 
-async function handOverAll(tab: Tab, files: string[]): Promise<void> {
+async function handOverAll(tab: Tab, want: { ask: number; file: string }[]): Promise<void> {
   const here: string[] = [];
-  for (const file of files) {
+  const gone: number[] = [];
+  for (const { ask, file } of want) {
     try {
       const f = await stat(file);
-      if (f.isFile()) here.push(file);
+      if (!f.isFile()) throw new Error('not a file');
+      here.push(file);
     } catch {
-      // A file that has gone since it landed is left out of the drag rather than handed over as nothing.
+      gone.push(ask);
     }
   }
   if (tabs.get(tab.id) !== tab) return;
+  // A file that has gone since it landed is left out of the drag, and its own line is told so, exactly as a
+  // single drag tells it: a drag that quietly hands over two of three is a drag he would believe was three
+  // (NOTHING fails silently).
+  for (const ask of gone) {
+    draggable.delete(comingKey(tab.id, ask));
+    sendTo(tab.view, CH.tabFilePage, { id: ask, dragGone: true });
+  }
   if (here.length === 0) {
     done = 'None of those files is still where it landed';
     return tellShell();
+  }
+  if (gone.length > 0) {
+    done = `Dragging ${here.length} of ${here.length + gone.length}: ${gone.length === 1 ? 'one is' : `${gone.length} are`} no longer where ${gone.length === 1 ? 'it' : 'they'} landed`;
+    tellShell();
   }
   dragsAsked++;
   if (labWatchesDrags) return labWatchesDrags(here.join('\n'));

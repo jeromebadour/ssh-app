@@ -1463,6 +1463,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const handedBoth = await until(() => handedOver !== '', 6000);
               const names = handedOver.split('\n');
               check('dragging that line hands the system both files, each the one main decided on', handedBoth && names.length === 2 && names.every((f) => f.startsWith(ctx.downloads)) && names.some((f) => path.basename(f).startsWith('dragme') && !path.basename(f).startsWith('dragme-two')) && names.some((f) => path.basename(f).startsWith('dragme-two.log')) && ctx.dragsAsked() === askedBefore + 1, [names.map((f) => f.replace(ctx.downloads, '<downloads>')), ctx.dragsAsked() - askedBefore]);
+              // One of several leaving the download folder between the line being drawn and the hand
+              // reaching for it. The rest still go, and the one that went is said: a drag that quietly
+              // hands over one of two is a drag he would believe was two.
+              {
+                const two = names.find((f) => path.basename(f).startsWith('dragme-two'))!;
+                const one = names.find((f) => f !== two)!;
+                await rm(two, { force: true });
+                handedOver = '';
+                const couldDrag = ctx.canDrag(front.id);
+                const askedAgain = ctx.dragsAsked();
+                await js(front.view, `document.getElementById('fb-drag-all')?.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true }))`);
+                const handedOne = await until(() => handedOver !== '', 6000);
+                const saidHowMany = await until(async () => (await text('#status')).includes('Dragging 1 of 2'), 6000);
+                const saidWhich = await until(async () => (await foot()).includes('not in the download folder any more'), 6000);
+                check(
+                  'one of several gone from the download folder: the rest are handed over, that one is said, and its line stops offering it',
+                  handedOne && handedOver === one && saidHowMany && saidWhich && ctx.canDrag(front.id) === couldDrag - 1 && ctx.dragsAsked() === askedAgain + 1,
+                  [handedOver.replace(ctx.downloads, '<downloads>'), await text('#status'), saidWhich, ctx.canDrag(front.id) - couldDrag],
+                );
+              }
               // The row's own file is put back as the last thing handed over, because what comes next is
               // about that one file leaving the download folder.
               handedOver = '';
