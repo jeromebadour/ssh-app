@@ -211,6 +211,13 @@ const menuGlyphs = (view: WebContentsView, where: string) => js<MenuMark>(view, 
     }).map((o) => ${JSON.stringify(where)} + ': ' + (o.querySelector('.fb-menu-words')?.textContent ?? '?')),
   };
 })()`);
+// A colour from the stylesheet (#79a373) as the window reports it back (rgb(121, 163, 115)), so a probe can
+// hold that a field really took the variable it was meant to and not a near neighbour.
+const hexToRgb = (hex: string): string => {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+};
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 // A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
 // permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
@@ -1050,6 +1057,25 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
+        // The status line shows rather than talks (his #17). It used to be one phrase to read left to right,
+        // "round trip 0 ms, post-quantum", where what a status line is for is a glance. Each fact is its own
+        // field now: a glyph, a short value, and the colour its meaning carries. The claim is held on all
+        // three at once, because a field with no glyph or with every field the same colour is a sentence
+        // again with gaps in it.
+        interface Field { id: string; words: number; text: string; colour: string; glyph: string }
+        const fields = (): Promise<Field[]> => js(ctx.shell, `[...document.querySelectorAll('#status .s-f')].map((e) => {
+          const g = e.querySelector('.glyph');
+          return { id: e.id, words: (e.textContent || '').trim().split(/\\s+/).filter(Boolean).length, text: (e.textContent || '').trim(), colour: getComputedStyle(e).color, glyph: g ? getComputedStyle(g).color : 'none' };
+        })`);
+        {
+          const f = await fields();
+          const rtt = f.find((x) => x.id === 'status-rtt');
+          const pq = f.find((x) => x.id === 'status-pq');
+          check('the status line is fields, not a sentence: each a glyph, a value of at most three words, and its own colour',
+            f.length >= 2 && f.every((x) => x.words > 0 && x.words <= 3 && x.glyph !== 'none' && x.glyph === x.colour)
+            && !!rtt && /^\d+ ms$/.test(rtt.text) && !!pq && pq.text === 'post-quantum' && pq.colour !== rtt.colour,
+            f);
+        }
         // The terminal is framed in its box's colour too. The tabs carry it already; the thing a person types
         // into did not, so with two boxes open there was nothing in the terminal itself to say which it was.
         {
@@ -2646,6 +2672,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('a link that goes silent: the bar counts the seconds and says the link is kept', sawQuiet && /No answer for [1-9]\d? s\./.test(quietSaid) && quietSaid.includes('The link is kept') && quietSaid.includes('Reconnect'), quietSaid);
         check('and the terminal is still readable, with everything the box printed before the silence', (await shown(open1)).includes(marker) && (await shown(open1)).includes('stopping ledger-app-1'), '');
         await shot('tab-quiet', 'no answer: the link is kept', open1);
+        // The one fact in the status line he has to notice. It takes the place the round trip had rather
+        // than standing beside it, because a round trip measured before the silence began is a number that
+        // is true of a moment that has passed, and two numbers side by side is exactly what reading a
+        // status line at a glance cannot survive.
+        {
+          const f = await js<{ id: string; text: string; colour: string }[]>(ctx.shell, `[...document.querySelectorAll('#status .s-f')].map((e) => ({ id: e.id, text: (e.textContent || '').trim(), colour: getComputedStyle(e).color }))`);
+          const quiet = f.find((x) => x.id === 'status-quiet');
+          const problem = await js<string>(ctx.shell, `getComputedStyle(document.documentElement).getPropertyValue('--problem').trim()`);
+          check('a silent link takes the status line\'s number away and counts in its place, in the colour the connection mark uses for it',
+            !!quiet && /^[1-9]\d* s quiet$/.test(quiet.text) && !f.some((x) => x.id === 'status-rtt') && quiet.colour === hexToRgb(problem),
+            [f, problem]);
+        }
         const backOk = await until(() => open1.engine.link.phase === 'up' && open1.engine.link.silentSinceMs === 0, 30_000);
         await type(open1, `echo after-${marker}\n`);
         check('when the box speaks again the bar is gone, the same session answers, and nothing was reconnected', backOk && (await until(async () => (await shown(open1)).includes(`after-${marker}`), 5000)) && !(await has('#bar', open1)) && open1.engine.link.phase === 'up', [open1.engine.link.phase, await text('#bar', open1)]);

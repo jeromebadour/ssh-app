@@ -186,7 +186,9 @@ function Unlocked(props: { s: ShellState }) {
         {front ? (
           <>
             <span class="s-tab"><TabStateMark t={front} />{front.box ? `${front.box.name}, ${placeLabel(front, s.boxes)}` : `tab ${front.id}`}</span>
-            <span>{statusWords(front)}</span>
+            {statusFields(front).map((f) => (
+              <span key={f.id} class={`s-f s-tone-${f.tone}`} id={`status-${f.id}`}><Glyph name={f.glyph} />{f.value}</span>
+            ))}
           </>
         ) : <span />}
         <span class="s-last" id="status-done">{s.done}</span>
@@ -309,15 +311,31 @@ function TabStateMark(props: { t: TabInfo }) {
   return <span class={`conn conn-${tabLook(props.t).mark}`} />;
 }
 
-function statusWords(t: TabInfo): string {
+// The status line, as fields rather than as a sentence (Kami's #17: it should show, not talk). It said
+// "round trip 0 ms, post-quantum" and "no answer for 12 s, the link is kept" — one phrase to be read left to
+// right, where what he wants from a status line is a glance. Each fact now carries its own glyph and its own
+// colour, which is how every other list in his work is read, and nothing here is new data: the round trip,
+// the silence, post-quantum, what the terminal is doing and the bytes the engine could not keep were all in
+// the state already and only one of them reached the screen.
+interface StatusField { id: string; glyph: string; value: string; tone: string }
+function statusFields(t: TabInfo): StatusField[] {
   const l = t.link;
-  if (!t.box) return t.state;
-  if (l.phase === 'up') {
-    if (l.silentSinceMs > 0) return `no answer for ${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s, the link is kept`;
-    return `${l.rttMs >= 0 ? `round trip ${l.rttMs} ms` : 'connected'}${l.postQuantum ? ', post-quantum' : ''}`;
+  if (!t.box) return [{ id: 'state', glyph: 'network', value: t.state, tone: 'plain' }];
+  if (l.phase !== 'up') {
+    const words = l.phase === 'ended' ? ending(l.cause).short : tabLook(t).words;
+    return [{ id: 'state', glyph: l.phase === 'ended' ? 'stop' : 'network', value: words, tone: l.phase === 'ended' ? 'problem' : 'quiet' }];
   }
-  if (l.phase === 'ended') return ending(l.cause).short;
-  return tabLook(t).words;
+  const out: StatusField[] = [];
+  // A link that is kept while the box says nothing is the one thing here he has to notice, so it takes the
+  // place the round trip would have had rather than standing beside it: the number is stale by definition.
+  if (l.silentSinceMs > 0) out.push({ id: 'quiet', glyph: 'silent', value: `${Math.max(0, Math.round((Date.now() - l.silentSinceMs) / 1000))} s quiet`, tone: 'problem' });
+  else if (l.rttMs >= 0) out.push({ id: 'rtt', glyph: 'network', value: `${l.rttMs} ms`, tone: 'plain' });
+  if (l.postQuantum) out.push({ id: 'pq', glyph: 'lock', value: 'post-quantum', tone: 'checked' });
+  // Typed bytes the engine could not keep for the box. The state says this is never hidden, and until now
+  // the only place it was said was a fault line nobody reads.
+  if (l.droppedBytes > 0) out.push({ id: 'dropped', glyph: 'stop', value: `${l.droppedBytes} B not sent`, tone: 'problem' });
+  if (t.doing !== 'unknown') out.push({ id: 'doing', glyph: t.doing === 'running' ? 'running' : 'ok', value: t.doing, tone: t.doing === 'running' ? 'main' : 'quiet' });
+  return out;
 }
 
 function App() {
