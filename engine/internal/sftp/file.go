@@ -107,6 +107,13 @@ func (f *File) ReadAt(ctx context.Context, p []byte, at uint64) (int, error) {
 	if len(data) > want {
 		return 0, fmt.Errorf("%w: %d bytes where %d were asked for", ErrTooLong, len(data), want)
 	}
+	// And no bytes at all, with no end-of-file status, is a box not doing its job either. The end of a file
+	// is said with a status and never with an empty answer, so an empty one tells a reader nothing: it
+	// cannot be taken for the end (that would cut a file short and call it whole) and it cannot be asked
+	// again (that is the same ask with the same answer, for ever). It is a fault, said as one.
+	if len(data) == 0 && want > 0 {
+		return 0, ErrNoBytes
+	}
 	return copy(p, data), nil
 }
 

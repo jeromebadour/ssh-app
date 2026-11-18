@@ -31,6 +31,7 @@ var (
 	ErrUnsupported = errors.New("sftp: the box does not do that")
 	ErrTooMany     = errors.New("sftp: more entries than this app will read from one folder")
 	ErrClosed      = errors.New("sftp: the file channel is closed")
+	ErrNoBytes     = errors.New("sftp: the box answered a read with no bytes and no end of file")
 )
 
 // Status is a box's refusal, with its own code and whatever words it gave.
