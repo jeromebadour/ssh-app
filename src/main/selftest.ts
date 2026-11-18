@@ -218,6 +218,22 @@ const hexToRgb = (hex: string): string => {
   const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
 };
+// Every glyph the pane has drawn, wherever it drew it. The menu-only sweep above caught a question mark on a
+// menu line and then let one through on the transfers strip the same evening, because `upload` and `download`
+// are names the shell has and the pane does not. A row that really is of an unknown kind is left out: that is
+// the one place the question mark is the right answer.
+const paneGlyphs = (view: WebContentsView, where: string) => js<MenuMark>(view, `(() => {
+  const miss = window.berthGlyphPath ? window.berthGlyphPath('a-name-no-pane-has') : '';
+  const all = [...document.querySelectorAll('.fb-glyph')].filter((g) => !g.closest('[data-kind="unknown"]'));
+  return {
+    where: ${JSON.stringify(where)},
+    lines: all.length,
+    unknown: all.filter((g) => {
+      const d = g.querySelector('path')?.getAttribute('d') ?? '';
+      return miss !== '' && d === miss;
+    }).map((g) => ${JSON.stringify(where)} + ': ' + (((g.closest('.fb-row, .fb-moving-one, .fb-menu-one, button')?.textContent ?? '?').trim().slice(0, 30)) || 'a glyph with no words')),
+  };
+})()`);
 const dressed = (d: Dress) => d.sheets.length >= 3 && d.sheets.every((n) => n > 0) && d.face && d.field === '0 absolute';
 // A folder that really cannot be written to, on either kind of machine. Permissions do it where there are
 // permissions; on Windows what decides is the folder's own list of who may do what, so the lab writes a deny
@@ -303,10 +319,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
   // under that, so the measurement quietly stopping is a failure rather than a pass with nothing in it. The
   // other modes open no dialogs, and a minimum they cannot meet would fail them for nothing.
   const wantedReadings = ctx.mode === 'boxes-ui' ? 18 : 0;
-  // The box screens open the file's menu, the folder's, the one on several chosen, the empty part of a list,
-  // and both of the trash's. A floor under their lines together, so the sweep quietly never running is a
-  // failure rather than a pass over nothing.
-  const wantedMenus = ctx.mode === 'boxes-ui' ? 20 : 0;
+  // Ten menus and one whole pane are swept in the box screens, 85 glyphs between them. A floor under that,
+  // so the sweep quietly never running is a failure rather than a pass over nothing.
+  const wantedMenus = ctx.mode === 'boxes-ui' ? 80 : 0;
   const read = async (view: WebContentsView): Promise<void> => { readings.push(...(await prose(view))); };
   const check = (name: string, ok: boolean, detail: unknown = '') => {
     stage = `after "${name}"`;
@@ -324,7 +339,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     // Every menu opened in this run, and the glyph on every line of it.
     const blank = menuMarks.flatMap((m) => m.unknown);
     const menuLines = menuMarks.reduce((n, m) => n + m.lines, 0);
-    check('every line of every menu this run opened carries a glyph the pane really has',
+    check('every glyph this run drew, on every menu line and everywhere in the pane, is one the pane really has',
       (menuMarks.length === 0 ? wantedMenus === 0 : menuLines >= wantedMenus) && blank.length === 0,
       { menus: menuMarks.length, lines: menuLines, wanted: wantedMenus, blank });
     const small = readings.filter(tooSmall);
@@ -1344,9 +1359,28 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="wide.log"] .fb-bring')?.click()`);
             // It has to be really under way before it is stopped, or this proves nothing: the line has to be
             // counting bytes of a file it has not finished.
-            const partWay = await until(async () => /wide\.log [0-9.]+ [KM]?B of 8\.0 MB/.test(await foot()), 25_000);
+            // The strip is fields now, not a sentence, so what is held is the fields: the row for this file,
+            // its name on its own, and how far it has got as its own number beside it. Reading the foot's
+            // whole text instead would hold a shape that no longer exists and would pass on any two numbers
+            // that happened to sit next to each other.
+            const moving = (): Promise<{ name: string; far: string } | null> => js(front.view, `(() => {
+              const one = [...document.querySelectorAll('.fb-moving-one')].find((d) => d.querySelector('.fb-x-name')?.textContent?.includes('wide.log'));
+              if (!one) return null;
+              return { name: one.querySelector('.fb-x-name')?.textContent ?? '', far: one.querySelector('.fb-x-far')?.textContent ?? '' };
+            })()`);
+            const partWay = await until(async () => { const m = await moving(); return m !== null && m.name === 'wide.log' && /^[0-9.]+ [KM]?B of 8\.0 MB$/.test(m.far); }, 25_000);
+            await shot('transfer-moving', 'a transfer on its way: the name, how far, how fast, how long left', front);
+            menuMarks.push(await paneGlyphs(front.view, 'the pane, with a transfer moving'));
             const stops = await js<number>(front.view, `document.querySelectorAll('.fb-moving-one .fb-stop').length`);
-            const clicked = await js<boolean>(front.view, `(() => { const one = [...document.querySelectorAll('.fb-moving-one')].find((d) => d.textContent.includes('wide.log')); const b = one?.querySelector('.fb-stop'); if (!b) return false; b.click(); return true; })()`);
+            // And the right button on that row offers the same stop, which is the menu for the strip.
+            await js(front.view, `(() => { const one = [...document.querySelectorAll('.fb-moving-one')].find((d) => d.querySelector('.fb-x-name')?.textContent?.includes('wide.log')); const r = one.getBoundingClientRect(); one.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(r.left + 8), clientY: Math.round(r.top + 4) })); })()`);
+            await sleep(160);
+            const onStrip = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+            await sweepMenu(front.view, 'the transfers strip, on one that is moving');
+            check('the right button on a transfer that is moving offers to stop it, and nothing that types into his shell',
+              onStrip.includes('Stop this transfer') && !onStrip.some((w) => /terminal|shell|run |open in/i.test(w)), onStrip);
+            await js(front.view, `document.getElementById('fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            const clicked = await js<boolean>(front.view, `(() => { const one = [...document.querySelectorAll('.fb-moving-one')].find((d) => d.querySelector('.fb-x-name')?.textContent?.includes('wide.log')); const b = one?.querySelector('.fb-stop'); if (!b) return false; b.click(); return true; })()`);
             // The end has to say it was stopped. "No longer counting" is not the same thing: a download that
             // ran to its end is not counting either, and that is the failure this probe exists to catch.
             const stopped = await until(async () => (await foot()).includes('It was stopped'), 25_000);
@@ -1354,6 +1388,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const after = await readdir(ctx.downloads).catch(() => [] as string[]);
             await lab.tell('filepace 0');
             check('a transfer under way can be stopped, and nothing of it is left on the PC', partWay && stops === 1 && clicked && stopped && back && !after.includes('wide.log'), [partWay, stops, clicked, ctx.filesAsked(), await foot(), before.length, after]);
+            // One that has ended keeps its sentence, because what it carries is a reason and not a number,
+            // and the strip's menu offers to clear it away. Clearing is this side of the app alone: nothing
+            // is asked of the box, which is held here too.
+            {
+              const askedBefore = JSON.stringify(ctx.filesAsked());
+              const ended = await js<{ rows: number; said: string }>(front.view, `(() => {
+                const ones = [...document.querySelectorAll('.fb-moving-one')];
+                return { rows: ones.length, said: ones.map((o) => o.querySelector('.fb-x-said')?.textContent ?? '').join(' | ') };
+              })()`);
+              await js(front.view, `(() => { const one = document.querySelector('.fb-moving-one'); const r = one.getBoundingClientRect(); one.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(r.left + 8), clientY: Math.round(r.top + 4) })); })()`);
+              await sleep(160);
+              const onDone = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+              await sweepMenu(front.view, 'the transfers strip, on one that has ended');
+              await shot('transfers-strip', 'what is moving and what has ended, as fields, with the menu on one', front);
+              check('a transfer that has ended keeps the words of why, and the strip offers to clear what finished',
+                ended.rows > 0 && ended.said.includes('stopped') && onDone.some((w) => w.startsWith('Clear the')) && !onDone.includes('Stop this transfer'), [ended, onDone]);
+              await js(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one')].find((b) => (b.querySelector('.fb-menu-words')?.textContent ?? '').startsWith('Clear the'))?.click()`);
+              const cleared = await until(async () => (await js<number>(front.view, `document.querySelectorAll('.fb-moving-one').length`)) === 0, 5000);
+              check('and clearing them takes them off the strip without asking the box for anything', cleared && JSON.stringify(ctx.filesAsked()) === askedBefore, [cleared, askedBefore, JSON.stringify(ctx.filesAsked())]);
+            }
           }
           // A download that breaks part way, and the next try taking it up where it stopped. This is the one
           // that matters on a link that drops: the bytes already here are kept, the rest is asked for, and

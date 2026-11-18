@@ -470,6 +470,35 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     openMenu(at, e.clientX, e.clientY, lines, glyph);
   });
 
+  // The right button on the strip of transfers. What is in it is what this side of the app can really do:
+  // stop one that is moving, start a download again from the row that is still in the folder behind, and
+  // clear away what has finished. **"Show where it landed" is deliberately not in it.** The view is told the
+  // name a file landed under and never the folder it landed in, and showing it would mean a new thing main
+  // does for a view: open a window of Windows' own at a path. That is a wider boundary than a menu line is
+  // worth taking without him, so it is written down rather than guessed at.
+  el.moving.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault();
+    const onRow = (e.target as HTMLElement | null)?.closest<HTMLElement>('.fb-moving-one');
+    const ask = Number(onRow?.dataset['ask'] ?? '');
+    const b = Number.isFinite(ask) && ask > 0 ? bringing.get(ask) : undefined;
+    const lines: MenuLine[] = [];
+    if (b !== undefined && b.ended === '') {
+      lines.push({ glyph: 'close', label: 'Stop this transfer', danger: true, run: () => asker.ask({ id: ask, do: 'cancel', path: '' }), id: 'fb-menu-stop' });
+    }
+    // Only when the file is still in the folder on screen: a download begins from a row, and starting one
+    // for a name this folder no longer holds would be a press that quietly did nothing.
+    if (b !== undefined && b.ended !== '' && b.way === 'in' && rows.some((r) => r.name === b.name && r.kind === 'file')) {
+      lines.push({ glyph: 'bring', label: 'Bring it over again', keys: 'Ctrl+S', run: () => bring(b.name), id: 'fb-menu-again' });
+    }
+    const done = [...bringing].filter(([, x]) => x.ended !== '');
+    if (done.length > 0) {
+      if (lines.length > 0) lines.push({ apart: true });
+      lines.push({ glyph: 'close', label: done.length === 1 ? 'Clear the one that finished' : `Clear the ${done.length} that finished`, run: () => { for (const [i] of done) bringing.delete(i); draw(); }, id: 'fb-menu-clear' });
+    }
+    if (lines.length === 0) return;
+    openMenu(at, e.clientX, e.clientY, lines, glyph);
+  });
+
   // The mouse's own back and forward buttons, which is how he moves through folders in every other window he
   // uses. They are taken on the pane rather than on the list, because they mean the same thing wherever in
   // the pane the pointer is standing.
@@ -1047,24 +1076,6 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // A finished one says where it went and whether it could be checked, and stays until the next move. These
     // go under the counts and may take two lines, because what they say is a sentence and a sentence that is
     // cut off at the edge of the pane is a sentence nobody can read.
-    const lines: string[] = [];
-    for (const b of bringing.values()) {
-      if (b.ended !== '') {
-        lines.push(b.ended);
-        continue;
-      }
-      if (b.asking !== '') {
-        lines.push(`${shorten(b.asking, 28)} is already on the box: waiting on your answer`);
-        continue;
-      }
-      const left = b.rate > 1 && b.of > b.got ? `, ${howLong((b.of - b.got) / b.rate)} left` : '';
-      const name = shorten(b.landed === '' ? b.name : b.landed, 28);
-      // Until the other end has said how big it is there is nothing worth counting, so nothing is counted.
-      const far = b.of > 0 ? ` ${size(b.got)} of ${size(b.of)}${b.rate > 1 ? `, ${size(b.rate)}/s` : ''}${left}` : '';
-      const tookUp = b.tookUpAt > 0 ? `, taken up at ${size(b.tookUpAt)}` : '';
-      lines.push(`${b.way === 'out' ? 'Sending ' : ''}${name}${far}${tookUp}`);
-    }
-
     for (const [i, b] of bits.entries()) {
       if (i > 0) {
         const sep = document.createElement('span');
@@ -1384,11 +1395,62 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (const [id, b] of bringing) {
       const one = document.createElement('div');
       one.className = 'fb-moving-one';
+      one.dataset['ask'] = String(id);
       // A file that is here on the PC can be taken out of the window by hand, into a chat or a folder. The
       // window starts nothing itself: it says which ask, and main hands the file to the system (plan B4.5).
       if (b.canDrag) dragFrom(one, id, b.landed === '' ? b.name : b.landed);
+      // A transfer that is moving is numbers, and numbers read as fields rather than as a sentence: the name,
+      // how far it has got, how fast and how long is left, each its own, the way his own tables are read. A
+      // transfer that has ended is not numbers: it carries where the file went, whether its hash matched, and
+      // when it failed the box's own words and the id of the line in the log. That stays a sentence, because
+      // breaking a reason into fields loses the reason.
       const words = document.createElement('span');
-      words.textContent = lines.shift() ?? '';
+      words.className = 'fb-x';
+      if (b.ended !== '') {
+        const mark = document.createElement('span');
+        mark.className = b.mark === 'checked' ? 'fb-x-mark fb-x-ok' : b.mark === 'changed' ? 'fb-x-mark fb-x-bad' : 'fb-x-mark';
+        mark.append(glyph(b.mark === 'checked' ? 'sum' : b.mark === 'changed' ? 'close' : 'file'));
+        const said = document.createElement('span');
+        said.className = 'fb-x-said';
+        said.textContent = b.ended;
+        words.append(mark, said);
+      } else if (b.asking !== '') {
+        const said = document.createElement('span');
+        said.className = 'fb-x-said';
+        said.textContent = `${shorten(b.asking, 28)} is already on the box: waiting on your answer`;
+        words.append(said);
+      } else {
+        const top = document.createElement('span');
+        top.className = 'fb-x-top';
+        const name = document.createElement('span');
+        name.className = 'fb-x-name';
+        const whole = b.landed === '' ? b.name : b.landed;
+        name.textContent = shorten(whole, 28);
+        name.title = whole;
+        top.append(glyph(b.way === 'out' ? 'send' : 'bring'), name);
+        // Until the other end has said how big it is there is nothing worth counting, so nothing is counted.
+        if (b.of > 0) {
+          const far = document.createElement('span');
+          far.className = 'fb-x-far';
+          far.textContent = `${size(b.got)} of ${size(b.of)}`;
+          top.append(far);
+        }
+        words.append(top);
+        const under: string[] = [];
+        if (b.rate > 1) under.push(`${size(b.rate)}/s`);
+        if (b.rate > 1 && b.of > b.got) under.push(`${howLong((b.of - b.got) / b.rate)} left`);
+        if (b.tookUpAt > 0) under.push(`taken up at ${size(b.tookUpAt)}`);
+        if (under.length > 0) {
+          const row = document.createElement('span');
+          row.className = 'fb-x-under';
+          for (const u of under) {
+            const part = document.createElement('span');
+            part.textContent = u;
+            row.append(part);
+          }
+          words.append(row);
+        }
+      }
       one.append(words);
       // A transfer still going can be stopped, and stopping it leaves nothing behind at either end.
       if (b.ended === '') {
