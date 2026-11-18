@@ -3519,7 +3519,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await until(async () => (((await lab.tell('seen'))['sessions'] ?? []) as unknown[]).length > before.length, 20_000);
           const now = ((await lab.tell('seen'))['sessions'] ?? []) as { Command?: string }[];
           const asked = now.slice(before.length).map((x) => x.Command ?? '').find((c) => c !== '');
-          const want = `cd -- '/var/log/it'\\''s here' && exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build'`;
+          // The session is asked after before the cd, so a place whose folder has gone is still reached:
+          // the cd is on the way to making a session, not on the way to one that is already there.
+          const want = `tmux -L berth -f /dev/null has-session -t 'build' 2>/dev/null || cd -- '/var/log/it'\\''s here' || exit 2; exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build'`;
           check('and the box is asked for this app\u2019s own tmux server and the place\u2019s session, and nothing else', asked === want, [asked, want]);
           // One session on the box is one tab here: opening it again would attach the same tmux session to
           // two tabs, which tmux then draws at the smaller of the two sizes and types into both at once.
