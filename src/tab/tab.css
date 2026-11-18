@@ -16,6 +16,10 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
   --box-5: #b3b68a;
   --line: #27323c;
   --hue: var(--line);
+  /* The two meanings the pane carries from the window: a check that came out right, and a real problem.
+     Same values as berth.css, because a mark that means one thing must not be two colours. */
+  --checked: #79a373;
+  --problem: #cc9b47;
 }
 
 /* Where one command ends and the next begins: a hairline above each prompt, in the box's own colour, very
@@ -169,6 +173,21 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-drag-all { color: var(--main); cursor: grab; }
 .fb-drag-all[data-dragging] { cursor: grabbing; }
 .fb-moving-one > span { flex: 1; min-width: 0; }
+/* A transfer that is moving, read as fields: the name and how far it has got on one line, how fast and how
+   long is left under it, quiet. It was one sentence at 11px, which is the same two faults the status line
+   had and the dialogs had: it talked where a number would do, and it was too small to read while doing it.
+   A transfer that has ended keeps its sentence, with a mark beside it saying how its hash came out. */
+.fb-x { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fb-x-top { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
+.fb-x-top .fb-glyph { flex: none; width: 13px; height: 13px; }
+.fb-x-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c3ccd3; }
+.fb-x-far { margin-left: auto; flex: none; font-size: 12px; color: #96a3ae; font-variant-numeric: tabular-nums; }
+.fb-x-under { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #808d99; font-variant-numeric: tabular-nums; }
+.fb-x-said { min-width: 0; font-size: 13px; color: #96a3ae; }
+.fb-x-mark { float: left; margin: 2px 7px 0 0; }
+.fb-x-mark .fb-glyph { width: 13px; height: 13px; color: #808d99; }
+.fb-x-ok .fb-glyph { color: var(--checked, #79a373); }
+.fb-x-bad .fb-glyph { color: var(--problem, #cc9b47); }
 /* The strip under the folder's name: narrowing the list, and what it is ordered by. It keeps its height
    whatever is in it, so the list below never moves as a filter is typed (BUILD-RULES 2.4). */
 .fb-tools { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-bottom: 1px solid var(--line); }
