@@ -434,7 +434,20 @@ func (s *fileServer) answer(kind byte, id uint32, r *take) (byte, []byte) {
 		}
 		return fxpStatus, status(fxOK, "")
 	case fxpRename:
+		// The plain rename of the file protocol is not the one that replaces. A real box fails it when
+		// something is already under that name, and the app leans on exactly that: a delete asks for this
+		// one so that a name it guessed wrong cannot write over a file already in the trash. Answering it
+		// with a rename that replaces made the lab say yes to the very thing a box says no to, and left
+		// that protection with nothing standing behind it here. The one that replaces is the openssh
+		// extension below, which is what Rename uses and what this box keeps answering.
+		//
+		// Looking before moving is not one step, as it is on a real box. This box serves one ask at a time
+		// in one loop, so nothing of its own can slip in between; it is the behaviour that is being stood
+		// in for, not the atomicity.
 		from, to := s.under(r.str()), s.under(r.str())
+		if _, err := os.Lstat(to); err == nil {
+			return fxpStatus, status(fxFailure, "something is already there under that name")
+		}
 		if err := os.Rename(from, to); err != nil {
 			return fxpStatus, status(codeOf(err), err.Error())
 		}
