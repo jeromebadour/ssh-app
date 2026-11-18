@@ -318,6 +318,10 @@ func main() {
 			// turns it off. It is how a test sees the app read a real shell's shape over a real link.
 			box.Prompting(strings.TrimSpace(rest))
 			say(map[string]any{"prompting": strings.TrimSpace(rest)})
+		case "banner":
+			// <text>, or nothing at all for a box that says nothing at sign-in, as nearly every real box does.
+			box.SetBanner(strings.TrimSpace(rest))
+			say(map[string]any{"banner": strings.TrimSpace(rest)})
 		case "quiet":
 			box.Quiet(rest == "on")
 			say(map[string]any{"quiet": rest == "on"})

@@ -62,6 +62,7 @@ type Box struct {
 	accept         ssh.PublicKey // set by Accept: the key let in from then on
 	live           []*out        // the sessions that are open now: each one's way out
 	quiet          bool          // Quiet: the shells send nothing back by themselves
+	banner         string        // what it says at sign-in; empty means it says nothing, as his own boxes do
 	prompt         string        // Prompting: the prompt the shells print, or empty for a shell that only echoes
 	stall          bool          // Stall: a sign-in is never answered, as a box that has stopped halfway
 	got            []byte        // every byte the shells were given since the last Received
@@ -146,6 +147,21 @@ func (b *Box) Prompting(prompt string) {
 func (b *Box) Quiet(on bool) {
 	b.mu.Lock()
 	b.quiet = on
+	b.mu.Unlock()
+}
+
+// Banner is what it says at sign-in, read at every sign-in rather than once when it started.
+func (b *Box) Banner() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.banner
+}
+
+// SetBanner changes what it says at sign-in. Empty is a box that says nothing, which is what nearly every real
+// box does and what the window has to look right on.
+func (b *Box) SetBanner(say string) {
+	b.mu.Lock()
+	b.banner = say
 	b.mu.Unlock()
 }
 
@@ -546,7 +562,7 @@ func Start(cfg Config) (*Box, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Box{ln: ln, closed: make(chan struct{}), accept: cfg.Accept, files: cfg.FilesUnder}
+	b := &Box{ln: ln, closed: make(chan struct{}), accept: cfg.Accept, files: cfg.FilesUnder, banner: cfg.Banner}
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
@@ -645,9 +661,9 @@ func (b *Box) serve(c net.Conn, cfg Config) {
 			return &ssh.Permissions{}, nil
 		}
 	}
-	if cfg.Banner != "" {
-		sc.BannerCallback = func(ssh.ConnMetadata) string { return cfg.Banner }
-	}
+	// What it says at sign-in, read when a client signs in rather than when the box started, so a probe can
+	// make the box quiet. Most real boxes say nothing at all, and the app has to look right on those too.
+	sc.BannerCallback = func(ssh.ConnMetadata) string { return b.Banner() }
 	sc.AddHostKey(cfg.HostSigner)
 	for _, more := range cfg.MoreHosts {
 		sc.AddHostKey(more)
