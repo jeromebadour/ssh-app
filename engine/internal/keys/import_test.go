@@ -38,6 +38,14 @@ func keyFile(t *testing.T, kind string, passphrase string) ([]byte, ssh.PublicKe
 		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		must(t, err)
 		priv = k
+	case "ecdsa384":
+		k, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		must(t, err)
+		priv = k
+	case "ecdsa521":
+		k, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+		must(t, err)
+		priv = k
 	default:
 		t.Fatalf("no such kind: %s", kind)
 	}

@@ -451,14 +451,17 @@ func FuzzSign(f *testing.F) {
 // start, and he would have been locked out of every box with nothing to go back to. The round trip is held
 // here for every kind of key file this app takes.
 func TestAListHoldingAnImportedKeyOpensAgain(t *testing.T) {
-	ed, _ := keyFile(t, "ed25519", "")
-	rsaFile, _ := keyFile(t, "rsa2048", "")
+	// Every kind this app signs with, which is every kind TakeKey will take: the shapes differ on the way to
+	// disk, and the one that was refused at the next start was the one nobody had opened twice.
 	for _, c := range []struct {
 		what string
 		file []byte
 	}{
-		{"ed25519", ed},
-		{"rsa", rsaFile},
+		{"ed25519", first(keyFile(t, "ed25519", ""))},
+		{"rsa", first(keyFile(t, "rsa2048", ""))},
+		{"ecdsa p256", first(keyFile(t, "ecdsa256", ""))},
+		{"ecdsa p384", first(keyFile(t, "ecdsa384", ""))},
+		{"ecdsa p521", first(keyFile(t, "ecdsa521", ""))},
 	} {
 		t.Run(c.what, func(t *testing.T) {
 			l := &List{keys: map[string]*key{}, public: json.RawMessage(`{}`)}
@@ -517,3 +520,6 @@ func TestAListThatIsReallyDamagedIsStillRefused(t *testing.T) {
 		}
 	}
 }
+
+// first is the key file of what keyFile gives back, so the kinds can be listed in one table.
+func first(file []byte, _ ssh.PublicKey) []byte { return file }
