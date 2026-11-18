@@ -659,9 +659,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       stage = 'the title bar';
       const region = (id: string) => js<string>(ctx.shell, `(getComputedStyle(document.getElementById(${JSON.stringify(id)}))['-webkit-app-region'] ?? getComputedStyle(document.getElementById(${JSON.stringify(id)})).getPropertyValue('-webkit-app-region') ?? '').trim()`);
       const maxBtn = () => js<string>(ctx.shell, `document.getElementById('win-max')?.getAttribute('aria-label') ?? ''`);
-      check('the bar carries the window\'s own three buttons', (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
-      check('and the bar is the title bar: its own surface drags the window', (await region('bar')) === 'drag', await region('bar'));
-      check('a button in the bar is pressed, not dragged', (await region('boxes')) === 'no-drag', await region('boxes'));
+      check('the nav carries the window\'s own three buttons', (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
+      check('and the nav is the title bar: its own surface drags the window', (await region('nav')) === 'drag', await region('nav'));
+      check('a button in the nav is pressed, not dragged', (await region('boxes')) === 'no-drag', await region('boxes'));
+      // The strip below it must NOT be a region Windows drags by. It was one while it was the title bar, and
+      // such a region swallows the press before the page ever sees it: the right button on the strip's empty
+      // part would have done nothing on his machine, however well it answered an event a probe dispatched.
+      // That is the whole reason this is held rather than left to the layout.
+      check('and the tab strip does not drag, or the right button on its empty part would never reach the page',
+        (await region('bar')) !== 'drag', await region('bar'));
       const wasMax = ctx.win.isMaximized();
       check('the maximize button offers what the window is not already', (await maxBtn()) === (wasMax ? 'Restore' : 'Maximize'), [await maxBtn(), wasMax]);
 
@@ -1128,6 +1134,17 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn('[data-place="logs"]');
         const t2ok = await until(() => [...ctx.tabs.values()].some((t) => t.place === 'logs' && t.engine.link.phase === 'up'), 20_000);
         check('a place opens a tab there, signed in; the menu is gone and the tab is above the shell', t2ok && !(await has('#box-menu')) && !shellOnTop(), [...ctx.tabs.values()].map((t) => t.engine.link.phase));
+        // Where the shell's own rows end, and where main puts a tab's view, are two numbers in two processes
+        // that have to agree. They did not the moment the window gained its nav row: main placed every tab at
+        // 46px, the shell drew 70px of rows above it, and the panes were drawn underneath their own tab strip
+        // with their heads cut off. Nothing in the build said a word, because each side was right on its own.
+        {
+          const below = await js<number>(ctx.shell, `Math.round(document.getElementById('bar').getBoundingClientRect().bottom)`);
+          const front = [...ctx.tabs.values()][0]!;
+          const at = front.view.getBounds();
+          check('a tab\'s view begins exactly where the shell\'s rows above it end, in both processes',
+            below === at.y, { shellSaysRowsEndAt: below, mainPutsTheTabAt: at.y });
+        }
         check('the tab says its box and its place, in the box\'s colour', (await text('[data-tab]')).includes('lab-box') && (await text('[data-tab]')).includes('logs') && (await text('#status')).includes('lab-box, logs'), await text('#status'));
         // The status line shows rather than talks (his #17). It used to be one phrase to read left to right,
         // "round trip 0 ms, post-quantum", where what a status line is for is a glance. Each fact is its own

@@ -49,7 +49,10 @@ const LAB_PROFILE = LAB_RUN ? (process.env['SSHAPP_PROFILE'] ?? (process.env['SS
 if (LAB_PROFILE) app.setPath('userData', path.join(LAB_PROFILE, 'profile'));
 
 const DIST = __dirname;
-const BAR = 46; // the shell's bar above the tabs
+// The two rows of the shell above the tabs: the nav (34) and the tab strip (36). They are one number here
+// and two grid rows in berth.css, and the two must agree: main places every tab's own view with this, so a
+// nav added to the window without this changing draws the tabs underneath their own strip.
+const BAR = 34 + 36;
 const STATUS = 30; // and its status line below them
 const ENGINE_NAME = process.platform === 'win32' ? 'sshapp-engine.exe' : 'sshapp-engine';
 // Packaged: the engine sits beside the app archive (a program cannot be started from inside it).
