@@ -1437,6 +1437,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await shot('chosen', 'several files chosen at once, and the foot saying how many and how much', front);
             const footSays = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
             check('and the foot says how many are chosen and how much they come to', /\d+ chosen/.test(footSays) && footSays.includes('chosen'), footSays);
+            // And what a reader is told is what the eye sees. Two things wrote aria-selected on these rows:
+            // the row itself, from the chosen set, and the pass that settles the tab stop afterwards, which
+            // set it from whether the keyboard stood there and so wrote over every one of them. A run of
+            // three was three rows chosen on screen and one row announced. The list has to say of itself that
+            // it holds several, too, or a reader tells him it holds one choice at a time whatever it does.
+            const announced = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row[aria-selected="true"]')].map((r) => r.dataset.name)`);
+            const multi = await js<string>(front.view, `document.getElementById('fb-list')?.getAttribute('aria-multiselectable') ?? ''`);
+            check(`what is announced is what is chosen: ${announced.length} of ${run.length}, and the list says it holds several`, JSON.stringify(announced) === JSON.stringify(run) && multi === 'true', [announced, run, multi]);
+            // The tab stop is a different thing and still works: one row carries it, the one the keyboard
+            // stands on, which is what was conflated with being chosen.
+            const stops = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.tabIndex === 0).map((r) => r.dataset.name)`);
+            check('and exactly one row carries the tab stop, which is not the same thing as being chosen', stops.length === 1, [stops, run]);
             // Everything in the folder, by the one key that means it everywhere, and never the way out.
             await js(front.view, `document.getElementById('fb-list').focus()`);
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }))`);
