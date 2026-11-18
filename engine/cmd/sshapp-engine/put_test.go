@@ -268,8 +268,12 @@ func TestASendThatBrokeIsTakenUpWhereItStopped(t *testing.T) {
 	r, box := withFiles(t)
 	const round = 32 * 32 * 1024 // one round of blocks: what a resume is held to
 	from, want := writeOnThePC(t, 5*round)
-	// Two whole rounds of it are already on the box, under the name a half-written send has.
-	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), want[:2*round], 0o600); err != nil {
+	// Two whole rounds of it and a little of the third are already on the box, under the name a half-written
+	// send has. A little of the third, and not two rounds exactly: a file that ends exactly on a round's own
+	// mark says nothing about whether that round was whole, so the resume there is a round lower on purpose
+	// (TestASendIsTakenUpBelowTheRoundItEndsOnNotAboveIt). What this one is about is writing on from where it
+	// stopped rather than from the start.
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), want[:2*round+100_000], 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +303,9 @@ func TestASendTakenUpFromTheWrongBytesIsNeverPutInPlace(t *testing.T) {
 	r, box := withFiles(t)
 	const round = 32 * 32 * 1024
 	from, _ := writeOnThePC(t, 3*round)
-	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), make([]byte, round), 0o600); err != nil {
+	// A round of someone else's bytes and a little more: enough that the resume keeps a whole round of them
+	// rather than writing over all of them, which is what leaves the hash with something to catch.
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), make([]byte, round+100_000), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -381,5 +387,38 @@ func TestAFileBeingReplacedKeepsItsOwner(t *testing.T) {
 	}
 	if askedUID != uid || askedGID != gid {
 		t.Fatalf("it asked for %d:%d where the file it replaced was %d:%d (on %q)", askedUID, askedGID, uid, gid, name)
+	}
+}
+
+// And the one size where "the last whole round below it" is not below it: a round's blocks land in whatever
+// order the box answers them, so the round that was cut can leave its LAST block landed and the ones before
+// it missing. The file is then exactly as long as the end of that round. Dividing by the round size and
+// multiplying back gives that same size, so the resume began above a hole instead of below it, and the gap
+// stayed in the file: thrown away at the end on a box that can hash, renamed into place and called "not
+// checked" on one that cannot. The round a size falls on is as unfinished as the round it falls inside.
+func TestASendIsTakenUpBelowTheRoundItEndsOnNotAboveIt(t *testing.T) {
+	r, box := withFiles(t)
+	const round = 32 * 32 * 1024
+	from, want := writeOnThePC(t, 5*round)
+	// What a round cut after its last block alone landed leaves: two whole rounds, then a third round whose
+	// only real bytes are its final block. The file ends exactly on the round's own mark.
+	part := make([]byte, 3*round)
+	copy(part, want[:2*round])
+	copy(part[3*round-32*1024:], want[3*round-32*1024:3*round])
+	if err := os.WriteFile(filepath.Join(box, ".berth-sent.bin.part"), part, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ask(t, r, map[string]any{"id": 84, "do": "put", "path": "/", "name": "sent.bin", "from": from, "resume": true})
+	ps := pages(r.wait("the upload to end", ended(84)), 84)
+	if at := last(ps, "resumedAt"); at != float64(2*round) {
+		t.Fatalf("it was taken up at %v, above the hole: the round a size ends on is as unfinished as one it falls inside", at)
+	}
+	if e := last(ps, "error"); e != nil {
+		t.Fatalf("it failed: %v (%v)", e, last(ps, "detail"))
+	}
+	got, err := os.ReadFile(filepath.Join(box, "sent.bin"))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("the hole was left in the file (%v, %d of %d)", err, len(got), len(want))
 	}
 }

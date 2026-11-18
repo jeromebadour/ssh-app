@@ -132,8 +132,14 @@ func (f *files) put(ctx context.Context, c *sftp.Client, a fileAsk) error {
 			// and on a box that cannot hash, that file would have been renamed into place over the old one
 			// and called "not checked" rather than wrong. Every round begins at a multiple of its own size
 			// counted from the start of the file, so everything below the last such mark is whole.
+			// The mark must be STRICTLY below the size. A round's last block can be the only one of it that
+			// landed, and then the file ends exactly on that round's own mark: dividing by the round size
+			// and multiplying back gave that same mark, so the resume began above the hole instead of below
+			// it. The round a size ends on is as unfinished as the round it falls inside.
 			const round = uint64(sftp.AtOnce) * sftp.Block
-			sent = had.Size / round * round
+			if had.Size > 0 {
+				sent = (had.Size - 1) / round * round
+			}
 		}
 	}
 	if sent == 0 {
