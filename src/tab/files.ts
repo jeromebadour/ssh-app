@@ -1485,7 +1485,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       get.addEventListener('click', (ev) => {
         ev.stopPropagation();
         place(r.name);
-        bring(r.name);
+        // A row's own button means that row, unless that row is one of several he has chosen.
+        if (chosen.has(r.name) && chosen.size > 1) for (const n of names().filter((x) => chosen.has(x))) bring(n);
+        else bring(r.name);
       });
       const bye = document.createElement('button');
       bye.className = 'fb-get fb-bye';
@@ -1862,7 +1864,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // The one press with Ctrl the list answers: bringing the file it is standing on over to the PC. It is the
     // save key, it is not a key a window or a box has any use for here, and the list is not a terminal.
     if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 's' || e.key === 'S')) {
-      bring(standing);
+      // Everything chosen, or the row it stands on when nothing is: the same reach the delete has, because
+      // choosing five and bringing one over is the same broken promise in the other direction. Folders and
+      // what is already on its way say so for themselves, one line each, inside bring.
+      const want = chosen.size > 0 ? names().filter((n) => chosen.has(n)) : standing === '' || standing === '..' ? [] : [standing];
+      for (const n of want) bring(n);
       e.preventDefault();
       return;
     }

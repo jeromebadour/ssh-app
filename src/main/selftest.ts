@@ -1662,6 +1662,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await clickOn('#fb-find-clear', front);
             const back = await until(async () => (await names()).join() === byName.join(), 5000);
 
+            // ---- What is chosen is what comes over. ----
+            // Choosing five and bringing one over is the same broken promise the delete had, in the other
+            // direction. What is counted is the transfer lines the press starts, not whether the file ended
+            // up on the PC: a press on a row already fetches it so it can be dragged, and that fetch never
+            // becomes a transfer line. A probe that asked "is it here" read yes whatever the press did.
+            {
+              const small = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file' && Number(r.dataset.bytes) > 0 && Number(r.dataset.bytes) < 100000).map((r) => r.dataset.name)`);
+              const two = small.slice(0, 2);
+              check('there are two small files to bring over', two.length === 2, small);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${two[0]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`);
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${two[1]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))`);
+              const linesBefore = await js<number>(front.view, `document.querySelectorAll('#fb-moving .fb-moving-one').length`);
+              await js(front.view, `document.getElementById('fb-list').focus()`);
+              await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }))`);
+              const bothNamed = await until(async () => { const said = await js<string>(front.view, `document.getElementById('fb-moving')?.textContent ?? ''`); return two.every((n) => said.includes(n)); }, 25_000);
+              const lines = await js<string>(front.view, `document.getElementById('fb-moving')?.textContent ?? ''`);
+              check(`one press starts a transfer for every file chosen, not for the one the keyboard stands on: ${two.join(' and ')}`, bothNamed && linesBefore >= 0, [two, lines.slice(0, 160)]);
+              check('and with two of them here, the line that drags them out together is there', await until(() => has('#fb-drag-all', front), 15_000), '');
+            }
+
             // ---- What is chosen is what the delete takes. ----
             // #111 gave the list a selection and the delete went on acting on the one row the keyboard stood
             // on, while the foot counted five. A delete that takes one of five, or takes five when the dialog
