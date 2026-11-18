@@ -2542,7 +2542,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const wentBox = !ctx.boxes.list.some((b) => b.id === id);
         const wentKey = Array.isArray(held['keys']) && !(held['keys'] as Record<string, unknown>[]).some((k) => k['box'] === id);
         const wentTabs = ![...ctx.tabs.values()].some((t) => t.box?.id === id);
-        const said = (await text('#status-done')).includes('Deleted lab-box-renamed');
+        // Waited for, not read once: main's own list loses the box before the window has been told, so a
+        // single read here is a race with the window and not a question about the app.
+        const said = await until(async () => (await text('#status-done')).includes('Deleted lab-box-renamed'), 5000);
         check('Delete: the box, its key and its tabs go together, and the window says so', wentBox && wentKey && wentTabs && said, [{ wentBox, wentKey, wentTabs, said }, ctx.boxes.list.map((b) => b.name), held['keys'], await text('#status-done')]);
 
         lab.end();
