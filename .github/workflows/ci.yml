@@ -187,8 +187,13 @@ jobs:
         run: node scripts/smoke-windows.mjs
 
       - name: The release zip, and the install proof
+        # The zip is made from packages built under the same version it is named with, because the release
+        # refuses a program whose own properties say it is something else: the version a person reads in the
+        # file's properties and the version of the thing they downloaded are the same thing or they are a
+        # lie. The real release passes its version the same way (release.yml).
         run: |
-          node scripts/release.mjs 0.0.0-ci
+          BERTH_VERSION=0.0.0-ci node scripts/package.mjs win32
+          BERTH_VERSION=0.0.0-ci node scripts/release.mjs 0.0.0-ci
           node scripts/smoke-install.mjs
 
   # GitHub offers no ruleset for a private repo on the free plan, so nothing there blocks a direct push to main.
