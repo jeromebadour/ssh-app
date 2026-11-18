@@ -1422,20 +1422,28 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the list has a head over each of its columns, each saying what it orders', JSON.stringify(headNames) === JSON.stringify(['Name', 'Size', 'Modified']), headNames);
             const everyRowHasBoth = await js<boolean>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..' && r.dataset.kind === 'file').every((r) => r.querySelector('.fb-size')?.textContent.trim() && r.querySelector('.fb-when')?.textContent.trim())`);
             check('and every file carries both its size and its time, whatever the list is ordered by', everyRowHasBoth, everyRowHasBoth);
-            // The zoom, which is the press he can wreck it with. Everything in a row is set in the pane's own
-            // size, so the whole list grows together: the name's column must grow with the rest, not be eaten
-            // by columns that kept their pixels.
-            const widths = (): Promise<{ name: number; size: number; row: number }> => js(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file'); if (!r) return { name: -1, size: -1, row: -1 }; return { name: Math.round(r.querySelector('.fb-name').getBoundingClientRect().width), size: Math.round(r.querySelector('.fb-size').getBoundingClientRect().width), row: Math.round(r.getBoundingClientRect().width) }; })()`);
-            const at100 = await widths();
+            // The zoom, which is the press he can wreck the list with. Every step of it, not one: the first
+            // version of this probe pressed Ctrl and plus once, held that nothing was cut, and passed, while
+            // at 150 and 200 per cent the name was cut to nothing and the time column came out wider than it.
+            // What gives way is measured against the list's own size now, so it gives way as the text grows
+            // and not only when the pane is dragged narrower.
+            const rowNow = (): Promise<{ name: number; numbers: number; row: number; cut: number; size: string; timeGone: boolean }> => js(front.view, `(() => { const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file'); if (!r) return { name: -1, numbers: -1, row: -1, cut: -1, size: '?', timeGone: false }; const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; }; return { name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'), row: Math.round(r.getBoundingClientRect().width), cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length, size: document.getElementById('files').dataset.size, timeGone: getComputedStyle(r.querySelector('.fb-when')).display === 'none' }; })()`);
             await js(front.view, `document.getElementById('fb-list').focus()`);
-            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
-            await sleep(150);
-            const at115 = await widths();
-            const cut = await js<number>(front.view, `[...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length`);
-            // What must hold is not that every column grows, which a pane of fixed width cannot give: it is
-            // that the name keeps its room and no name is cut off. Before this, the name was the only thing
-            // that could give and three of them were cut by one press.
-            check(`zoomed in, the name keeps its room and nothing is cut: the name is ${at115.name} of ${at115.row} across, the size ${at115.size}, and ${cut} names are cut off`, cut === 0 && at115.name > at115.row * 0.5 && at115.size > at100.size, [at100, at115, cut]);
+            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean }[] = [];
+            for (let i = 0; i < 6; i++) {
+              const now = await rowNow();
+              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone });
+              await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
+              await sleep(130);
+            }
+            const everCut = steps.filter((x) => x.cut > 0);
+            const everEaten = steps.filter((x) => x.numbers >= x.name);
+            // And the thing that is meant to give way really gives way. Without this the probe cannot fail on
+            // the fault it was written for: every file the lab box holds was made today, so its time is five
+            // characters wide and nothing is ever cut whatever the thresholds are. What the design says is
+            // that the time goes first, and by the largest size this list has it must have gone.
+            const gaveWay = steps.some((x) => x.timeGone);
+            check(`at every size this list has, up to ${steps[steps.length - 1]!.size} per cent, no name is cut, the numbers never take more of a row than the name does, and the time gives way as the text grows (it does at ${steps.find((x) => x.timeGone)?.size ?? 'no size at all'})`, everCut.length === 0 && everEaten.length === 0 && gaveWay && steps[steps.length - 1]!.size === '200', { steps, everCut, everEaten });
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
             await sleep(150);
 
