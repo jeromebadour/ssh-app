@@ -163,6 +163,10 @@ function View(c: Chrome) {
 
 export function drawChrome(over: HTMLElement, above: HTMLElement, c: Chrome): void {
   render(<View {...c} />, over);
+  // Whether the box said anything is said here, in a mark on the slot itself, so the window gives the slot no
+  // room at all on a box that signs in quietly. Every one of his own boxes is quiet, so what he saw was a band
+  // of empty window above both panes that nothing in the app ever used.
+  above.dataset['said'] = c.info?.box && c.signIn ? 'yes' : 'no';
   render(<SignInRow {...c} />, above);
 }
 

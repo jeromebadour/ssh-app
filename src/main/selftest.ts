@@ -2091,6 +2091,38 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await shot('files', 'a tab: its box\'s files beside its terminal', front);
         }
 
+        // ---- A box that says nothing at sign-in gives its window no band of empty room. ----
+        // Nearly every real box is quiet at sign-in; the lab's is not, which is how a band of empty window
+        // above both panes went unseen on every picture ever taken. The slot a box's words land in used to
+        // keep its height whether or not there were any, so his own boxes cost him 46 pixels of window on
+        // every tab, all day.
+        {
+          await lab.tell('banner');
+          const quiet = ctx.openTab(id, 'logs')!;
+          check('a tab on a box that says nothing at sign-in comes up', await until(() => quiet.engine.state === 'ready' && quiet.engine.link.phase === 'up', 20_000), quiet.engine.link.phase);
+          await js<void>(quiet.view, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))`);
+          const said = await js<string>(quiet.view, `document.getElementById('signin-at')?.dataset.said ?? 'missing'`);
+          const room = await js<number>(quiet.view, `Math.round(document.getElementById('signin-at')?.getBoundingClientRect().height ?? -1)`);
+          const top = await js<number>(quiet.view, `Math.round(document.getElementById('split')?.getBoundingClientRect().top ?? -1)`);
+          check('it is marked as having said nothing, and the slot for its words takes no room', said === 'no' && room === 0, { said, room });
+          check('so the two panes start at the top of the tab, with no band above them', top === 0, top);
+          await shot('quiet-sign-in', 'a tab on a box that says nothing at sign-in, which is every box he owns', quiet);
+          // And the same box, having something to say, still says it: the slot is collapsed, not removed.
+          await lab.tell('banner this box has something to say');
+          const loud = ctx.openTab(id, 'logs')!;
+          check('a tab on the same box, now with something to say, comes up', await until(() => loud.engine.state === 'ready' && loud.engine.link.phase === 'up', 20_000), loud.engine.link.phase);
+          await until(async () => (await js<string>(loud.view, `document.getElementById('signin-at')?.dataset.said ?? ''`)) === 'yes', 8000);
+          const saidLoud = await js<string>(loud.view, `document.getElementById('signin-at')?.dataset.said ?? 'missing'`);
+          const roomLoud = await js<number>(loud.view, `Math.round(document.getElementById('signin-at')?.getBoundingClientRect().height ?? -1)`);
+          const words = await js<string>(loud.view, `document.getElementById('signin-at')?.textContent ?? ''`);
+          // Folded, as it always is: the line says who said it and how much, and the words themselves are
+          // behind it until he opens them. What this holds is that the slot takes its room back to show it.
+          check('what the box said is shown, and the slot takes its room back to show it', saidLoud === 'yes' && roomLoud > 0 && words.includes('said 1 line at sign-in'), { saidLoud, roomLoud, words });
+          ctx.closeTab(quiet.id);
+          ctx.closeTab(loud.id);
+          await lab.tell('banner');
+        }
+
         const open1 = [...ctx.tabs.values()].find((x) => x.place === 'logs')!;
         {
           const front = open1;
@@ -3032,7 +3064,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         seenNow = await lab.tell('seen');
         return ((seenNow['sessions'] ?? []) as unknown[]).length >= 2;
       }, 15_000);
-      const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number }[];
+      const sessions = (seenNow['sessions'] ?? []) as { Asked?: string[]; Command?: string; Term?: string; Cols?: number; Rows?: number; Resizes?: [number, number][] }[];
       // What Berth asks a box for, in full, and nothing beyond it (plan B10). A tab opens two sessions and no
       // more: the terminal, and the file subsystem for its own file browser. The second asks for one thing,
       // "subsystem", and carries no terminal and no command.
@@ -3042,7 +3074,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('the box was asked for a terminal and the place\'s one start command, and nothing else', sessions.length === 2 && JSON.stringify(shell?.Asked?.slice(0, 2)) === '["pty-req","exec"]' && (shell?.Asked ?? []).slice(2).every((x) => x === 'window-change') && shell?.Command === `cd -- '/var/log/it'\\''s here' && exec "$SHELL" -l` && shell?.Term === 'xterm-256color', seenNow);
       check('and its files were asked for on a session of their own, which asks for one thing and no terminal', fileSession !== undefined && fileSession.Term === '' && fileSession.Command === '', fileSession);
       const sizeNow = await js<{ cols: number; rows: number }>(t.view, `window.berthTerm.size()`);
-      check(`the box's terminal was opened at this tab's own size, ${sizeNow.cols} x ${sizeNow.rows}, and never told a size twice`, last?.Cols === sizeNow.cols && last?.Rows === sizeNow.rows && sizeNow.cols > 40 && (last?.Asked ?? []).length === 2, [last?.Cols, last?.Rows, sizeNow, last?.Asked]);
+      // The box is told a size when the terminal opens, and after that only when the window really changes.
+      // This box prints three lines at sign-in, and those words take room on screen once they land, so the
+      // terminal above them really is shorter than it was a moment before and the box is told so, once. A box
+      // that says nothing never moves anything and is never told twice, which is the case his own boxes are
+      // (the probe for that is beside the files pictures). What must hold either way: the last size the box
+      // was given is the size the window has now, or his shell wraps its lines against a size nobody has.
+      const resizes = last?.Resizes ?? [];
+      const toldLast = resizes.length > 0 ? resizes[resizes.length - 1]! : [last?.Cols ?? 0, last?.Rows ?? 0];
+      const changes = (last?.Asked ?? []).filter((x) => x === 'window-change').length;
+      check(`the box's terminal is opened at this tab's size and told again only when the window changes: it has ${sizeNow.cols} x ${sizeNow.rows} and the box was last told ${toldLast[0]} x ${toldLast[1]}`, toldLast[0] === sizeNow.cols && toldLast[1] === sizeNow.rows && sizeNow.cols > 40 && changes === resizes.length && changes <= 1, [last?.Cols, last?.Rows, sizeNow, last?.Asked, resizes]);
       const worn = await dress(t);
       check('the tab\'s page is whole: each of its stylesheets loaded, the terminal\'s typeface too, the terminal\'s own text field out of sight', dressed(worn), worn);
       check('it signed in as the box\'s user', Array.isArray(seenNow['users']) && (seenNow['users'] as string[]).every((u) => u === 'demo'), seenNow['users']);

@@ -208,7 +208,12 @@ h1 .mark.now { animation: none; }
    so the terminal's size, which the box is told, never changes because a link went quiet. */
 /* The strip the folded sign-in line sits in. It is there from the first frame, empty or not: the box is told
    the terminal's size once, before it opens the terminal, and a line arriving later must not change it. */
+/* The slot a box's own words land in at sign-in. Most boxes say nothing, and a slot that keeps its height
+   anyway is a band of empty window above the panes on every tab, every day. It is marked rather than
+   measured: Preact renders nothing here when there is nothing to say, and an empty element is a thing CSS
+   can be fooled about by one stray text node, where a mark the code sets is not. */
 #signin-at { flex: none; height: 34px; margin: 12px 18px 0; }
+#signin-at:not([data-said='yes']) { display: none; }
 .signin, .bar { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px 0 12px; border-radius: 4px; font: 400 12.5px/1.35 'Plex Sans Condensed', sans-serif; }
 .bar { position: absolute; left: 18px; right: 18px; top: 16px; z-index: 2; width: auto; }
 .signin { width: auto; text-align: left; border: 0; background: #1b242c; box-shadow: inset 0 0 0 1px #2b3642; color: #aab5bf; cursor: pointer; }
