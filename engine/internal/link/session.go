@@ -71,12 +71,17 @@ func StartIn(folder, tmux string) (string, error) {
 	if !TmuxName(tmux) {
 		return "", ErrTmuxName
 	}
+	// The folder is reached by the shell's own cd, exactly as a plain place reaches it, and is never handed
+	// to tmux as an argument. tmux reads its own formats in the start directory it is given, so a folder
+	// holding #(...) would have run as a command on the box: a string from the window becoming a command
+	// there is the one thing this app may never do, and the way not to do it is not to pass the string.
+	// Without -c, the session starts where the client stands, which is where the cd has just put it.
 	cmd := `exec tmux -L berth -f /dev/null set -g mouse on \; new-session -A -s '` + tmux + `'`
 	if folder != "" {
 		if err := plainEnough(folder); err != nil {
 			return "", err
 		}
-		cmd += " -c '" + quoted(folder) + "'"
+		cmd = "cd -- '" + quoted(folder) + "' && " + cmd
 	}
 	return cmd, nil
 }

@@ -289,6 +289,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       for (const ch of text) sh.sendInputEvent({ type: 'char', keyCode: ch });
       await sleep(120);
     };
+    // The password, typed into a field and proven to have landed whole before it is sent. Keys are real key
+    // events into whatever has the focus, so a field that has not taken the focus yet eats the first of
+    // them: the password is then wrong, the lock says so, and the probe fails for a reason that is the
+    // lab's and not the app's. It happened once in CI on the damaged-list screen and passed on a re-run,
+    // which is the worst kind of probe there is. Only the length is ever read, never the characters.
+    const typePassword = async (sel: string, pw: string): Promise<boolean> => {
+      for (let go = 0; go < 4; go++) {
+        await clickOn(sel);
+        await js(ctx.shell, `(() => { const i = document.querySelector(${JSON.stringify(sel)}); if (i) { i.focus(); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } })()`);
+        await typeKeys(pw);
+        if (await until(async () => (await js<number>(ctx.shell, `document.querySelector(${JSON.stringify(sel)})?.value.length ?? -1`)) === pw.length, 2000)) return true;
+      }
+      return false;
+    };
     const pressEnter = async () => {
       sh.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
       sh.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
@@ -377,11 +391,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const wrong = await until(() => ctx.gate.state.wrong && phase() === 'locked', 30_000);
       check('a wrong password is said plainly, and the next try must wait', wrong && (await until(async () => (await text('#gate-wrong')).includes('Wrong password') && (await text('#gate-submit')).includes('Wait'), 3000)) && ctx.gate.view().waitMs > 0, [phase(), await text('#gate-submit'), ctx.gate.view().waitMs]);
       await lockHolds('after a wrong password');
-      await typeKeys(PASSWORD);
+      check('the right password lands in the field whole before it is sent', await typePassword('#pw', PASSWORD), '');
       await pressEnter(); // during the wait: not sent, not looked at
       await sleep(200);
       check('the right password during the wait is not looked at', phase() === 'locked', phase());
       await until(async () => (await text('#gate-submit')).trim() === 'Unlock', 5000);
+      // And it is still whole after the wait: the field is read again rather than assumed, because what is
+      // pressed next is the press that must unlock.
+      check('and it is still whole when the wait is over', (await js<number>(ctx.shell, `document.querySelector('#pw')?.value.length ?? -1`)) === PASSWORD.length, '');
       // Watching every frame from here, not sampling: the lock opens and the window is drawn at once, and
       // the fault being held off is a single frame of it. Add box drawn while the app shows no box he has is
       // a button standing where the morning's offer is about to land, and a press begun on it lands on that
@@ -446,8 +463,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // The damage is in the sealed contents, so it is found when the password is tried, not before: the lock
       // asks as it always does, and only then can it tell a damaged list from a wrong password.
       check('a start on a damaged list asks for the password as usual', phase() === 'locked' && (await until(() => has('#gate-unlock'), 10_000)), phase());
-      await clickOn('#pw');
-      await typeKeys(PASSWORD);
+      check('the password lands in the field whole before it is sent', await typePassword('#pw', PASSWORD), '');
       await pressEnter();
       check('the right password on a damaged list: it is called damaged, not wrong, and no wait is started', (await until(() => phase() === 'damaged', 30_000)) && !ctx.gate.state.wrong && ctx.gate.view().waitMs === 0, [phase(), ctx.gate.state.wrong, ctx.gate.view().waitMs]);
       check('a damaged list: the lock says so, asks for no password, and offers the ways back', (await until(() => has('#gate-damaged'), 5000)) && !(await has('#pw')) && (await has('#gate-previous')) && (await has('#gate-pick-restore')) && ctx.gate.state.hasPrevious, [phase(), ctx.gate.state.detail]);
@@ -3503,7 +3519,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await until(async () => (((await lab.tell('seen'))['sessions'] ?? []) as unknown[]).length > before.length, 20_000);
           const now = ((await lab.tell('seen'))['sessions'] ?? []) as { Command?: string }[];
           const asked = now.slice(before.length).map((x) => x.Command ?? '').find((c) => c !== '');
-          const want = `exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build' -c '/var/log/it'\\''s here'`;
+          const want = `cd -- '/var/log/it'\\''s here' && exec tmux -L berth -f /dev/null set -g mouse on \\; new-session -A -s 'build'`;
           check('and the box is asked for this app\u2019s own tmux server and the place\u2019s session, and nothing else', asked === want, [asked, want]);
           // One session on the box is one tab here: opening it again would attach the same tmux session to
           // two tabs, which tmux then draws at the smaller of the two sizes and types into both at once.
@@ -3603,6 +3619,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         lines.length > 0 && shaped && ids.size === lines.length && log.lost === 0,
         [lines.length, ids.size, shaped, log.lost, lines.at(-1)],
       );
+      // A promise broken on his own PC is written down. The first promise of this app is that the window
+      // always answers, and one that is broken only in a number nobody reads is one nobody can hold it to.
+      {
+        const slow = [...ctx.tabs.values()].find((t) => t.box) ?? [...ctx.tabs.values()][0];
+        if (slow) {
+          await js(slow.view, `window.tabPort.meter({ longTaskMs: 4000, reactionMs: 0, reactionKind: 0, reactionWaitMs: 0, reactionHandlerMs: 0 })`);
+          const wrote = await until(async () => (await ctx.faults()).lately.some((l) => l.what === 'meter'), 5000);
+          const log3 = await ctx.faults();
+          const text3 = await readFile(log3.file, 'utf8').catch(() => '');
+          const said = text3.split('\n').filter((l) => l.includes(' meter ')).at(-1) ?? '';
+          check('a promise broken on his own PC is written in the local log, with what it was and what it should have been', wrote && said.includes('viewTaskMs') && said.includes('4000 ms') && said.includes('budget'), said);
+        }
+      }
       check(
         'a view that floods main with asks it may not make cannot flood the log: the first few are written, the rest counted',
         ctx.dropped() >= droppedBefore + 60 && drops > 0 && drops <= 20,

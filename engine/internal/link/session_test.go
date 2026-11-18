@@ -64,7 +64,7 @@ func TestATmuxPlaceIsAskedExactlyThis(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("%d sessions", len(got))
 	}
-	want := `exec tmux -L berth -f /dev/null set -g mouse on \; new-session -A -s 'build' -c '/srv/it'\''s here'`
+	want := `cd -- '/srv/it'\''s here' && exec tmux -L berth -f /dev/null set -g mouse on \; new-session -A -s 'build'`
 	if len(got[0].Asked) != 2 || got[0].Asked[0] != "pty-req" || got[0].Asked[1] != "exec" || got[0].Command != want {
 		t.Fatalf("asked %v, command %q; want %q", got[0].Asked, got[0].Command, want)
 	}

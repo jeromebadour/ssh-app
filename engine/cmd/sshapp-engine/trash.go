@@ -110,7 +110,7 @@ func trashOn(ctx context.Context, c *sftp.Client, where string) (string, error) 
 
 // toTrash moves one thing into its disk's trash and writes down where it came from.
 func (f *files) toTrash(ctx context.Context, c *sftp.Client, where string) (trashed, error) {
-	real, err := c.Realpath(ctx, where)
+	real, err := realButNotTheLast(ctx, c, where)
 	if err != nil {
 		return trashed{}, err
 	}
@@ -140,6 +140,29 @@ func (f *files) toTrash(ctx context.Context, c *sftp.Client, where string) (tras
 	}
 	line.Index = path.Join(bin, "index")
 	return line, nil
+}
+
+// realButNotTheLast works out where a path really is, without following the thing at the end of it. The
+// folders above it are resolved, because that is what the refusal list has to judge and what decides which
+// disk the thing is on; the last part is left exactly as it was written.
+//
+// Following it was a real way to lose a file: standing on a link and pressing Delete moved what the link
+// pointed at into the trash and left the link dangling, so deleting /var/www/current took away the release
+// it pointed to. A person deleting a link means the link.
+func realButNotTheLast(ctx context.Context, c *sftp.Client, where string) (string, error) {
+	clean := path.Clean(where)
+	if !path.IsAbs(clean) || clean == "/" {
+		return "", fmt.Errorf("%w: %s", errRefused, "that is not a path on the box")
+	}
+	dir, base := path.Split(clean)
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("%w: %s", errRefused, "that is not a thing to delete")
+	}
+	realDir, err := c.Realpath(ctx, path.Clean(dir))
+	if err != nil {
+		return "", err
+	}
+	return path.Join(realDir, base), nil
 }
 
 // fromTrash puts one thing back where it came from.

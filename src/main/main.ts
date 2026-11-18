@@ -242,6 +242,8 @@ function drop(on: string, e?: IpcMainEvent): void {
   }
 }
 const meter = new Meter();
+// A promise broken on his own PC goes to the local log, with its id, like every other fault.
+meter.said = (what, detail) => void faultLog().say({ what, detail });
 const pace = new Pace(os.availableParallelism());
 // One look at every tab, twenty times a second: which tabs behind are flooded, and what share each may work.
 const lookPace = (): void => {

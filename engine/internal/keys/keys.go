@@ -159,7 +159,18 @@ func Parse(contents []byte) (*List, error) {
 		l.public = json.RawMessage(`{}`)
 	}
 	for name, k := range d.Keys {
-		if k == nil || !usableName(name, maxNameLen) || k.Type != ssh.KeyAlgoED25519 || len(k.Seed) != ed25519.SeedSize || !usableName(k.Box, maxNameLen) || !usableUser(k.User) {
+		if k == nil || !usableName(name, maxNameLen) || !usableName(k.Box, maxNameLen) || !usableUser(k.User) {
+			return nil, ErrBadList
+		}
+		// A key is read back in exactly the two shapes this program writes: one this app made, which is an
+		// ed25519 seed, and one brought in from a file (plan O1), which is PKCS#8 of a kind this app signs
+		// with. Reading only the first was a list that opened today and was called damaged tomorrow, as soon
+		// as one key had been brought in: he would have been locked out of every box, with the backup holding
+		// the same refusal. A key whose bytes turn out to be unusable is refused at signing time, with the
+		// reason, rather than making the whole list unreadable.
+		madeHere := k.Type == ssh.KeyAlgoED25519 && len(k.Seed) == ed25519.SeedSize && len(k.Priv) == 0
+		broughtIn := len(k.Priv) > 0 && len(k.Priv) <= maxKeyFile && len(k.Seed) == 0 && len(signsWith[k.Type]) > 0
+		if !madeHere && !broughtIn {
 			return nil, ErrBadList
 		}
 		l.keys[name] = k
