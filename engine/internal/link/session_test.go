@@ -50,6 +50,42 @@ func TestStartCommand(t *testing.T) {
 	}
 }
 
+// A tmux place is asked for exactly the one command of plan B2.5 line 2, and nothing more: this app's own
+// tmux server by its own socket, no config file of his read or written, and the place's session attached when
+// it is already there, which is what keeps a job alive through a link that is truly gone.
+func TestATmuxPlaceIsAskedExactlyThis(t *testing.T) {
+	w := setup(t, withSessions)
+	l := up(t, w)
+	if _, err := l.OpenShell(ShellOptions{Folder: "/srv/it's here", Tmux: "build", Term: "xterm-256color", Cols: 120, Rows: 40}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	got := w.box.Sessions()
+	if len(got) != 1 {
+		t.Fatalf("%d sessions", len(got))
+	}
+	want := `exec tmux -L berth -f /dev/null set -g mouse on \; new-session -A -s 'build' -c '/srv/it'\''s here'`
+	if len(got[0].Asked) != 2 || got[0].Asked[0] != "pty-req" || got[0].Asked[1] != "exec" || got[0].Command != want {
+		t.Fatalf("asked %v, command %q; want %q", got[0].Asked, got[0].Command, want)
+	}
+}
+
+// A name tmux would not leave alone never reaches a box: the window holds the same rule, and this is the
+// last place it can be held.
+func TestATmuxNameThatIsNotOneNeverReachesABox(t *testing.T) {
+	w := setup(t, withSessions)
+	l := up(t, w)
+	for _, bad := range []string{"a b", "a.b", "a:b", "a;reboot", "a'b", "../x", string(make([]byte, 33))} {
+		if _, err := l.OpenShell(ShellOptions{Folder: "/srv", Tmux: bad, Term: "xterm", Cols: 80, Rows: 24}); !errors.Is(err, ErrTmuxName) {
+			t.Fatalf("OpenShell took the name %q: %v", bad, err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := w.box.Sessions(); len(got) != 0 {
+		t.Fatalf("%d sessions were opened for names that are not names", len(got))
+	}
+}
+
 // What a box is asked when a place opens is exactly this and nothing more (plan B2.5, B10): a terminal, then
 // the one start command. And for a tab with no place: a terminal, then a plain shell.
 func TestABoxIsAskedExactlyThis(t *testing.T) {

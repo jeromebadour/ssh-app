@@ -14,7 +14,11 @@ import (
 type ShellOptions struct {
 	// Folder is the place's folder. Empty asks the box for a plain shell. It comes only from the saved place,
 	// never from anything a box sent (plan B2.5).
-	Folder     string
+	Folder string
+	// Tmux is the session name of a tmux place (plan B2.5, line 2). Empty is a plain place. It comes only
+	// from the saved place, and its name is held to letters, digits, dash and underscore, so nothing in it
+	// can be read as anything but a name.
+	Tmux       string
 	Term       string // the terminal type; the one thing about this side a box is told
 	Cols, Rows int
 }
@@ -22,19 +26,72 @@ type ShellOptions struct {
 // ErrFolderName is returned for a folder whose name cannot be put in a command safely.
 var ErrFolderName = errors.New("link: the folder's name holds a control character and is never put in a command")
 
+// ErrTmuxName is returned for a tmux place whose session name is not one of the names this app allows.
+var ErrTmuxName = errors.New("link: a tmux place's name is letters, digits, dash and underscore only")
+
+// TmuxName says whether a name may be a tmux place's session name: letters, digits, dash and underscore,
+// 1 to 32 of them. tmux itself gives . and : a meaning in a name, and a name under this rule cannot carry
+// one, so a place's name reaches tmux as a name and never as anything else.
+func TmuxName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // StartCommand is the one command the app gives a box when a place opens (plan B2.5, line 1): go to the folder,
 // then become the user's own login shell. It is the session's start command, not something typed. Empty for
 // no folder. The folder is quoted so that no character in it can be read as anything but part of the name.
 func StartCommand(folder string) (string, error) {
-	if folder == "" {
-		return "", nil
+	return StartIn(folder, "")
+}
+
+// StartIn is the same, with a tmux place's name when there is one (plan B2.5, line 2). A tmux place runs the
+// box's shell inside this app's own tmux server: its own socket, so it shares nothing with a tmux he runs
+// himself, and -f /dev/null, so no setting of his on that box is read or changed. The one setting it does
+// make is its own server's mouse mode, because without it the wheel scrolls nothing inside tmux and the
+// history he came for cannot be reached. new-session -A attaches to the place's session when it is already
+// there, which is the whole point: a job keeps running when the link dies.
+func StartIn(folder, tmux string) (string, error) {
+	if tmux == "" {
+		if folder == "" {
+			return "", nil
+		}
+		if err := plainEnough(folder); err != nil {
+			return "", err
+		}
+		return "cd -- '" + quoted(folder) + `' && exec "$SHELL" -l`, nil
 	}
+	if !TmuxName(tmux) {
+		return "", ErrTmuxName
+	}
+	cmd := `exec tmux -L berth -f /dev/null set -g mouse on \; new-session -A -s '` + tmux + `'`
+	if folder != "" {
+		if err := plainEnough(folder); err != nil {
+			return "", err
+		}
+		cmd += " -c '" + quoted(folder) + "'"
+	}
+	return cmd, nil
+}
+
+func plainEnough(folder string) error {
 	for _, r := range folder {
 		if r < 0x20 || r == 0x7f {
-			return "", ErrFolderName
+			return ErrFolderName
 		}
 	}
-	return "cd -- '" + strings.ReplaceAll(folder, "'", `'\''`) + `' && exec "$SHELL" -l`, nil
+	return nil
+}
+
+func quoted(s string) string {
+	return strings.ReplaceAll(s, "'", `'\''`)
 }
 
 // Shell is a tab's terminal session on the box.
@@ -48,7 +105,7 @@ type Shell struct {
 // OpenShell starts the tab's shell: a terminal of the given size, then either the start command for the
 // folder or a plain shell. Nothing else is sent, and nothing is ever typed into it by the app.
 func (l *Link) OpenShell(opt ShellOptions) (*Shell, error) {
-	cmd, err := StartCommand(opt.Folder)
+	cmd, err := StartIn(opt.Folder, opt.Tmux)
 	if err != nil {
 		return nil, err
 	}

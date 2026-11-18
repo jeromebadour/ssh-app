@@ -41,9 +41,12 @@ type boxAim struct {
 
 type shellAim struct {
 	Folder string `json:"folder"`
-	Term   string `json:"term"`
-	Cols   int    `json:"cols"`
-	Rows   int    `json:"rows"`
+	// Tmux is a tmux place's session name, empty for a plain place (plan B2.5, line 2). It is held to the
+	// same few characters here as it is in the window, because the engine is the last place it can be.
+	Tmux string `json:"tmux"`
+	Term string `json:"term"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }
 
 type real struct {
@@ -219,7 +222,7 @@ func runReal(o *out, frames <-chan frame.Frame, box boxAim, sh shellAim) int {
 	r.mu.Lock()
 	cols, rows := r.size[0], r.size[1]
 	r.mu.Unlock()
-	shell, err := l.OpenShell(link.ShellOptions{Folder: sh.Folder, Term: sh.Term, Cols: cols, Rows: rows})
+	shell, err := l.OpenShell(link.ShellOptions{Folder: sh.Folder, Tmux: sh.Tmux, Term: sh.Term, Cols: cols, Rows: rows})
 	if err != nil {
 		select { // no shell because the link went meanwhile: that is the link's end, said as such
 		case <-l.Done():

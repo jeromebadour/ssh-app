@@ -253,6 +253,7 @@ ul { list-style: none; }
    row is a fixed height, so the words would be cut off halfway down instead. */
 .bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
 .bm-more { width: 12px; height: 12px; color: var(--text-3); }
+.bm-keeps { width: 12px; height: 12px; color: var(--hue); }
 .bm-foot { padding-top: 4px; margin-top: 4px; border-top: 1px solid var(--line); }
 .bm-add { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px; color: var(--main); border-radius: var(--r-s); }
 
@@ -361,6 +362,10 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .visit-said { margin: 8px 0 0; padding: 8px 10px; max-height: 120px; overflow: auto; border-radius: 4px; background: var(--term-bg); color: var(--text-3); font-family: 'Plex Mono', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 .bm-foot { display: flex; gap: 6px; }
 .bm-settings { margin-left: auto; }
+.pl-keep { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px; border-radius: var(--r-s); color: var(--text-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.pl-keep:hover { color: var(--text); }
+.pl-keep input { position: absolute; width: 14px; height: 14px; margin: 0; opacity: 0; cursor: pointer; }
+.pl-keep-words { user-select: none; }
 .place-row { display: grid; grid-template-columns: 120px 1fr 16px; align-items: center; gap: 10px; height: 32px; padding: 0 10px; margin-bottom: 4px; border-radius: var(--r); background: var(--bg); }
 .pl-name { font-weight: 500; }
 .pl-path { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); }
