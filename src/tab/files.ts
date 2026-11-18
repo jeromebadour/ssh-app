@@ -5,6 +5,7 @@
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
 import { whenAs, whenShort } from '../common/when';
+import { openMenu, shutMenu, type MenuLine } from './menu';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
@@ -368,6 +369,54 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (let i = 0; i < SIZES.length; i++) if (Math.abs(SIZES[i]! - want) < Math.abs(SIZES[near]! - want)) near = i;
     setSize(near, false);
   });
+  // The right button, on the list. There was no menu anywhere in this app: not on a file, not on a folder,
+  // not on the empty part of a list, which he called one of the biggest gaps. What is in it is decided by
+  // what the press came down on, as his own reference menus do: a folder's and a file's are not the same.
+  el.list.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault();
+    const onRow = (e.target as HTMLElement | null)?.closest<HTMLElement>('.fb-row');
+    const name = onRow?.dataset['name'] ?? '';
+    const r = name === '' || name === '..' ? undefined : rows.find((x) => x.name === name);
+    // Several, when the press came down on one of them: the menu is about all of them, which is why a right
+    // press on a chosen row leaves what is chosen alone.
+    const several = r !== undefined && chosen.has(r.name) && chosen.size > 1 ? names().filter((n) => chosen.has(n)) : [];
+    const lines: MenuLine[] = [];
+    if (several.length > 0) {
+      const bytes = rows.filter((x) => several.includes(x.name) && x.kind === 'file').reduce((n, x) => n + x.size, 0);
+      lines.push({ glyph: 'bring', label: `Bring ${several.length} files over`, keys: 'Ctrl+S', run: () => { for (const n of several) bring(n); } });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'copy', label: 'Copy their paths', run: () => void port.copy(several.map((n) => join(where || asked, n)).join('\n')) });
+      lines.push({ glyph: 'size', label: `${size(bytes)} in ${several.length} chosen`, run: () => { said = `${several.length} chosen, ${size(bytes)}`; draw(); } });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'bin', label: `Delete ${several.length}`, keys: 'Delete', danger: true, run: () => askToDelete(several), id: 'fb-menu-delete' });
+    } else if (r !== undefined) {
+      if (r.kind === 'folder') lines.push({ glyph: 'folder', label: 'Open', keys: 'Enter', run: () => goTo(join(where || asked, r.name)) });
+      if (r.kind === 'file') lines.push({ glyph: 'file', label: 'Open', keys: 'Enter', run: () => openFile(join(where || asked, r.name), r.name, r.size) });
+      if (r.kind === 'file') lines.push({ glyph: 'bring', label: 'Bring it over', keys: 'Ctrl+S', run: () => bring(r.name), id: 'fb-menu-bring' });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'rename', label: 'Rename', keys: 'F2', run: () => askToRename(r.name) });
+      lines.push({ glyph: 'copy', label: 'Copy its path', run: () => void port.copy(join(where || asked, r.name)) });
+      if (r.kind === 'file') lines.push({ glyph: 'sum', label: "The box's own hash", keys: 'Ctrl+H', run: () => askHash(r.name, 'sha256') });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'bin', label: 'Delete', keys: 'Delete', danger: true, run: () => askToDelete([r.name]), id: 'fb-menu-delete' });
+    } else {
+      // The empty part of the list, or the way up: the folder itself is what the menu is about.
+      const up = parent(where || asked);
+      if (up !== '') lines.push({ glyph: 'up', label: 'The folder above', run: () => goTo(up) });
+      lines.push({ glyph: 'newfolder', label: 'New folder', run: () => askForFolder(), id: 'fb-menu-newfolder' });
+      lines.push({ glyph: 'send', label: 'Send a file here', run: () => sendBtn.click() });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'copy', label: 'Copy this folder\u2019s path', run: () => void port.copy(where || asked) });
+      lines.push({ glyph: 'bin', label: 'What was deleted here', run: () => binBtn.click() });
+    }
+    if (r !== undefined && !chosen.has(r.name)) {
+      chooseOne(r.name);
+      place(r.name);
+      draw();
+    }
+    openMenu(at, e.clientX, e.clientY, lines, glyph);
+  });
+
   // The mouse's own back and forward buttons, which is how he moves through folders in every other window he
   // uses. They are taken on the pane rather than on the list, because they mean the same thing wherever in
   // the pane the pointer is standing.

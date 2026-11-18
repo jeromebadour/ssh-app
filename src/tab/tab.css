@@ -63,7 +63,7 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 #grip:hover::before, #grip:focus-visible::before, #grip[data-held]::before { top: 4px; height: auto; bottom: 4px; margin-top: 0; background: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
 #grip:hover::after, #grip:focus-visible::after, #grip[data-held]::after { background: none; }
 #grip:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -3px; }
-#files { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#files { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 
 /* The folder this is, and the one thing that acts on the folder itself. */
@@ -194,6 +194,21 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    holds the focus; the one that deletes carries the colour that means it (BUILD-RULES 2.20). */
 .fb-ask { padding: 8px 0 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 .fb-ask-head { color: #d7dee4; font-weight: 500; }
+
+/* The menu under the right button. One look for all ten places it is used in. It is inside the pane rather
+   than the window, so it cannot be drawn over the shell above, and it is kept inside the pane: near an edge
+   it opens the other way instead of running off. */
+.fb-menu { position: absolute; z-index: 40; min-width: 11.5em; padding: 4px; border-radius: 5px; background: #1d2630; box-shadow: inset 0 0 0 1px var(--line), 0 6px 20px rgb(0 0 0 / .45); overflow: auto; }
+.fb-menu-one { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px; padding: 3px 8px; border: 0; border-radius: 3px; background: none; color: #c3ccd3; font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.fb-menu-one:hover, .fb-menu-one:focus { background: color-mix(in srgb, var(--hue) 24%, transparent); color: #e3e9ed; outline: none; }
+.fb-menu-one:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+/* Anything that removes or stops wears the colour that means that, here as everywhere else. */
+.fb-menu-danger { color: #cc8d84; }
+.fb-menu-danger:hover, .fb-menu-danger:focus { background: color-mix(in srgb, #cc8d84 22%, transparent); color: #e2a79e; }
+.fb-menu-words { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The press that does the same thing, quiet, at the end: the menu is where the keyboard is learned. */
+.fb-menu-keys { flex: none; color: #7c8792; font-family: 'Plex Mono', monospace; font-size: .85em; }
+.fb-menu-apart { height: 1px; margin: 4px 2px; background: var(--line); }
 .fb-ask-said { margin-top: 4px; color: #96a3ae; }
 /* What goes, named one by one, when several go at once. A count alone is not something a person can check. */
 .fb-ask-names { max-height: 8.5em; overflow: auto; margin: 6px 0 0; padding: 6px 8px; border-radius: 3px; background: color-mix(in srgb, #c3ccd3 6%, transparent); }

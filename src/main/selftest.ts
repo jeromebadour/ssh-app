@@ -1447,6 +1447,46 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
             await sleep(150);
 
+            // ---- The menu under the right button. ----
+            // He called this one of the biggest gaps, and it was total: not one contextmenu handler existed
+            // anywhere in the app, on a file, a folder, the empty part of a list, the path, the terminal or a
+            // tab. What is in it is decided by what the press came down on, as his own reference menus do.
+            const menuOn = async (what: string): Promise<string[]> => {
+              await js(front.view, `(() => { const r = ${what}; const b = r.getBoundingClientRect(); r.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(b.left + 8), clientY: Math.round(b.top + 4) })); })()`);
+              await sleep(160);
+              return js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+            };
+            const shutMenuNow = (): Promise<void> => js(front.view, `document.getElementById('fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            const aFile = await js<string>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.dataset.kind === 'file')?.dataset.name ?? ''`);
+            const aFolder = await js<string>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.dataset.kind === 'folder' && r.dataset.name !== '..')?.dataset.name ?? ''`);
+            check('there is a file and a folder to press on', aFile !== '' && aFolder !== '', [aFile, aFolder]);
+            const onFile = await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${aFile}"]')`);
+            check(`a file's menu offers what a file can do: ${onFile.join(', ')}`, onFile.includes('Open') && onFile.includes('Bring it over') && onFile.includes('Rename') && onFile.includes('Delete') && onFile.includes("The box's own hash"), onFile);
+            const keysOn = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-keys')].map((k) => k.textContent)`);
+            check(`and every item that has a press says it on itself: ${keysOn.join(' ')}`, keysOn.includes('Delete') && keysOn.includes('F2') && keysOn.includes('Ctrl+S'), keysOn);
+            await shutMenuNow();
+            check('Escape shuts it', (await js<number>(front.view, `document.getElementById('fb-menu') ? 1 : 0`)) === 0, '');
+            const onFolder = await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${aFolder}"]')`);
+            check(`a folder's menu is not a file's: ${onFolder.join(', ')}`, onFolder.includes('Open') && !onFolder.includes('Bring it over') && !onFolder.includes("The box's own hash") && onFolder.includes('Delete'), onFolder);
+            await shutMenuNow();
+            const onNothing = await menuOn(`document.getElementById('fb-list')`);
+            check(`a press on the empty part is about the folder itself: ${onNothing.join(', ')}`, onNothing.includes('New folder') && onNothing.includes('Send a file here') && !onNothing.includes('Rename'), onNothing);
+            await shutMenuNow();
+            const twoFiles = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.dataset.name).slice(0, 2)`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${twoFiles[0]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`);
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${twoFiles[1]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))`);
+            const onSeveral = await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${twoFiles[0]}"]')`);
+            const stillChosen = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row[data-chosen="yes"]')].map((r) => r.dataset.name)`);
+            check(`a press on one of several is about all of them, and does not lose them: ${onSeveral.join(', ')}`, onSeveral.includes('Delete 2') && onSeveral.includes('Bring 2 files over') && stillChosen.length === 2, [onSeveral, stillChosen]);
+            await shutMenuNow();
+            await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${aFile}"]')`);
+            const firstHas = await js<boolean>(front.view, `document.activeElement?.classList.contains('fb-menu-one') ?? false`);
+            await js(front.view, `document.getElementById('fb-menu').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))`);
+            const moved = await js<string>(front.view, `document.activeElement?.querySelector('.fb-menu-words')?.textContent ?? ''`);
+            check(`it opens with the keyboard on its first item and the arrows move down it: ${moved}`, firstHas && moved !== '' && moved !== onFile[0], [firstHas, moved, onFile[0]]);
+            await shot('a-menu', 'the menu under the right button, on a file', front);
+            await shutMenuNow();
+
             // ---- A colour for each kind of thing. ----
             // Beside MobaXterm, whose list puts a different coloured mark on every kind, every row here wore
             // one grey glyph: a folder of a hundred files had to be read word by word.
