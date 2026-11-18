@@ -138,6 +138,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // Where the keyboard stands in the list, held by the name of the row rather than by its number: pages keep
   // arriving and the sort moves rows about, and a person's place should not move with them.
   let standing = '';
+  // Which rows are chosen, and the row a run of them is measured from. He asked for this against MobaXterm:
+  // "i cant do select multiple files like mobaxterm". Names rather than rows, because the list is drawn
+  // again on every answer from the box and a kept row would be a row that no longer exists.
+  let chosen = new Set<string>();
+  let anchor = '';
   let said = ''; // the answer to a press that opened nothing, shown on the foot until the place moves
   // Files being brought over to the PC, by the number of the ask that is bringing each. A tab may be bringing
   // more than one at a time, and the strip at the foot says what each is doing.
@@ -226,6 +231,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   findField.addEventListener('input', () => {
     only = findField.value;
     standing = ''; // the row the keyboard stood on may be hidden now; it is settled again from what is drawn
+    chosen = new Set(); // and nothing of the folder just left stays chosen in the one just opened
+    anchor = '';
     draw();
   });
   // Escape clears it and gives the list back, which is the way out a person reaches for first.
@@ -768,6 +775,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       ? [`${bin.rows.length} in the trash${bin.busy ? ', reading' : ''}`, ...(bin.said === '' ? [] : [bin.said])]
       : [
           `${rows.length} ${rows.length === 1 ? 'item' : 'items'}${busy ? ', reading' : ''}`,
+          ...(chosen.size === 0 ? [] : [`${chosen.size} chosen${chosenBytes() > 0 ? `, ${size(chosenBytes())}` : ''}`]),
           ...(only.trim() === '' || rows.length === 0 ? [] : [`${rows.length - shown(rows).length} hidden by the filter`]),
         ];
     if (!bin.open && bin.said !== '') bits.push(bin.said);
@@ -1175,11 +1183,22 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // words on screen would be judging how a size is written, not how the list is ordered.
     e.dataset['bytes'] = String(r.size);
     e.dataset['changed'] = String(r.mtime);
+    if (chosen.has(r.name)) e.dataset['chosen'] = 'yes';
+    e.setAttribute('aria-selected', chosen.has(r.name) ? 'true' : 'false');
     // Every row is a place the keyboard can stand. Which one holds the tab stop is settled after the whole
     // list is on screen, not here.
     e.setAttribute('role', 'option');
-    e.addEventListener('mousedown', () => {
+    e.addEventListener('mousedown', (ev: MouseEvent) => {
+      // The right button never changes what is chosen when it comes down on something already chosen: a menu
+      // for several is opened by pressing one of them, and losing the rest to that press would be the opposite
+      // of what was asked.
+      if (ev.button === 2 && chosen.has(r.name)) {
+        place(r.name);
+        return;
+      }
+      chooseByPress(r.name, ev);
       place(r.name);
+      if (standing === r.name) draw();
       carry(r);
     });
     e.append(glyph(id === 'fb-up' ? 'up' : r.kind));
@@ -1315,12 +1334,52 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
-  const step = (by: number): void => {
+  // The three gestures every file list shares: a press chooses one, Ctrl adds or takes one away, Shift takes
+  // everything between what was last pressed and this. The way up is never chosen: it is the window's own way
+  // out of a folder, not a thing on the box.
+  const choosable = (): string[] => names().filter((n) => n !== '..');
+  const chooseOne = (name: string): void => {
+    chosen = name === '..' ? new Set() : new Set([name]);
+    anchor = name === '..' ? '' : name;
+  };
+  const chooseAlso = (name: string): void => {
+    if (name === '..') return;
+    if (chosen.has(name)) chosen.delete(name);
+    else chosen.add(name);
+    anchor = name;
+  };
+  const chooseTo = (name: string): void => {
+    const all = choosable();
+    const from = all.indexOf(anchor === '' ? name : anchor);
+    const to = all.indexOf(name);
+    if (from < 0 || to < 0) {
+      chooseOne(name);
+      return;
+    }
+    chosen = new Set(all.slice(Math.min(from, to), Math.max(from, to) + 1));
+  };
+  const chooseByPress = (name: string, e: MouseEvent | KeyboardEvent): void => {
+    if (e.shiftKey) chooseTo(name);
+    else if (e.ctrlKey || e.metaKey) chooseAlso(name);
+    else chooseOne(name);
+  };
+  // How much is chosen, in bytes, counting only the files: a folder's own size says nothing about what is in it.
+  const chosenBytes = (): number => rows.filter((r) => chosen.has(r.name) && r.kind === 'file').reduce((n, r) => n + r.size, 0);
+
+  const step = (by: number, e?: KeyboardEvent): void => {
     const all = names();
     if (all.length === 0) return;
     const now = all.indexOf(standing);
     const want = now < 0 ? (by > 0 ? 0 : all.length - 1) : Math.min(all.length - 1, Math.max(0, now + by));
-    place(all[want]!);
+    const to = all[want]!;
+    // Moving with Shift held takes everything between where the run began and where it now stands; moving
+    // without it starts a new run of one. A list whose arrows move a frame but choose nothing is a list that
+    // cannot be worked from the keyboard at all.
+    if (e?.shiftKey) chooseTo(to);
+    else chooseOne(to);
+    const moved = standing !== to;
+    place(to);
+    if (!moved) draw();
   };
 
   // Enter on a row does what a double-click does. A row that is neither a file nor a folder opens nothing and
@@ -1545,6 +1604,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     }
     // And the one other: asking the box for its own hash of the file the list is standing on. Shift makes it
     // md5, which is the only other hash a box may ever be asked for.
+    // Everything in the folder. It goes here, above the guard that turns every other press with Ctrl away:
+    // put below it, this was never reached at all, which is what the probe found.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'a' || e.key === 'A')) {
+      chosen = new Set(choosable());
+      anchor = chosen.size > 0 ? [...chosen][0]! : '';
+      said = chosen.size === 0 ? 'There is nothing in this folder to choose' : `${chosen.size} chosen`;
+      draw();
+      e.preventDefault();
+      return;
+    }
     if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
       askHash(standing, e.shiftKey ? 'md5' : 'sha256');
       e.preventDefault();
@@ -1556,12 +1625,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (standing !== '' && standing !== '..') askToDelete(standing);
     } else if (e.key === 'F2') {
       askToRename(standing);
-    } else if (e.key === 'ArrowDown') step(1);
-    else if (e.key === 'ArrowUp') step(-1);
+    } else if (e.key === 'ArrowDown') step(1, e);
+    else if (e.key === 'ArrowUp') step(-1, e);
     else if (e.key === 'Home') place(all[0] ?? '');
     else if (e.key === 'End') place(all[all.length - 1] ?? '');
-    else if (e.key === 'PageDown') step(10);
-    else if (e.key === 'PageUp') step(-10);
+    else if (e.key === 'PageDown') step(10, e);
+    else if (e.key === 'PageUp') step(-10, e);
     else if (e.key === 'Enter' || e.key === ' ') enterHere();
     else if (e.key === 'ArrowRight') {
       if (rows.find((x) => x.name === standing)?.kind !== 'folder') return;

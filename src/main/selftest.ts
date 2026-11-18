@@ -1409,6 +1409,48 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
             await sleep(150);
 
+            // ---- Several files at once. ----
+            // "i cant do select multiple files like mobaxterm". The list had no notion of a selection at all:
+            // one row held the keyboard's place and that was the whole of it.
+            const chosenNow = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row[data-chosen="yes"]')].map((r) => r.dataset.name)`);
+            const press = (name: string, mods: Record<string, boolean> = {}): Promise<void> => js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${name}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ${Object.entries(mods).map(([k, v]) => `${k}: ${v}`).join(', ')} }))`);
+            // The names are read off the list as it is drawn now, never written in here: a filter or an order
+            // left on by an earlier probe would make a written-in name a row that is not there.
+            const order = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name).filter((n) => n !== '..')`);
+            check('there are enough rows drawn to choose among', order.length >= 5, order);
+            const one = order[1]!;
+            const other = order[3]!;
+            await press(one);
+            check('a press chooses the one it lands on', JSON.stringify(await chosenNow()) === JSON.stringify([one]), await chosenNow());
+            await press(other, { ctrlKey: true });
+            const two = await chosenNow();
+            check('Ctrl and a press adds another without losing the first', two.length === 2 && two.includes(one) && two.includes(other), two);
+            await press(other, { ctrlKey: true });
+            check('and the same press again takes it away', JSON.stringify(await chosenNow()) === JSON.stringify([one]), await chosenNow());
+            await press(order[0]!);
+            await press(order[4]!, { shiftKey: true });
+            const run = await chosenNow();
+            const from = 0;
+            const to = 4;
+            check(`Shift and a press takes the whole run between them: ${run.length} rows`, run.length === Math.abs(to - from) + 1 && run.length > 2 && JSON.stringify(run) === JSON.stringify(order.slice(Math.min(from, to), Math.max(from, to) + 1)), [run, order.slice(Math.min(from, to), Math.max(from, to) + 1)]);
+            // What the foot says about it, which is where he reads how much he is about to move.
+            await shot('chosen', 'several files chosen at once, and the foot saying how many and how much', front);
+            const footSays = await js<string>(front.view, `document.getElementById('fb-foot')?.textContent ?? ''`);
+            check('and the foot says how many are chosen and how much they come to', /\d+ chosen/.test(footSays) && footSays.includes('chosen'), footSays);
+            // Everything in the folder, by the one key that means it everywhere, and never the way out.
+            await js(front.view, `document.getElementById('fb-list').focus()`);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }))`);
+            const all = await chosenNow();
+            check(`Ctrl and A takes everything in the folder, and never the way out of it: ${all.length} of ${order.length}`, all.length === order.length && !all.includes('..'), [all.length, order.length]);
+            // The arrows choose as they move, and with Shift held they take everything on the way.
+            await press(order[0]!);
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))`);
+            const afterArrow = await chosenNow();
+            await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }))`);
+            const afterShift = await chosenNow();
+            check('an arrow chooses where it lands, and with Shift it takes everything on the way', afterArrow.length === 1 && afterArrow[0] !== order[0] && afterShift.length === 2 && afterShift.includes(afterArrow[0]!), [afterArrow, afterShift]);
+            await press(order[0]!);
+
             const byName = await names();
             // Folders come first whatever the order is by, and the way up is always the first row.
             // The way up is left out: it is a folder in every order there is, so a check that counted it would
