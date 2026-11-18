@@ -2137,6 +2137,21 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // Put back where a tab starts, which is the way out of any corner it was dragged into.
           await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
           check('and a press puts it back where a tab starts', await until(async () => Math.abs((await wide()) - was) < 3, 3000), [was, await wide()]);
+          // And the way back out really is a way out: the next key must step from where the grip now stands,
+          // not from the corner it was just taken out of. Taking the width off the pane and leaving the share
+          // the grip was holding put the very next arrow key straight back in that corner.
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+          await until(async () => (await wide()) > was + 80, 3000);
+          const corner = await wide();
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+          await until(async () => Math.abs((await wide()) - was) < 3, 3000);
+          const back = await wide();
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))`);
+          await sleep(200);
+          const afterKey = await wide();
+          const announced = await js<string>(quiet.view, `document.getElementById('grip')?.getAttribute('aria-valuenow') ?? ''`);
+          check(`the next key steps from where it stands, not from the corner: ${corner} in the corner, ${back} put back, ${afterKey} after one step left, announcing ${announced}`, Math.abs(back - was) < 3 && afterKey < back && afterKey > was - 40 && announced !== '', [was, corner, back, afterKey, announced]);
+          await js(quiet.view, `document.getElementById('grip').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
           // And the same box, having something to say, still says it: the slot is collapsed, not removed.
           await lab.tell('banner this box has something to say');
           const loud = ctx.openTab(id, 'logs')!;
@@ -2148,6 +2163,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // Folded, as it always is: the line says who said it and how much, and the words themselves are
           // behind it until he opens them. What this holds is that the slot takes its room back to show it.
           check('what the box said is shown, and the slot takes its room back to show it', saidLoud === 'yes' && roomLoud > 0 && words.includes('said 1 line at sign-in'), { saidLoud, roomLoud, words });
+          // And a box that prints newlines and no words has said nothing. Folding a box's words drops blank
+          // lines and hands back an object either way, so "is there something to fold" counted this as having
+          // spoken: the band came back whole and told him the box had said nothing in it.
+          await lab.tell('banner \\n\\n\\n');
+          const blank = ctx.openTab(id, 'logs')!;
+          check('a tab on a box whose sign-in text is only blank lines comes up', await until(() => blank.engine.state === 'ready' && blank.engine.link.phase === 'up', 20_000), blank.engine.link.phase);
+          await js<void>(blank.view, `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))`);
+          await sleep(300);
+          const blankSaid = await js<string>(blank.view, `document.getElementById('signin-at')?.dataset.said ?? 'missing'`);
+          const blankRoom = await js<number>(blank.view, `Math.round(document.getElementById('signin-at')?.getBoundingClientRect().height ?? -1)`);
+          check('blank lines are not words: it costs the window no room either', blankSaid === 'no' && blankRoom === 0, { blankSaid, blankRoom });
+          ctx.closeTab(blank.id);
           ctx.closeTab(quiet.id);
           ctx.closeTab(loud.id);
           await lab.tell('banner');

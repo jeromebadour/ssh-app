@@ -370,20 +370,30 @@ window.addEventListener('keydown', (e) => {
   };
   grip.addEventListener('pointerup', letGo);
   grip.addEventListener('pointercancel', letGo);
-  // A double press puts it back where a tab starts, which is the way out of any corner it has been dragged into.
-  grip.addEventListener('dblclick', () => split.style.removeProperty('--files-w'));
+  // Back where a tab starts, which is the way out of any corner it has been dragged into. Both ways out go
+  // through here: taking the property off and leaving the share the grip was holding meant the next arrow key
+  // stepped from the corner it had just left and landed straight back in it.
+  const putBack = (): void => {
+    split.style.removeProperty('--files-w');
+    share = 0;
+    grip.setAttribute('aria-valuenow', String(Math.round(shareNow() * 100)));
+  };
+  grip.addEventListener('dblclick', putBack);
   grip.addEventListener('keydown', (e: KeyboardEvent) => {
     const step = e.shiftKey ? 0.1 : 0.02;
     if (e.key === 'ArrowLeft') put((share || shareNow()) - step);
     else if (e.key === 'ArrowRight') put((share || shareNow()) + step);
     else if (e.key === 'Home') put(LEAST);
     else if (e.key === 'End') put(MOST);
-    else if (e.key === 'Enter' || e.key === ' ') { split.style.removeProperty('--files-w'); share = 0; }
+    else if (e.key === 'Enter' || e.key === ' ') putBack();
     else return;
     e.preventDefault();
   });
   grip.setAttribute('aria-valuemin', String(Math.round(LEAST * 100)));
   grip.setAttribute('aria-valuemax', String(Math.round(MOST * 100)));
+  // Where it stands at rest, said once the panes have a width: a separator that announces nothing until it is
+  // first moved tells a screen reader nothing about the window it is sitting in.
+  requestAnimationFrame(() => grip.setAttribute('aria-valuenow', String(Math.round(shareNow() * 100))));
 }
 
 // The terminal is as large as the view, in whole cells, and the box is told its size.

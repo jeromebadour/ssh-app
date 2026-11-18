@@ -320,8 +320,11 @@ func main() {
 			say(map[string]any{"prompting": strings.TrimSpace(rest)})
 		case "banner":
 			// <text>, or nothing at all for a box that says nothing at sign-in, as nearly every real box does.
-			box.SetBanner(strings.TrimSpace(rest))
-			say(map[string]any{"banner": strings.TrimSpace(rest)})
+			// \n in the text is a real newline, so a banner of nothing but blank lines can be asked for: a box
+			// that prints two newlines and no words has said nothing, and the window must agree.
+			said := strings.ReplaceAll(strings.TrimSpace(rest), "\\n", "\n")
+			box.SetBanner(said)
+			say(map[string]any{"banner": said})
 		case "quiet":
 			box.Quiet(rest == "on")
 			say(map[string]any{"quiet": rest == "on"})
