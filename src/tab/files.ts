@@ -5,7 +5,7 @@
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
 import { whenAs, whenShort } from '../common/when';
-import { openMenu, shutMenu, type MenuLine } from './menu';
+import { openMenu, shutMenu, type MenuLine } from '../ui/menu';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.

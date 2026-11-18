@@ -105,6 +105,11 @@ ul { list-style: none; }
    A drag across the tabs used to carry a ghost of their names. Dialogs are not here on purpose: what they
    say is often a path or a fingerprint he has to be able to take away with him. */
 .tabbar, .status { user-select: none; }
+/* The layer the window's own menus are drawn in. It covers the window so a menu can be kept inside it, and
+   it lets every press through except the ones that land on a menu itself. */
+#shell-menus { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
+#shell-menus .fb-menu { pointer-events: auto; }
+#shell-menus:empty { display: none; }
 .bar-tools { display: flex; align-items: center; gap: 4px; }
 .tool { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-2); border-radius: var(--r); }
 

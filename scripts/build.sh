@@ -34,7 +34,7 @@ esb src/shell/shell.tsx   --platform=browser --format=iife --target=chrome156 --
 cp src/tab/index.html src/tab/tab.css node_modules/@xterm/xterm/css/xterm.css dist/tab/
 cp src/shell/index.html dist/shell/
 # Berth's one stylesheet and its typefaces, beside every page that uses them.
-ui_into() { mkdir -p "$1/fonts"; cp src/ui/berth.css src/ui/fonts.css "$1/"; while read -r f; do [ -n "$f" ] && cp "node_modules/$f" "$1/fonts/"; done < src/ui/fonts.list; }
+ui_into() { mkdir -p "$1/fonts"; cp src/ui/berth.css src/ui/fonts.css src/ui/menu.css "$1/"; while read -r f; do [ -n "$f" ] && cp "node_modules/$f" "$1/fonts/"; done < src/ui/fonts.list; }
 ui_into dist/shell
 ui_into dist/tab
 # The easel: a lab-only page that puts pictures of the window together. Served to no one in a release build.
