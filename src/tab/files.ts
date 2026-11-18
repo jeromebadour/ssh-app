@@ -1625,7 +1625,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // order he has to take on trust, and a size set in the name's own weight shouts as loud as the name.
     const right = document.createElement('span');
     right.className = 'fb-size';
-    right.textContent = r.kind === 'folder' ? '' : r.kind === 'file' ? inUnit(r.size) : r.kind;
+    // Numbers alone, under a head that names one unit. The word "link" used to sit here for anything that was
+    // neither a file nor a folder, which put a word in a column of digits under a head reading Size (MB), and
+    // nothing in that column could be lined up against anything. What a row is, is said by its own glyph and
+    // its colour, which is where it belongs.
+    right.textContent = r.kind === 'file' ? inUnit(r.size) : '';
     if (r.kind === 'file') right.title = size(r.size);
     const when = document.createElement('span');
     when.className = 'fb-when';

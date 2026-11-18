@@ -187,6 +187,28 @@ func main() {
 				continue
 			}
 			say(map[string]any{"wrote": where, "bytes": len(body)})
+		case "aged":
+			// Puts an old time of change on a file that is already there, so the window's own date column has
+			// something that is not today in it. Every file this lab makes is made now, so a probe that reads
+			// the column sees today's shape alone and cannot tell a column that drops the date from one that
+			// keeps it. The argument is the path and how many days back, as "var/log/syslog 400".
+			parts := strings.Fields(strings.TrimSpace(rest))
+			if len(parts) != 2 {
+				say(map[string]any{"error": "a path and how many days back"})
+				continue
+			}
+			days, err := strconv.Atoi(parts[1])
+			if err != nil || days < 1 || days > 20000 {
+				say(map[string]any{"error": "a number of days between 1 and 20000"})
+				continue
+			}
+			full := filepath.Join(files, filepath.FromSlash(strings.TrimPrefix(parts[0], "/")))
+			when := time.Now().AddDate(0, 0, -days)
+			if err := os.Chtimes(full, when, when); err != nil {
+				say(map[string]any{"error": err.Error()})
+				continue
+			}
+			say(map[string]any{"aged": parts[0], "to": when.UTC().Format(time.RFC3339)})
 		case "pages":
 			say(map[string]any{"pages": hostile.Pages()})
 		case "filepace":
