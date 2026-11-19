@@ -1363,20 +1363,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // can hold and the PC cannot. On Windows the lab's box is a folder on this very machine, so no
             // such name can be made at all: there the rule is held by tests/landing.test.ts, name by name,
             // and by this probe on Linux.
+            // A file is put back a year, for the column that says when a file was changed. Every file this lab
+            // makes is made now, so without this the column holds only today's shape, and a column that dropped
+            // the date entirely would read exactly the same. And that same file is answered for with no long
+            // form, as some boxes really do, so the Owner column holds a name on every row but that one and a
+            // bare number on it: the pair he sees on his own screen. It is syslog and not one of the odd-named
+            // files because a Windows runner cannot hold those names at all, and these must hold on both.
+            await lab.tell('aged var/log/syslog 400');
+            await lab.tell('bare syslog');
             if (process.platform === 'win32') {
               check('a name this PC cannot hold: not provable here, because the lab\u2019s box is this PC', true, 'skipped on Windows: see tests/landing.test.ts');
             } else {
             const odd = await lab.tell('oddnames var/log');
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
-            // A file is put back a year, for the column that says when a file was changed. Every file this lab
-            // makes is made now, so without this the column holds only today's shape, and a column that dropped
-            // the date entirely would read exactly the same. And that same file is answered for with no long
-            // form, as some boxes really do, so the Owner column holds a name on every row but that one and a
-            // bare number on it: the pair he sees on his own screen. Both are syslog and not one of the
-            // odd-named files because a Windows runner cannot hold those names at all, and these must hold on
-            // both. The folder is re-listed just below, so this costs no navigation of its own.
-            await lab.tell('aged var/log/syslog 400');
-            await lab.tell('bare syslog');
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
             await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -1715,6 +1714,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await clickOn('#fb-back', front);
             await until(async () => (await pathNow()) === startedAt, 8000);
 
+            // The folder is listed again before the columns are read. The lab has made several files since the
+            // pane last asked, and on a Windows runner the probes that re-list are the ones skipped there, so
+            // everything below used to be read off a list made before half of this folder existed: four rows
+            // where the box held eight. A stale list is not a list of that folder.
+            await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('log'), 10_000);
+            await js(front.view, `document.querySelector('[data-name="log"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await names()).includes('wide.log'), 10_000);
+            await sleep(200);
             const asksBefore = { ...ctx.filesAsked() };
             // ---- The list has heads over its columns, and they hold at every size the pane has. ----
             // Beside MobaXterm he said the list had no column heads, that clicking a size should order by it,
@@ -1763,10 +1771,17 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               return out;
             })()`);
             const named = Object.entries(owners).filter(([n]) => n !== '..' && n !== 'syslog');
+            if (process.platform === 'win32') {
+              // A Windows box has no owner of the kind this column shows, and the lab's box here is this PC.
+              // It says neither a name nor a number, so every cell is empty: the third case the column is
+              // built for, and the one that must never come out as root.
+              check('a box that can say no owner at all leaves the column empty, and never draws it as root', named.length >= 2 && Object.values(owners).every((w) => w === ''), owners);
+            } else {
             const everyRowSaysWho = named.length >= 2 && named.every(([, w]) => /^[A-Za-z][\w.-]*$/.test(w));
             check('every row says who owns it, in the words the box used', everyRowSaysWho && owners['..'] === '', owners);
             // And the one the box named no owner for in words falls back to the number it did give.
             check('a box that gives only a number for the owner is shown that number, not a name it never said', /^\d+$/.test(owners['syslog'] ?? ''), owners['syslog']);
+            }
             // The date a file was changed, short enough for the column and still able to answer which of two
             // files is the newer: a day and a time for anything but today, the time alone for today's. One file
             // was put back a year when the lab made them, so both shapes are on screen here: a column that
