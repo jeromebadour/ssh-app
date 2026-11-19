@@ -5,6 +5,7 @@
 //     main's work, from a key or a click it saw itself.
 //   - Output is counted as taken only once the terminal has worked through it, so a box sends ahead of the
 //     window by a fixed amount at most.
+import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { guard } from './guards';
 
@@ -94,6 +95,10 @@ export interface Term {
   spot(text: string): { x: number; y: number; hand: boolean } | null; // where these words are drawn, and whether the pointer is a hand; for the lab
   links(row: number): string[]; // what the app would treat as an address to open on this row; for the lab
   bracketedPaste(): boolean;
+  // Which of the two renderers is drawing: 'webgl' or 'plain'. There is no third answer and no 'we do not
+  // know': a terminal that quietly fell back to the plain one is a terminal whose prompt has no colour in it,
+  // and that is a thing the window has to be able to say (his rule: nothing ever fails silently).
+  drawnBy(): 'webgl' | 'plain';
   // Everything the terminal holds, selected and given back: what Ctrl+Shift+A copies. Ctrl+A is the shell's
   // own and is never taken from him.
   takeAll(): string;
@@ -183,11 +188,52 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   };
   term.registerLinkProvider(provider);
 
+  // Which renderer ended up drawing. The plain one ignores a colour set on a decoration, so the prompt's own
+  // letters can only be coloured by the WebGL one (his, 2026-11-18 night, after this chat proposed rewriting
+  // the bytes a box sent and he refused it). A machine with no WebGL, or one whose context is lost while it
+  // runs, falls back to the plain renderer and the window says which it is drawing with.
+  let drawnBy: 'webgl' | 'plain' = 'plain';
+  // Which renderer is drawing is said in the terminal's own head and never in its output: the output is what
+  // the box said, and a line of Berth's own in it is a line he has to tell from the box's. It shows only
+  // while the renderer is the plain one, which is the state worth saying.
+  const sayPlain = (): void => {
+    const said = document.getElementById('term-drawn');
+    if (!said) return;
+    said.hidden = false;
+    said.textContent = 'no graphics renderer';
+    said.title = 'This machine has no graphics renderer, so the prompt keeps its shape but not its colour.';
+  };
+  const wearRenderer = (t: Terminal): 'webgl' | 'plain' => {
+    try {
+      const gl = new WebglAddon();
+      // A context can be taken away at any time: a machine asleep, a driver replaced, too many contexts open.
+      // When it goes, the addon is dropped and the terminal keeps drawing with the plain renderer rather than
+      // stopping. Nothing is thrown away but the renderer.
+      gl.onContextLoss(() => {
+        gl.dispose();
+        drawnBy = 'plain';
+        // Said once, in Berth's own words, because a prompt that quietly stops being coloured is a terminal
+        // that has changed under him with nothing saying so.
+        sayPlain();
+      });
+      t.loadAddon(gl);
+      return 'webgl';
+    } catch {
+      return 'plain';
+    }
+  };
+
   const FACE = "13.5px 'Plex Mono'";
   const ready = Promise.all([document.fonts.load(FACE), document.fonts.load(`600 ${FACE}`)]).then(
     () => undefined,
     () => undefined, // a face that will not load is said by the self-test; the terminal still opens
-  ).then(() => term.open(host));
+  ).then(() => {
+    term.open(host);
+    drawnBy = wearRenderer(term);
+    // A machine with no graphics renderer at all is said as well, once, at the start: a prompt that is not
+    // coloured is a thing he would otherwise put down to Berth not doing what it said it would.
+    if (drawnBy === 'plain') sayPlain();
+  });
 
   // Paste and drop are not the terminal's to take: main pastes, from a key or click it saw itself.
   for (const type of ['paste', 'drop', 'dragover', 'dragenter'] as const) {
@@ -279,6 +325,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       return null;
     },
     bracketedPaste: () => term.modes.bracketedPasteMode,
+    drawnBy: () => drawnBy,
     takeAll: () => {
       term.selectAll();
       return term.getSelection();
