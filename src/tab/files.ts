@@ -160,24 +160,24 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const carryGoing = new Map<number, string>(); // asks still fetching, by the name they are fetching
 
   const el = {
-    path: document.createElement('div'),
+    path: document.createElement('button'),
     list: document.createElement('div'),
     foot: document.createElement('div'),
     moving: document.createElement('div'),
   };
+  // A real button, not a div that happens to answer a press: it opens the folders this one is inside, so the
+  // keyboard must reach it and a reader must be told what it is (his rule, 2026-11-18 night).
   el.path.className = 'fb-path';
+  el.path.id = 'fb-path';
+  el.path.type = 'button';
+  el.path.setAttribute('aria-haspopup', 'menu');
   const here = document.createElement('div');
   here.className = 'fb-here';
   // Sending a file into the folder on screen. It sits beside the folder's own name, because that is what it
   // acts on, and it says what it does with a glyph before a word (BUILD-RULES 2.1).
-  const sendBtn = document.createElement('button');
-  sendBtn.className = 'fb-send';
-  sendBtn.id = 'fb-send';
-  sendBtn.type = 'button';
-  sendBtn.title = 'Send a file from this PC into this folder';
-  sendBtn.setAttribute('aria-label', 'Send a file from this PC into this folder');
-  sendBtn.append(glyph('send'));
-  sendBtn.addEventListener('click', () => send());
+  // Sending a file into this folder, making a folder and opening the trash were three glyph buttons beside the
+  // path. They are gone (his, 2026-11-18 night): he would never press them, and each already has a home under
+  // the right button, where the thing it acts on is what was pressed. What is left is what they did.
   el.list.className = 'fb-list';
   el.list.id = 'fb-list';
   el.list.setAttribute('role', 'listbox');
@@ -191,33 +191,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   el.moving.id = 'fb-moving';
   // The trash of the disk this folder is on. It sits beside the folder's name because it belongs to the disk
   // that folder is on, not to the window.
-  const binBtn = document.createElement('button');
-  binBtn.className = 'fb-send';
-  binBtn.id = 'fb-bin';
-  binBtn.type = 'button';
-  binBtn.title = "What has been deleted on this disk, and can be brought back";
-  binBtn.setAttribute('aria-label', 'The trash on this disk');
-  binBtn.append(glyph('bin'));
-  // One way out of the trash, because the button and the menu both offer it and two ways to leave a view is
-  // how a view ends up half-left.
+  // One way out of the trash, because every way in offers it and two ways to leave a view is how a view ends up
+  // half-left.
   const shutTrash = (): void => {
     bin = { open: false, where: '', rows: [], busy: false, said: bin.said };
     draw();
   };
-  binBtn.addEventListener('click', () => {
+  const toggleTrash = (): void => {
     if (bin.open) shutTrash();
     else openTrash();
-  });
-  // A new folder in the folder on screen. It sits with the other two that act on this folder, and like them
-  // it says what it does with a glyph alone, because all three are the same size and sit side by side.
-  const newBtn = document.createElement('button');
-  newBtn.className = 'fb-send';
-  newBtn.id = 'fb-newfolder';
-  newBtn.type = 'button';
-  newBtn.title = 'Make a new folder in this folder';
-  newBtn.setAttribute('aria-label', 'Make a new folder in this folder');
-  newBtn.append(glyph('newfolder'));
-  newBtn.addEventListener('click', () => askForFolder());
+  };
   // Narrowing the list to what is being looked for, and saying what the list is ordered by. Both sit on a
   // strip of their own under the folder's name: putting them beside it would push the folder's name about as
   // the order changed, and the folder's name is the one thing on this pane that must not move.
@@ -280,6 +263,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     const label = document.createElement('span');
     label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : what === 'owner' ? 'Owner' : 'Modified';
     btn.append(label);
+    // An arrow of its own on the column the list is ordered by, pointing the way it is ordered. The column's
+    // own glyph used to be flipped to say this, which asks a person to remember which way up a clock or a
+    // stack of lines belongs; an arrow is the one shape that says a direction by itself.
+    const arrow = glyph('up');
+    arrow.classList.add('fb-by-way');
+    btn.append(arrow);
     btn.addEventListener('click', () => {
       // The same column again turns the order around; another column starts it the way that column is usually
       // read: names from A, sizes biggest first, times newest first.
@@ -330,7 +319,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   });
   const backBtn = wayBtn('back', 'The folder before this one (Alt and left, or the mouse\'s own back button)', () => back());
   const fwdBtn = wayBtn('forward', 'Forward again (Alt and right, or the mouse\'s own forward button)', () => forward());
-  here.append(backBtn, fwdBtn, el.path, recentBtn, binBtn, newBtn, sendBtn);
+  // The path and the caret that opens the folders above it are one field, with one edge around both: two
+  // things side by side inside one border is what a person already reads as a field with a dropdown.
+  const field = document.createElement('div');
+  field.className = 'fb-field';
+  field.id = 'fb-field';
+  field.append(el.path, recentBtn);
+  here.append(backBtn, fwdBtn, field);
   const recentAt = document.createElement('div');
   recentAt.className = 'fb-recent-menu';
   recentAt.id = 'fb-recent-menu';
@@ -407,7 +402,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (const f of up) lines.push({ glyph: 'up', label: f, run: () => goTo(f) });
     if (up.length > 0) lines.push({ apart: true });
     lines.push({ glyph: 'copy', label: 'Copy this folder\u2019s path', run: () => void port.copy(now), id: 'fb-menu-copy-path' });
-    lines.push({ glyph: 'send', label: 'Send a file here', run: () => sendBtn.click() });
+    lines.push({ glyph: 'send', label: 'Send a file here', run: () => send() });
     openMenu(at, x, y, lines, glyph);
   };
   el.path.addEventListener('contextmenu', (e: MouseEvent) => {
@@ -474,10 +469,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       const up = parent(where || asked);
       if (up !== '') lines.push({ glyph: 'up', label: 'The folder above', run: () => goTo(up) });
       lines.push({ glyph: 'newfolder', label: 'New folder', run: () => askForFolder(), id: 'fb-menu-newfolder' });
-      lines.push({ glyph: 'send', label: 'Send a file here', run: () => sendBtn.click() });
+      lines.push({ glyph: 'send', label: 'Send a file here', run: () => send() });
       lines.push({ apart: true });
       lines.push({ glyph: 'copy', label: 'Copy this folder\u2019s path', run: () => void port.copy(where || asked) });
-      lines.push({ glyph: 'bin', label: 'What was deleted here', run: () => binBtn.click() });
+      lines.push({ glyph: 'bin', label: 'What was deleted here', run: () => toggleTrash() });
     }
     if (r !== undefined && !chosen.has(r.name)) {
       chooseOne(r.name);
@@ -1012,8 +1007,6 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       while (head.previousSibling) head.previousSibling.remove();
       while (head.nextSibling) head.nextSibling.remove();
     }
-    binBtn.dataset['open'] = bin.open ? 'yes' : 'no';
-    binBtn.setAttribute('aria-pressed', String(bin.open));
     if (bin.open) {
       drawTrash();
       drawFoot();

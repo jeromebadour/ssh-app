@@ -89,6 +89,7 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-way:hover:not(:disabled) { color: #d7dee4; background: color-mix(in srgb, #c3ccd3 10%, transparent); }
 .fb-way:disabled { color: #4e5862; cursor: default; }
 .fb-way:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+.fb-recent-btn { width: 22px; }
 .fb-recent-btn[data-on='yes'] { color: #e3e9ed; background: color-mix(in srgb, var(--hue) 20%, transparent); }
 .fb-recent-menu:empty { display: none; }
 .fb-recent-menu { display: flex; flex-direction: column; max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); background: #1d2630; }
@@ -96,10 +97,17 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 .fb-recent-one:hover { background: color-mix(in srgb, #c3ccd3 10%, transparent); }
 .fb-recent-one[data-on='yes'] { color: #e3e9ed; box-shadow: inset 2px 0 0 color-mix(in srgb, var(--hue) 85%, transparent); }
 .fb-recent-one:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
-.fb-path { flex: 1; min-width: 0; padding: 7px 4px 6px 10px; color: #c3ccd3; font-family: 'Plex Mono', monospace; font-size: 11.5px; white-space: nowrap; overflow: hidden; }
-/* The path can be pressed: it opens the folders this one is inside. */
-.fb-path { cursor: pointer; }
-.fb-path:hover { color: #e3e9ed; background: color-mix(in srgb, #c3ccd3 7%, transparent); }
+/* The path is a field, and looks like one: its own edge, its own fill, darker than the pane it sits on, with
+   the caret that opens the folders above it inside that edge. It used to be the pane's own colour with no edge
+   at all, so the one thing on this pane that can be pressed to go somewhere read as a line of text (his,
+   2026-11-18 night: anything you can act on must look like it, and anything you cannot must not). It takes the
+   whole width now that the three glyph buttons beside it are gone. */
+.fb-field { flex: 1; min-width: 0; display: flex; align-items: stretch; margin: 5px 8px; border: 1px solid var(--line-2, #2b3742); border-radius: 4px; background: #141c24; }
+.fb-field:hover { border-color: color-mix(in srgb, var(--hue) 45%, var(--line-2, #2b3742)); }
+.fb-field:focus-within { border-color: color-mix(in srgb, var(--hue) 65%, #c3ccd3); }
+.fb-path { flex: 1; min-width: 0; padding: 5px 4px 5px 9px; border: 0; background: none; color: #c3ccd3; font-family: 'Plex Mono', monospace; font-size: 11.5px; text-align: left; white-space: nowrap; overflow: hidden; cursor: pointer; }
+.fb-path:hover { color: #e3e9ed; }
+.fb-path:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 .fb-send { flex: none; display: grid; place-items: center; width: 26px; padding: 0; border: 0; border-left: 1px solid var(--line); background: none; color: #96a3ae; cursor: pointer; }
 .fb-send:hover { background: color-mix(in srgb, #c3ccd3 10%, transparent); color: #d7dee4; }
 .fb-send:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
@@ -218,14 +226,21 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    use before, which is fine for a row of buttons and useless for the heads of columns: two of the three
    were a bare glyph over a column of numbers. */
 .fb-by > span { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fb-by { display: flex; align-items: center; gap: 4px; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: #8b959e; font: inherit; font-size: .92em; cursor: pointer; }
+/* A head is pressed to order the list by its column, so it has to look like something that can be pressed
+   (his, 2026-11-18 night). It lights as a whole under the hand, and a hairline parts it from the head beside
+   it, so the row above the files reads as four things rather than one line of words. */
+.fb-by { display: flex; align-items: center; gap: 4px; min-width: 0; height: 100%; padding: 0 .4em; border: 0; border-left: 1px solid transparent; background: none; color: #8b959e; font: inherit; font-size: .92em; cursor: pointer; }
+.fb-by + .fb-by { border-left-color: var(--line); }
 #fb-by-size, #fb-by-changed { justify-content: flex-end; }
 #fb-by-changed { justify-content: flex-start; padding-left: .3em; }
-.fb-by:hover { color: #cfd6db; }
+.fb-by:hover { color: #cfd6db; background: color-mix(in srgb, #c3ccd3 8%, transparent); }
 .fb-by:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: 1px; }
 /* The column in use carries the hue and its own glyph turns; nothing here is colour alone. */
 .fb-by[data-on='yes'] { color: #e3e9ed; }
-.fb-by[data-down='yes'] .fb-glyph { transform: scaleY(-1); }
+/* The arrow shows only on the column the list is ordered by, and turns over when the order does. */
+.fb-by-way { display: none; flex: none; width: .9em; height: .9em; }
+.fb-by[data-on='yes'] .fb-by-way { display: block; }
+.fb-by[data-down='yes'] .fb-by-way { transform: scaleY(-1); }
 /* A file that is here on the PC can be taken out of the window by hand. The mark is the cursor under the hand
    and a quiet rule down the left, never colour alone, and the row keeps its height so nothing moves when one
    file becomes draggable and its neighbours do not (BUILD-RULES 2.4, 2.16). */
