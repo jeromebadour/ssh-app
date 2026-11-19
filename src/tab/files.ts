@@ -640,6 +640,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // The empty part of the list, or the way up: the folder itself is what the menu is about.
       const up = parent(where || asked);
       if (up !== '') lines.push({ glyph: 'up', label: 'The folder above', run: () => goTo(up) });
+      lines.push({ glyph: 'refresh', label: 'List this folder again', keys: 'F5', run: () => open(where || asked, 0, true), id: 'fb-menu-again-list' });
       lines.push({ glyph: 'newfolder', label: 'New folder', run: () => askForFolder(), id: 'fb-menu-newfolder' });
       lines.push({ glyph: 'send', label: 'Send a file here', run: () => send() });
       lines.push({ apart: true });
@@ -775,15 +776,16 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     open(been[wasAt]!);
   };
 
-  const open = (path: string, keepTries = 0) => {
+  const open = (path: string, keepTries = 0, keepFilter = false) => {
     if (trying) {
       clearTimeout(trying);
       trying = null;
     }
     tried = keepTries;
     // A filter belongs to the folder it was typed in: carrying it into the next one would make that folder
-    // look half empty for a reason a person has already stopped thinking about.
-    if (keepTries === 0) {
+    // look half empty for a reason a person has already stopped thinking about. Listing the same folder
+    // again is not going anywhere, so there the filter is his and stays.
+    if (keepTries === 0 && !keepFilter) {
       only = '';
       findField.value = '';
     }
@@ -2335,6 +2337,18 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // Enter opens what a double-click would. Anything with Ctrl, Alt or the Windows key is not the list's: those
   // belong to the window itself or to the box.
   // Escape keeps whatever is being asked about, from anywhere in the pane.
+  // F5: this folder, listed again. Every window that lists anything answers it, and the pane's own refresh
+  // has lived only in what happens after a transfer, a rename or a delete until now. It asks the box for the
+  // folder it is already in, so nothing about where he is changes: not the way back, not the way forward,
+  // and not the filter he typed, because listing the same folder again is not going anywhere.
+  at.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'F5' || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    const folder = where || asked;
+    if (folder === '') return;
+    open(folder, 0, true);
+  });
+
   at.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key !== 'Escape' || (!goingToTrash && !naming)) return;
     goingToTrash = null;
@@ -2501,6 +2515,10 @@ export const SHAPES: Record<string, string> = {
   copy: 'M5.5 5.5h7.5v7.5h-7.5zM3 10.5V3h7.5',
   bin: 'M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5',
   back: 'M3.5 8.5h7a2.5 2.5 0 0 0 0-5H7M6 11L3.5 8.5 6 6',
+  // The same arrow the window's own set draws for refreshing, written as one path: one shape for one
+  // meaning across both windows, rather than each of them having its own idea of what listing again looks
+  // like (BUILD-RULES 2.13, and the reason the menu itself was moved out of this pane).
+  refresh: 'M12.5 8a4.5 4.5 0 1 1-1.3-3.2M12.5 3v2.5H10',
   // Going back and forward through the folders this tab has been in. Their own glyphs: the one above means
   // putting a thing back from the trash, which is a different act and may not share a picture with this.
   wayBack: 'M10 3.5L5.5 8l4.5 4.5',

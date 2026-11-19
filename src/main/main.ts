@@ -388,7 +388,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, termMenu, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
+  return { tabs: [...tabs.values()].map(info), active, doneAt, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, termMenu, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -654,7 +654,16 @@ function sendTo(view: WebContentsView | null, channel: string, payload: unknown)
   if (contents && !contents.isDestroyed()) contents.send(channel, payload);
 }
 
+// When the last word on the status line was said. It is stamped here, in the one place every change to it
+// passes through, rather than beside each of the sixty places that set it: one of those would be forgotten.
+let doneSaid = '';
+let doneAt = 0;
+
 function tellShell(): void {
+  if (done !== doneSaid) {
+    doneSaid = done;
+    doneAt = done === '' ? 0 : Date.now();
+  }
   tellTitle();
   sendTo(shell, CH.shellState, shellState());
 }
@@ -2089,8 +2098,13 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     return;
   }
   const c = cmd as Partial<ShellCmd> | null;
-  // Without the password nothing opens: before unlock the shell's only messages are the gate's.
-  if (!gate?.unlocked) {
+  // Without the password nothing opens: before unlock the shell's only messages are the gate's, and the one
+  // thing beside them it may still ask for is the window itself. Berth draws no title bar of its own, so
+  // those three buttons are the only way to move this screen, put it out of the way or close it, and until
+  // now every one of them was dropped here: a window that cannot be minimized or closed until a password is
+  // typed has taken the machine hostage, and the one he noticed was maximize not working (2026-11-18).
+  // Nothing else is let through, and `window` reaches no box, no key and no file.
+  if (!gate?.unlocked && c?.op !== 'window') {
     drop('shell:cmd');
     return;
   }

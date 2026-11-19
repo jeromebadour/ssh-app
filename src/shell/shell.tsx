@@ -29,7 +29,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, termMenu: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [], ready: false };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', doneAt: 0, paste: null, termMenu: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [], ready: false };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -208,7 +208,10 @@ function Unlocked(props: { s: ShellState }) {
             ))}
           </>
         ) : <span />}
-        <span class="s-last" id="status-done">{s.done}</span>
+        <span class="s-last" id="status-done">
+          {s.done !== '' && s.doneAt > 0 && <span class="s-when" id="status-when">{clockOf(s.doneAt)}</span>}
+          {s.done}
+        </span>
       </footer>
       {dialog.kind === 'add' && (
         <AddBoxDialog
@@ -406,6 +409,14 @@ function TabStateMark(props: { t: TabInfo }) {
 // the silence, post-quantum, what the terminal is doing and the bytes the engine could not keep were all in
 // the state already and only one of them reached the screen.
 interface StatusField { id: string; glyph: string; value: string; tone: string }
+// The time a thing was said, on the clock this PC keeps, to the minute. To the minute and not the second
+// because the question it answers is "was that now or an hour ago", and a second hand on a line that sits
+// there unchanging would be a thing moving in a window where nothing moves unless something changed.
+function clockOf(at: number): string {
+  const when = new Date(at);
+  return `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+}
+
 function statusFields(t: TabInfo): StatusField[] {
   const l = t.link;
   if (!t.box) return [{ id: 'state', glyph: 'network', value: t.state, tone: 'plain' }];

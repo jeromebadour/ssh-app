@@ -522,12 +522,56 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await until(() => phase() !== 'starting', 20_000);
     }
 
+      // And carrying them is not the same as them working. He reported maximize not always working before
+    // the password is entered, so each of these screens is pressed for real: the button has to be the
+    // thing under the pointer at its own middle, and the press has to reach main. Being there and being
+    // covered look exactly alike from a probe that only asks whether it is there.
+    const windowButtonWorks = async (where: string) => {
+      const onTop = await js<string>(ctx.shell, `(() => {
+        const b = document.getElementById('win-max');
+        if (!b) return 'no button';
+        const r = b.getBoundingClientRect();
+        const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+        return el === b || b.contains(el) ? 'the button' : (el ? (el.id || el.className || el.tagName) : 'nothing');
+      })()`);
+      // The other two are asked about as well, because they were all dead for the same reason and only one
+      // of them was noticed. Neither is pressed: minimizing would take the window away from the rest of the
+      // run, and closing would end it.
+      const alsoOnTop = await js<string>(ctx.shell, `(() => {
+        const found = [];
+        for (const id of ['win-min', 'win-close']) {
+          const b = document.getElementById(id);
+          if (!b) { found.push(id + ': missing'); continue; }
+          const r = b.getBoundingClientRect();
+          const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+          found.push(id + ': ' + (el === b || b.contains(el) ? 'itself' : (el ? (el.id || el.className || el.tagName) : 'nothing')));
+        }
+        return found.join(', ');
+      })()`);
+      const asked = ctx.windowAsked().length;
+      // Twice, so the window is left the size it was found: a probe that maximized the window and walked
+      // away would be changing what every picture after it shows.
+      await clickOn('#win-max');
+      await sleep(250);
+      await clickOn('#win-max');
+      const reached = await until(() => ctx.windowAsked().length >= asked + 2, 4000);
+      // And the window is given back the focus it may have lost over those two presses. On a screen with no
+      // window manager nothing is really maximized, but the presses still move the focus, and everything
+      // after this is about a window being typed into: a probe that walked away leaving it unfocused would
+      // fail the next thing that asks for the clipboard and say nothing about why.
+      ctx.win.focus();
+      await until(() => ctx.windowInUse(), 4000);
+      check(`${where}: the maximize button is what the pointer finds at its own middle, and a press on it reaches main`, onTop === 'the button' && reached, [onTop, reached, ctx.windowAsked().slice(-2)]);
+      check(`${where}: and so are the other two, which were dead for the same reason and nobody noticed`, alsoOnTop === 'win-min: itself, win-close: itself', alsoOnTop);
+    };
+
     if (ctx.mode === 'all') {
       // The first start, through the real screen with real keys.
       check('first start: the lock asks to make a password', phase() === 'create' && (await until(() => has('#gate-create'), 5000)) && !(await has('#bar')), phase());
       // Windows draws no title bar for Berth, so the screens before the lock carry the window's own buttons
       // themselves. Without them this screen could not be put away or moved with the mouse at all.
       check('the screens before the lock carry the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), '');
+      await windowButtonWorks('the first start');
       // And the same status line the window has. These screens had none at all, so the app's one place for
       // saying where things stand vanished on them (the owner, 2026-11-17: "no real thin footer everywhere").
       check('the screens before the lock carry the status line too', (await has('#gate-status')) && (await text('#gate-status')).includes('Berth') && (await text('#gate-status-where')) === 'First start', await text('#gate-status'));
@@ -593,6 +637,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       // The window's own three buttons, before the lock opens: Windows draws no title bar for Berth, so if these
       // were not here a person could not put the password screen away or move it with the mouse at all.
       check('the lock screen carries the window\'s own buttons', (await has('#win-strip')) && (await has('#win-min')) && (await has('#win-max')) && (await has('#win-close')), await text('#win-strip'));
+      await windowButtonWorks('the lock screen');
       check('after the wait the right password unlocks', await until(() => phase() === 'unlocked', 30_000), [phase(), ctx.gate.state.detail]);
       check('the window is the app now', await until(() => has('#bar'), 5000), '');
       if (process.env['SSHAPP_LABBOX']) {
@@ -1243,6 +1288,31 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const f = await fields();
           const rtt = f.find((x) => x.id === 'status-rtt');
           const pq = f.find((x) => x.id === 'status-pq');
+          // The last word on the status line carries the time it was said. Without it there is no telling a
+          // thing that just happened from one an hour old: his own rule for his console, and the seventh of
+          // what the two windows side by side turned up (2026-11-18).
+          {
+            // Something is said first, so the probe is about the time on a word and not about whether a word
+            // happened to be there. A paste with nothing on the clipboard says "Nothing to paste" and leaves
+            // everything else exactly as it was: nothing selected, nothing sent to the box, nothing copied.
+            const inFront = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
+            clipboard.writeText('');
+            inFront?.view.webContents.focus();
+            inFront?.view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control'] });
+            inFront?.view.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control'] });
+            await until(async () => (await js<string>(ctx.shell, `document.getElementById('status-done')?.textContent ?? ''`)).trim() !== '', 5000);
+            const said = await js<{ words: string; when: string }>(ctx.shell, `(() => {
+              const line = document.getElementById('status-done');
+              const when = document.getElementById('status-when');
+              return { words: (line?.textContent ?? '').trim(), when: (when?.textContent ?? '').trim() };
+            })()`);
+            const clock = (at: Date) => `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+            const now = new Date();
+            const justBefore = new Date(now.getTime() - 60_000);
+            check(`the last word on the status line says when it was said: "${said.when}" on "${said.words.slice(0, 40)}"`,
+              said.words !== '' && (said.when === clock(now) || said.when === clock(justBefore)),
+              [said, clock(now)]);
+          }
           check('the status line is fields, not a sentence: each a glyph, a value of at most three words, and its own colour',
             f.length >= 2 && f.every((x) => x.words > 0 && x.words <= 3 && x.glyph !== 'none' && x.glyph === x.colour)
             && !!rtt && /^\d+ ms$/.test(rtt.text) && !!pq && pq.text === 'post-quantum' && pq.colour !== rtt.colour,
@@ -2281,6 +2351,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await shutMenuNow();
             const onNothing = await menuOn(`document.getElementById('fb-list')`);
             check(`a press on the empty part is about the folder itself: ${onNothing.join(', ')}`, onNothing.includes('New folder') && onNothing.includes('Send a file here') && !onNothing.includes('Rename'), onNothing);
+            check('and listing the folder again is one of them, with the press that does it on the line', onNothing.includes('List this folder again') && (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-keys')].map((k) => k.textContent)`)).includes('F5'), onNothing);
             await shutMenuNow();
             const twoFiles = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.dataset.name).slice(0, 2)`);
             await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${twoFiles[0]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`);
@@ -2420,6 +2491,31 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const narrowed = await names();
             const saidHidden = (await foot()).includes('hidden by the filter');
             check('narrowing the list shows only what is being looked for, says how many are hidden, and asks the box for nothing', narrowed.length < byName.length && narrowed.filter((n) => n !== '..').every((n) => n.toLowerCase().includes('log')) && saidHidden && JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore), [narrowed, saidHidden]);
+            // F5. The folder is listed again from the box, which is what makes it a refresh rather than a
+            // redraw: a file that appeared on the box since he looked has to turn up, and a filter he typed
+            // has to still be there, because listing the same folder again is not going anywhere.
+            {
+              const where = await js<string>(front.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+              await lab.tell('bigfile var/log/f5-made-this.txt 40');
+              await js(front.view, `document.getElementById('fb-find-open')?.click()`);
+              await sleep(150);
+              await js(front.view, `(() => { const f = document.getElementById('fb-find'); f.value = 'f5'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+              await sleep(250);
+              await js(front.view, `document.getElementById('files').dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }))`);
+              const came = await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('f5-made-this.txt'), 8000);
+              const filterStill = await js<string>(front.view, `document.getElementById('fb-find')?.value ?? ''`);
+              const stillThere = await js<string>(front.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+              check('F5 lists the folder again from the box, in the same folder, and the filter he typed is still his', came && filterStill === 'f5' && stillThere === where, [came, filterStill, where, stillThere]);
+              await js(front.view, `document.getElementById('fb-find')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+              await sleep(250);
+              await lab.tell('forget var/log/f5-made-this.txt');
+              await js(front.view, `document.getElementById('files').dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }))`);
+              await until(async () => !(await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('f5-made-this.txt'), 8000);
+              // The find field is opened again, because this step closed it and the steps after it are about
+              // the filter and expect to find it open, as they did before this one was written.
+              await js(front.view, `document.getElementById('fb-find-open')?.click()`);
+              await sleep(200);
+            }
             // Nothing matches: the pane says so rather than looking like an empty folder.
             await js(front.view, `(document.getElementById('fb-find').value = 'zzzz-nothing', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
             const saidNone = await until(() => has('#fb-none-match', front), 5000);
@@ -3925,6 +4021,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await sweepMenu(ctx.shell, "a command’s own menu");
           await shot('block-menu', "one command's own menu, under the right button on its mark", null);
           await read(ctx.shell);
+          // The menu is opened again for the press. Taking a picture of a window can put a menu away, and
+          // this probe is about what the line does, not about whether a menu outlives a screenshot.
+          let again = 0;
+          while (mark && again < 3 && (await termMenuWords()).length === 0) {
+            again++;
+            marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            await until(async () => (await termMenuWords()).length > 0, 2500);
+          }
           const stillOpen = await termMenuWords();
           const hitCommand = await clickOn('#term-menu-block-command');
           // A longer wait than the rest: the clipboard here is the system's, and on this lab's screen taking
@@ -3951,13 +4056,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // that are gone, so a Clear that put neither back would leave this tab without another block for
           // as long as it stayed open, with nothing anywhere saying why.
           await sleep(400);
-          const wipeAt = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('one-more-after-it')`);
-          if (wipeAt) {
+          // Pressed again if the menu did not come: a press that lands while the terminal is drawing can be
+          // taken for part of a selection and open nothing, and this step is about what Clear does, not
+          // about how many presses it takes to open a menu.
+          let opening = 0;
+          while (opening < 3 && (await termMenuWords()).length === 0) {
+            opening++;
+            const wipeAt = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('one-more-after-it')`);
+            if (!wipeAt) break;
             marked.view.webContents.focus();
             marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
             marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
+            await until(async () => (await termMenuWords()).length > 0, 2500);
           }
-          await until(async () => (await termMenuWords()).length > 0, 3000);
           const wiped = await clickOn('#term-menu-clear');
           const wentEmpty = await until(async () => !(await shown(marked)).includes('cmd-made-this-output'), 5000);
           await type(marked, 'echo after-the-wipe\n');
