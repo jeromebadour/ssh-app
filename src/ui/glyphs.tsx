@@ -44,7 +44,16 @@ const shapes: Record<string, JSX.Element> = {
   // Something is running in a tab he is not looking at: a clock, because what it says is that it is taking
   // time. It never moves: nothing in this window moves unless something changed (BUILD-RULES 2.27).
   running: <><circle cx="8" cy="8" r="5.25" /><path d="M8 4.75V8l2.25 1.5" /></>,
+  // A square with nothing in it is what a player's stop button is, and it means stop this thing that is
+  // running. It sat on Close Berth and on Delete a box, which are neither of them that, and it did two jobs
+  // at once (his, 2026-11-18 night). It keeps the one job it was drawn for: stopping a transfer.
   stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
+  // The bin, in the same shape the file pane draws, so the two windows do not each have their own idea of
+  // what deleting looks like. This is the one glyph that means a thing is being taken away.
+  bin: <path d="M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5" />,
+  // Ending the program itself: the mark every machine made in the last forty years carries on the button
+  // that turns it off. Closing a tab is not this, and wears the X it has always worn.
+  power: <><path d="M8 2.5v5.5" /><path d="M4.8 4.8a4.5 4.5 0 1 0 6.4 0" /></>,
   home: <><path d="M3 7.5L8 3.5l5 4" /><path d="M4.5 6.5v6h7v-6" /></>,
   search: <><circle cx="7" cy="7" r="3.75" /><path d="M10 10l3.5 3.5" /></>,
   boxes: <><rect x="2.5" y="2.5" width="11" height="4" rx="1" /><rect x="2.5" y="9.5" width="11" height="4" rx="1" /></>,

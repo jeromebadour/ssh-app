@@ -363,7 +363,7 @@ function BoxMenu(props: { s: ShellState; act: BarActions; done(): void }) {
                 <Glyph name="edit" />
               </button>
               <button type="button" class="bm-act remove" data-remove={b.name} title={`Delete ${b.name}`} aria-label={`Delete ${b.name}`} onClick={(e) => { e.stopPropagation(); props.done(); props.act.removeBox(b.id); }}>
-                <Glyph name="stop" />
+                <Glyph name="bin" />
               </button>
             </span>
             {places === b.id && (
