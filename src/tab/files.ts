@@ -260,7 +260,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     btn.className = 'fb-by';
     btn.id = `fb-by-${what}`;
     btn.type = 'button';
-    btn.append(glyph(what === 'name' ? 'name' : what === 'size' ? 'size' : what === 'owner' ? 'user' : 'clock'));
+    // The Name head's own glyph goes in the column the rows put their file glyph in, not in front of the
+    // word: with it inside the name's column the word began a glyph's width right of every name under it,
+    // and a head that does not line up with its column is a head he reads twice (his, 2026-11-18 night, and
+    // again on 2026-11-19 looking at the built window). The other three sit over numbers and words that are
+    // not the name, so their glyph stays where it is.
+    if (what !== 'name') btn.append(glyph(what === 'size' ? 'size' : what === 'owner' ? 'user' : 'clock'));
     const label = document.createElement('span');
     label.textContent = what === 'name' ? 'Name' : what === 'size' ? 'Size' : what === 'owner' ? 'Owner' : 'Modified';
     btn.append(label);
@@ -293,6 +298,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   head.id = 'fb-head';
   const headSpacer = document.createElement('span');
   headSpacer.className = 'fb-head-glyph';
+  headSpacer.append(glyph('name'));
   // ---- Columns he can drag ----
   //
   // His, 2026-11-19, with his own MobaXterm beside it: a column whose width is fixed is a column that is

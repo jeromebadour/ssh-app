@@ -1,0 +1,41 @@
+/* Every scrollbar in the app, from the root.
+ *
+ * His, 2026-11-19: "anywhere a scrollbar appears it appears stylish and thin, anywhere on the whole app from
+ * the root, like opening a file or anywhere else". So it is written once, here, in the one stylesheet both
+ * pages load, and nothing says it again: a pane built tomorrow gets it for nothing, which is the only way a
+ * rule like this stays true.
+ *
+ * Windows draws a 17-pixel bar with an arrow at each end, in a grey of its own that belongs to no part of
+ * this window. What is drawn instead: a thin bar with no arrows, no track, and a thumb that is quiet until
+ * the hand is near it, in the same greys as the lines and the quieter words around it.
+ *
+ * The bar sits over nothing of its own, so a pane does not jump when its content grows past the edge: the
+ * thumb is drawn inside a transparent border, which is what gives it its shape and its room at once.
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background: #39444f;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4d5a68;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: #5d6b7a;
+  background-clip: content-box;
+}
+/* Both at once, where a pane scrolls sideways as well as down: the square where they meet is the surface
+   under it and never a block of the browser's own grey. */
+::-webkit-scrollbar-button {
+  display: none;
+}
