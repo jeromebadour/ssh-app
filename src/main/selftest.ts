@@ -1445,6 +1445,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // files because a Windows runner cannot hold those names at all, and these must hold on both.
             await lab.tell('aged var/log/syslog 400');
             await lab.tell('bare syslog');
+            // A folder whose name says what is in it, so the picture a folder wears is proved as well as the
+            // one a file wears: he named the folders first of the two.
+            await lab.tell('bigfile var/log/scripts/one.sh 35');
             if (process.platform === 'win32') {
               check('a name this PC cannot hold: not provable here, because the lab\u2019s box is this PC', true, 'skipped on Windows: see tests/landing.test.ts');
               // The five odd names are most of what this folder holds, and the probes further down need
@@ -2116,10 +2119,27 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // ---- A colour for each kind of thing. ----
             // Beside MobaXterm, whose list puts a different coloured mark on every kind, every row here wore
             // one grey glyph: a folder of a hundred files had to be read word by word.
-            const marks = await js<{ name: string; kind: string; colour: string }[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => { const g = r.querySelector('.fb-ft'); return { name: r.dataset.name, kind: [...(g?.classList ?? [])].find((c) => c.startsWith('fb-ft-')) ?? '', colour: g ? getComputedStyle(g).color : '' }; })`);
+            // A row's mark is read by the class that names its kind, not by whichever class happens to come
+            // first: a row wearing the picture of its own kind carries that one too.
+            const marks = await js<{ name: string; kind: string; colour: string; picture: string }[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => { const g = r.querySelector('.fb-ft'); return { name: r.dataset.name, kind: [...(g?.classList ?? [])].find((c) => c.startsWith('fb-ft-') && c !== 'fb-ft-own') ?? '', colour: g ? getComputedStyle(g).color : '', picture: g?.tagName === 'IMG' ? (g.getAttribute('data-kind') ?? '') : '' }; })`);
             const logs = marks.filter((m) => m.name.endsWith('.log'));
             const folders = marks.filter((m) => m.kind === 'fb-ft-folder');
             check(`every .log is marked a log and every folder a folder: ${logs.length} logs, ${folders.length} folders`, logs.length > 0 && logs.every((m) => m.kind === 'fb-ft-log') && folders.length > 0, [logs.slice(0, 3), folders.slice(0, 3)]);
+            // And a .log wears the picture of a log, which is the whole point of the set: the shapes Berth
+            // draws itself say "a file" and nothing more, and he reads a kind at a glance in his editor.
+            // Every picture on screen is asked for by a name out of Berth's own table and really arrives:
+            // a name the app does not hold would be counted by the page that asked for it.
+            const wearing = marks.filter((m) => m.picture !== '');
+            const drawn = await js<{ shown: number; empty: string[] }>(front.view, `(() => {
+              const ones = [...document.querySelectorAll('#fb-list img.fb-ft-own')];
+              return { shown: ones.length, empty: ones.filter((i) => !i.complete || i.naturalWidth === 0).map((i) => i.getAttribute('data-kind') ?? '?') };
+            })()`);
+            const scripts = marks.find((m) => m.name === 'scripts');
+            check('a file wears the picture of its own kind, and every picture asked for really arrives', logs.every((m) => m.picture === 'log') && wearing.length >= 4 && drawn.shown === wearing.length && drawn.empty.length === 0, { logs: logs.map((m) => m.picture), wearing: wearing.length, drawn });
+            // And a folder wears one too, by its own name, while a folder whose name says nothing keeps the
+            // shape Berth draws itself rather than being given a picture that means something else.
+            const plainFolder = marks.find((m) => m.name === 'ledger');
+            check('a folder named for what is in it wears that picture, and one that is not keeps its own shape', scripts?.picture === 'folder-scripts' && plainFolder?.picture === '' && plainFolder?.kind === 'fb-ft-folder', [scripts, plainFolder]);
             const colours = new Set(marks.filter((m) => m.colour !== '').map((m) => m.colour));
             check(`and the kinds do not all wear one colour: ${colours.size} colours among ${marks.length} rows`, colours.size >= 3, [...colours]);
             // A name with nothing to read at its end is a plain file, which is most of what sits in /etc.

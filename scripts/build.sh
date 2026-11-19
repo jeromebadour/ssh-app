@@ -32,6 +32,9 @@ esb src/shell/preload.ts  --platform=node    --format=cjs  --target=node24    --
 esb src/tab/tab.ts        --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/tab/tab.js
 esb src/shell/shell.tsx   --platform=browser --format=iife --target=chrome156 --jsx=automatic --jsx-import-source=preact --outfile=dist/shell/shell.js
 cp src/tab/index.html src/tab/tab.css node_modules/@xterm/xterm/css/xterm.css dist/tab/
+# The pictures of file kinds, one file a kind, served to a tab by name out of the app's own folder. They
+# are static pictures and no code: what decides which one a row wears is the table in src/tab/filetypes.ts.
+rm -rf dist/tab/filetypes && cp -r src/tab/filetypes dist/tab/filetypes
 cp src/shell/index.html dist/shell/
 # Berth's one stylesheet and its typefaces, beside every page that uses them.
 ui_into() { mkdir -p "$1/fonts"; cp src/ui/berth.css src/ui/fonts.css src/ui/menu.css "$1/"; while read -r f; do [ -n "$f" ] && cp "node_modules/$f" "$1/fonts/"; done < src/ui/fonts.list; }

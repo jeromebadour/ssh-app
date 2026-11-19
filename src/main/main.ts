@@ -147,12 +147,16 @@ async function serve(request: Request): Promise<Response> {
     return new Response(null, { status: 404 });
   }
   const data = await readFile(path.join(DIST, entry[0]));
+  // The pictures of file kinds may be kept by the view: there is one a kind and a folder of a hundred files
+  // asks for the same few over and over, so asking for each of them again on every draw is a hundred reads of
+  // a file that cannot have changed. Everything else is the app's own page and script, which are read fresh.
+  const keepable = url.pathname.startsWith('/filetypes/');
   return new Response(new Uint8Array(data), {
     headers: {
       'content-type': entry[1],
       'content-security-policy': CSP,
       'x-content-type-options': 'nosniff',
-      'cache-control': 'no-store',
+      'cache-control': keepable ? 'max-age=86400' : 'no-store',
     },
   });
 }
