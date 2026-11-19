@@ -273,6 +273,9 @@ ul { list-style: none; }
 .s-conn { color: var(--text); }
 .s-key .glyph { color: var(--owner); }
 .s-last { margin-left: auto; color: var(--text); }
+/* The time that word was said, in front of it and quieter than it: the words are what he reads, the time is
+   what he checks when he is not sure whether they are still about now. */
+.s-when { margin-right: .5em; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .act-checked { color: var(--checked); }
 .s-size { color: var(--text-3); }
 

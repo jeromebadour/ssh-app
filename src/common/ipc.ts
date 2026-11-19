@@ -216,6 +216,10 @@ export interface ShellState {
   done: string; // the last thing done, for the status line; empty for nothing yet
   paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
   termMenu: TermMenuShown | null; // the terminal's right-button menu, drawn by the window because one line of it pastes
+  // When the last word on the status line was said, as milliseconds since the epoch, or 0 when nothing has
+  // been said yet. His own rule for his console: a line saying what happened carries the time it happened,
+  // or there is no telling it from one an hour old (2026-11-18, what the two windows side by side turned up).
+  doneAt: number;
   link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
   maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end

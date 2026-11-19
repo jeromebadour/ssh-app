@@ -1243,6 +1243,31 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const f = await fields();
           const rtt = f.find((x) => x.id === 'status-rtt');
           const pq = f.find((x) => x.id === 'status-pq');
+          // The last word on the status line carries the time it was said. Without it there is no telling a
+          // thing that just happened from one an hour old: his own rule for his console, and the seventh of
+          // what the two windows side by side turned up (2026-11-18).
+          {
+            // Something is said first, so the probe is about the time on a word and not about whether a word
+            // happened to be there. A paste with nothing on the clipboard says "Nothing to paste" and leaves
+            // everything else exactly as it was: nothing selected, nothing sent to the box, nothing copied.
+            const inFront = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
+            clipboard.writeText('');
+            inFront?.view.webContents.focus();
+            inFront?.view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control'] });
+            inFront?.view.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control'] });
+            await until(async () => (await js<string>(ctx.shell, `document.getElementById('status-done')?.textContent ?? ''`)).trim() !== '', 5000);
+            const said = await js<{ words: string; when: string }>(ctx.shell, `(() => {
+              const line = document.getElementById('status-done');
+              const when = document.getElementById('status-when');
+              return { words: (line?.textContent ?? '').trim(), when: (when?.textContent ?? '').trim() };
+            })()`);
+            const clock = (at: Date) => `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+            const now = new Date();
+            const justBefore = new Date(now.getTime() - 60_000);
+            check(`the last word on the status line says when it was said: "${said.when}" on "${said.words.slice(0, 40)}"`,
+              said.words !== '' && (said.when === clock(now) || said.when === clock(justBefore)),
+              [said, clock(now)]);
+          }
           check('the status line is fields, not a sentence: each a glyph, a value of at most three words, and its own colour',
             f.length >= 2 && f.every((x) => x.words > 0 && x.words <= 3 && x.glyph !== 'none' && x.glyph === x.colour)
             && !!rtt && /^\d+ ms$/.test(rtt.text) && !!pq && pq.text === 'post-quantum' && pq.colour !== rtt.colour,
@@ -2281,6 +2306,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await shutMenuNow();
             const onNothing = await menuOn(`document.getElementById('fb-list')`);
             check(`a press on the empty part is about the folder itself: ${onNothing.join(', ')}`, onNothing.includes('New folder') && onNothing.includes('Send a file here') && !onNothing.includes('Rename'), onNothing);
+            check('and listing the folder again is one of them, with the press that does it on the line', onNothing.includes('List this folder again') && (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-keys')].map((k) => k.textContent)`)).includes('F5'), onNothing);
             await shutMenuNow();
             const twoFiles = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.kind === 'file').map((r) => r.dataset.name).slice(0, 2)`);
             await js(front.view, `document.querySelector('#fb-list .fb-row[data-name="${twoFiles[0]}"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`);
@@ -2420,6 +2446,31 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const narrowed = await names();
             const saidHidden = (await foot()).includes('hidden by the filter');
             check('narrowing the list shows only what is being looked for, says how many are hidden, and asks the box for nothing', narrowed.length < byName.length && narrowed.filter((n) => n !== '..').every((n) => n.toLowerCase().includes('log')) && saidHidden && JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore), [narrowed, saidHidden]);
+            // F5. The folder is listed again from the box, which is what makes it a refresh rather than a
+            // redraw: a file that appeared on the box since he looked has to turn up, and a filter he typed
+            // has to still be there, because listing the same folder again is not going anywhere.
+            {
+              const where = await js<string>(front.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+              await lab.tell('bigfile var/log/f5-made-this.txt 40');
+              await js(front.view, `document.getElementById('fb-find-open')?.click()`);
+              await sleep(150);
+              await js(front.view, `(() => { const f = document.getElementById('fb-find'); f.value = 'f5'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+              await sleep(250);
+              await js(front.view, `document.getElementById('files').dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }))`);
+              const came = await until(async () => (await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('f5-made-this.txt'), 8000);
+              const filterStill = await js<string>(front.view, `document.getElementById('fb-find')?.value ?? ''`);
+              const stillThere = await js<string>(front.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+              check('F5 lists the folder again from the box, in the same folder, and the filter he typed is still his', came && filterStill === 'f5' && stillThere === where, [came, filterStill, where, stillThere]);
+              await js(front.view, `document.getElementById('fb-find')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+              await sleep(250);
+              await lab.tell('forget var/log/f5-made-this.txt');
+              await js(front.view, `document.getElementById('files').dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', bubbles: true }))`);
+              await until(async () => !(await js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row')].map((r) => r.dataset.name)`)).includes('f5-made-this.txt'), 8000);
+              // The find field is opened again, because this step closed it and the steps after it are about
+              // the filter and expect to find it open, as they did before this one was written.
+              await js(front.view, `document.getElementById('fb-find-open')?.click()`);
+              await sleep(200);
+            }
             // Nothing matches: the pane says so rather than looking like an empty folder.
             await js(front.view, `(document.getElementById('fb-find').value = 'zzzz-nothing', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
             const saidNone = await until(() => has('#fb-none-match', front), 5000);
@@ -3925,6 +3976,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await sweepMenu(ctx.shell, "a command’s own menu");
           await shot('block-menu', "one command's own menu, under the right button on its mark", null);
           await read(ctx.shell);
+          // The menu is opened again for the press. Taking a picture of a window can put a menu away, and
+          // this probe is about what the line does, not about whether a menu outlives a screenshot.
+          if (mark) {
+            marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+          }
+          await until(async () => (await termMenuWords()).length > 0, 3000);
           const stillOpen = await termMenuWords();
           const hitCommand = await clickOn('#term-menu-block-command');
           // A longer wait than the rest: the clipboard here is the system's, and on this lab's screen taking
