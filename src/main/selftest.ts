@@ -4002,28 +4002,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         const third = [...ctx.tabs.values()][2]!;
         await clickOn(`[data-fold-tab="${third.id}"]`);
         check('picking one from the list brings it to the front', await until(() => ctx.shellState().active === third.id && !shellOnTop(), 3000), ctx.shellState().active);
-        for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
 
         // His own laptop: 1366 across and 650 of usable height. It is the size that decides whether the
-        // three rows cost him terminal, and it is the one he said nothing ships without being seen at
-        // (2026-11-18, decision 12). So it is measured here rather than described: how tall the nav and the
-        // strip really are, and how many rows of terminal are left under them.
+        // three rows cost him terminal, and the one he said nothing ships without being seen at
+        // (2026-11-18, decision 12). So it is measured rather than described: how tall the nav and the strip
+        // really are, and how many rows of terminal are left under them.
+        //
+        // Measured here, inside the resize this probe was already doing, and putting the window back where
+        // it found it. Written as a step of its own further down it opened and closed a tab, and a probe
+        // after it read the window's menus as it had left them and failed on a thing nothing to do with it.
         {
-          ctx.openTab(id, '');
           ctx.win.setContentSize(1366, 650);
           await sleep(700);
           const rows = await js<{ nav: number; strip: number }>(ctx.shell, `(() => {
             const h = (sel) => Math.round(document.querySelector(sel)?.getBoundingClientRect().height ?? 0);
             return { nav: h('#nav'), strip: h('#bar') };
           })()`);
-          const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active)!;
-          const cells = await js<{ cols: number; rows: number }>(front.view, `window.berthTerm.size()`);
-          await shot('laptop', 'the three rows at his own laptop size, and what is left for the terminal', front);
+          const cells = await js<{ cols: number; rows: number }>(third.view, `window.berthTerm.size()`);
+          await shot('laptop', 'the three rows at his own laptop size, and what is left for the terminal', third);
           check(`at 1366x650 the nav is ${rows.nav}px, the strip ${rows.strip}px, and the terminal keeps ${cells.rows} rows of ${cells.cols}`,
             rows.nav > 0 && rows.strip > 0 && rows.nav + rows.strip <= 80 && cells.rows >= 24,
             [rows, cells]);
-          for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
+          ctx.win.setContentSize(1024, 640);
+          await sleep(400);
         }
+        for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
+
         ctx.win.setContentSize(size.width, size.height);
 
         // A box that cannot be reached: said with the cause, in place of the paste step.
