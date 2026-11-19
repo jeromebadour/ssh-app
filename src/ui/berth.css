@@ -19,11 +19,15 @@
   --checked: #79a373;
   --owner: #ad9461;
   --problem: #cc9b47;
-  --box-1: #86a6c2;
-  --box-2: #a397c0;
-  --box-3: #c098a6;
-  --box-4: #9fb2a0;
-  --box-5: #b3b68a;
+  /* The five a box can be told apart by. Five hues around the wheel, all held down to the same low
+     saturation, so what a person reads is which box it is and never the colour shouting. The rose one read
+     pink, which has no place in a tool that runs servers (his, 2026-11-18 night), and the violet was heading
+     the same way; both are replaced by a clay and an indigo that sit at the same weight as the rest. */
+  --box-1: #7d9ab4;
+  --box-2: #9096bd;
+  --box-3: #b09078;
+  --box-4: #8fae8d;
+  --box-5: #b0a473;
   --ui: 'Plex Sans Condensed', sans-serif;
   --mono: 'Plex Mono', monospace;
   --glyph-stroke: 1.35;
