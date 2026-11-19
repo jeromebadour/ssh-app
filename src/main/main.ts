@@ -2098,8 +2098,13 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     return;
   }
   const c = cmd as Partial<ShellCmd> | null;
-  // Without the password nothing opens: before unlock the shell's only messages are the gate's.
-  if (!gate?.unlocked) {
+  // Without the password nothing opens: before unlock the shell's only messages are the gate's, and the one
+  // thing beside them it may still ask for is the window itself. Berth draws no title bar of its own, so
+  // those three buttons are the only way to move this screen, put it out of the way or close it, and until
+  // now every one of them was dropped here: a window that cannot be minimized or closed until a password is
+  // typed has taken the machine hostage, and the one he noticed was maximize not working (2026-11-18).
+  // Nothing else is let through, and `window` reaches no box, no key and no file.
+  if (!gate?.unlocked && c?.op !== 'window') {
     drop('shell:cmd');
     return;
   }
