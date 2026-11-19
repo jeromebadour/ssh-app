@@ -4023,11 +4023,13 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await read(ctx.shell);
           // The menu is opened again for the press. Taking a picture of a window can put a menu away, and
           // this probe is about what the line does, not about whether a menu outlives a screenshot.
-          if (mark) {
+          let again = 0;
+          while (mark && again < 3 && (await termMenuWords()).length === 0) {
+            again++;
             marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
             marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            await until(async () => (await termMenuWords()).length > 0, 2500);
           }
-          await until(async () => (await termMenuWords()).length > 0, 3000);
           const stillOpen = await termMenuWords();
           const hitCommand = await clickOn('#term-menu-block-command');
           // A longer wait than the rest: the clipboard here is the system's, and on this lab's screen taking
@@ -4054,13 +4056,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // that are gone, so a Clear that put neither back would leave this tab without another block for
           // as long as it stayed open, with nothing anywhere saying why.
           await sleep(400);
-          const wipeAt = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('one-more-after-it')`);
-          if (wipeAt) {
+          // Pressed again if the menu did not come: a press that lands while the terminal is drawing can be
+          // taken for part of a selection and open nothing, and this step is about what Clear does, not
+          // about how many presses it takes to open a menu.
+          let opening = 0;
+          while (opening < 3 && (await termMenuWords()).length === 0) {
+            opening++;
+            const wipeAt = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('one-more-after-it')`);
+            if (!wipeAt) break;
             marked.view.webContents.focus();
             marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
             marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
+            await until(async () => (await termMenuWords()).length > 0, 2500);
           }
-          await until(async () => (await termMenuWords()).length > 0, 3000);
           const wiped = await clickOn('#term-menu-clear');
           const wentEmpty = await until(async () => !(await shown(marked)).includes('cmd-made-this-output'), 5000);
           await type(marked, 'echo after-the-wipe\n');
