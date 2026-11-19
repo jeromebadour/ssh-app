@@ -789,12 +789,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await read(ctx.shell);
         if (!shots) return;
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
-        const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
+        // The size the window is now, not the size it was when the run started. Some pictures are taken with
+        // the window deliberately made small, and until this they were named and labelled 1280x800 like all
+        // the rest: a picture that says it is one size and shows another is a picture nobody can judge.
+        const now = ctx.win.getContentBounds();
+        const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${now.width}x${now.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${now.width}x${now.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
         check(`a picture: ${what}`, made.width > 0, made);
         if (name === 'tab-open') {
           // The picture is the window: in its middle is the tab's terminal, seen through the shell that lies
           // over it. (Until 2026-11-16 the pictures showed black there, and nothing noticed.)
-          const png = nativeImage.createFromBuffer(await readFile(path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`)));
+          const png = nativeImage.createFromBuffer(await readFile(path.join(shots, `berth-app-dark-${now.width}x${now.height}-${name}.png`)));
           const at = (Math.floor(png.getSize().height / 2) * png.getSize().width + Math.floor(png.getSize().width / 2)) * 4;
           const px = [...png.toBitmap().subarray(at, at + 3)].reverse().map((v) => v.toString(16).padStart(2, '0')).join('');
           check('the picture shows the tab through the shell: its middle is the terminal\'s own colour', px === '141b21', px);
@@ -3999,6 +4003,27 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await clickOn(`[data-fold-tab="${third.id}"]`);
         check('picking one from the list brings it to the front', await until(() => ctx.shellState().active === third.id && !shellOnTop(), 3000), ctx.shellState().active);
         for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
+
+        // His own laptop: 1366 across and 650 of usable height. It is the size that decides whether the
+        // three rows cost him terminal, and it is the one he said nothing ships without being seen at
+        // (2026-11-18, decision 12). So it is measured here rather than described: how tall the nav and the
+        // strip really are, and how many rows of terminal are left under them.
+        {
+          ctx.openTab(id, '');
+          ctx.win.setContentSize(1366, 650);
+          await sleep(700);
+          const rows = await js<{ nav: number; strip: number }>(ctx.shell, `(() => {
+            const h = (sel) => Math.round(document.querySelector(sel)?.getBoundingClientRect().height ?? 0);
+            return { nav: h('#nav'), strip: h('#bar') };
+          })()`);
+          const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active)!;
+          const cells = await js<{ cols: number; rows: number }>(front.view, `window.berthTerm.size()`);
+          await shot('laptop', 'the three rows at his own laptop size, and what is left for the terminal', front);
+          check(`at 1366x650 the nav is ${rows.nav}px, the strip ${rows.strip}px, and the terminal keeps ${cells.rows} rows of ${cells.cols}`,
+            rows.nav > 0 && rows.strip > 0 && rows.nav + rows.strip <= 80 && cells.rows >= 24,
+            [rows, cells]);
+          for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
+        }
         ctx.win.setContentSize(size.width, size.height);
 
         // A box that cannot be reached: said with the cause, in place of the paste step.
