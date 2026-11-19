@@ -5,6 +5,7 @@
 // memory until the browser engine collects them, and nothing here can reach them. Main's side and the key
 // process do wipe: this page is the one place in that chain that cannot, and the window's own sandbox is
 // what stands in its place.
+import { Button } from './button';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PASSWORD_MAX_BYTES, PASSWORD_MIN, type GateState } from '../common/ipc';
 import { Glyph } from './glyphs';
@@ -131,9 +132,9 @@ export function CreateScreen(props: { gate: GateState; act: GateActions; demo?: 
         {props.gate.detail && <span class="check check-fix" id="gate-detail"><Glyph name="fix" />{props.gate.detail}</span>}
         <div class="gate-go">
           {toFix > 0 && (n > 0 || tried) && <span class="to-fix" id="gate-to-fix"><Glyph name="fix" />{inTheWay}</span>}
-          <button class={`btn primary wide ${working ? 'waiting' : ''}`} id="gate-submit" type="button" onClick={submit}>
-            {working ? <><span class="wait-ring" />Locking</> : <><Glyph name="lock" />Lock with this password</>}
-          </button>
+          <Button id="gate-submit" tone="go" wide waiting={working} {...(working ? {} : { glyph: 'lock' })} onClick={submit}>
+            {working ? <><span class="wait-ring" />Locking</> : 'Lock with this password'}
+          </Button>
         </div>
       </div>
     </div>
@@ -176,9 +177,9 @@ export function UnlockScreen(props: { gate: GateState; act: GateActions; demo?: 
           {g.wrong && pw.length === 0 ? <span class="check check-fix" id="gate-wrong"><Glyph name="fix" />Wrong password.</span> : <TypingLine caps={typing.caps} letters={typing.letters} />}
         </label>
         {g.detail && <span class="check check-fix" id="gate-detail"><Glyph name="fix" />{g.detail}</span>}
-        <button class={`btn primary wide ${working || left > 0 ? 'waiting' : ''}`} id="gate-submit" type="button" onClick={submit}>
-          {working ? <><span class="wait-ring" />Unlocking</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : <><Glyph name="lock" />Unlock</>}
-        </button>
+        <Button id="gate-submit" tone="go" wide waiting={working || left > 0} {...(working || left > 0 ? {} : { glyph: 'lock' })} onClick={submit}>
+          {working ? <><span class="wait-ring" />Unlocking</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : 'Unlock'}
+        </Button>
         <p class="gate-saved">{g.wrong ? 'Each wrong try doubles the wait, up to 30 s.' : ''}</p>
       </div>
     </div>
@@ -231,13 +232,9 @@ export function RestoreScreen(props: { gate: GateState; act: GateActions; demo?:
           <>
             <span class="check check-hint gate-wrap">A backup opens with its own password and becomes the list. Berth keeps a copy beside the list at every save, and a backup in the folder chosen when the list was made.</span>
             {g.hasPrevious && (
-              <button class="btn primary wide" id="gate-previous" type="button" onClick={props.act.usePrevious}>
-                <Glyph name="reconnect" />The copy saved before this one
-              </button>
+              <Button id="gate-previous" tone="go" wide glyph="reconnect" onClick={props.act.usePrevious}>The copy saved before this one</Button>
             )}
-            <button class={`btn ${g.hasPrevious ? 'quiet' : 'primary'} wide`} id="gate-pick-restore" type="button" onClick={props.act.pickRestore}>
-              <Glyph name="folder" />A backup file
-            </button>
+            <Button id="gate-pick-restore" tone={g.hasPrevious ? 'plain' : 'go'} wide glyph="folder" onClick={props.act.pickRestore}>A backup file</Button>
           </>
         ) : (
           <>
@@ -247,13 +244,11 @@ export function RestoreScreen(props: { gate: GateState; act: GateActions; demo?:
               <span class={`input filled ${g.wrong ? 'wrong' : ''}`}><input id="pw-restore" ref={field} type="password" autocomplete="off" spellcheck={false} placeholder="The password that list was saved under" value={pw} onInput={(e) => { typing.onInput(e as InputEvent); setPw((e.target as HTMLInputElement).value); }} onKeyDown={(e) => { typing.onKey(e); if (e.key === 'Enter') submit(); }} onKeyUp={typing.onKey} /></span>
               {g.wrong && pw.length === 0 ? <span class="check check-fix" id="gate-restore-wrong"><Glyph name="fix" />Wrong password.</span> : <TypingLine caps={typing.caps} letters={typing.letters} />}
             </label>
-            <button class={`btn primary wide ${g.phase === 'working' || left > 0 ? 'waiting' : ''}`} id="gate-restore" type="button" onClick={submit}>
-              {g.phase === 'working' ? <><span class="wait-ring" />Opening</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : <><Glyph name="lock" />Open it and make it the list</>}
-            </button>
+            <Button id="gate-restore" tone="go" wide waiting={g.phase === 'working' || left > 0} {...(g.phase === 'working' || left > 0 ? {} : { glyph: 'lock' })} onClick={submit}>
+              {g.phase === 'working' ? <><span class="wait-ring" />Opening</> : left > 0 ? <><span class="wait-ring" />Wait {left} s</> : 'Open it and make it the list'}
+            </Button>
             {g.wrong && <p class="gate-saved">Each wrong try doubles the wait, up to 30 s.</p>}
-            <button class="btn quiet wide" id="gate-restore-other" type="button" onClick={props.act.forgetRestore}>
-              <Glyph name="folder" />Another backup
-            </button>
+            <Button id="gate-restore-other" wide glyph="folder" onClick={props.act.forgetRestore}>Another backup</Button>
           </>
         )}
       </div>
