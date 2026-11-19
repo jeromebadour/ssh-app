@@ -3864,6 +3864,115 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await type(open1, 'echo the-counter-moves\n');
           await until(async () => (await shown(open1)).includes('the-counter-moves'), 8000);
           check('and not a byte was typed into the box to do it, on a count proved to be live', typedAfter === typedBefore && ctx.typedInto(open1.id) > typedAfter, [typedBefore, typedAfter, ctx.typedInto(open1.id)]);
+
+        }
+        {
+          // One command's own mark, under the right button. The mark is Berth's own drawing and not the
+          // box's text, so a plain press on it opens this menu rather than pasting: that is the one place
+          // in the terminal where a right press does not paste, and it is what SSH-APP-DETAILS 7 asked for.
+          //
+          // On a tab of its own, opened here. A terminal only draws blocks once it has learned the shape of
+          // that box's prompt, and it stops looking after a couple of hundred lines; the tab these probes
+          // have been using has had a whole deploy log and a dropped session through it. A probe that drove
+          // the menu there would be measuring how noisy its own earlier steps were.
+          // The lab's shell is told to print a prompt again: an earlier probe turned it off, and a box that
+          // prints no prompt draws no blocks, so without this the menu would have nothing to be about.
+          await lab.tell('prompting demo@lab-box:/srv/ledger$ ');
+          const marked = ctx.openTab(open1.box!.id, '')!;
+          await until(() => marked.engine.link.phase === 'up', 30_000);
+          // The prompt is asked for first. A terminal learns the shape of a box's prompt from the line the
+          // box stops on, so a tab that has not been shown one draws no blocks at all, and draws none
+          // quietly: no fault, no mark, nothing to see. That is why this is a step and not an assumption.
+          await type(marked, '\n');
+          const learnedIt = await until(async () => (await js<number>(marked.view, `window.berthBlocks().prompts`)) > 0, 20_000);
+          check('a new tab learns the shape of its box\u2019s prompt from the first one it is shown', learnedIt, await js<unknown>(marked.view, `window.berthBlocks()`));
+          await type(marked, 'echo cmd-made-this-output\n');
+          await until(async () => (await shown(marked)).includes('cmd-made-this-output'), 10_000);
+          await type(marked, 'echo one-more-after-it\n');
+          await until(async () => (await shown(marked)).includes('one-more-after-it'), 10_000);
+          const anyMark = await until(async () => (await js<number>(marked.view, `document.querySelectorAll('.berth-block-copy').length`)) > 0, 10_000);
+          await sleep(500);
+          check('a command wears a mark a press can land on', anyMark, await js<unknown>(marked.view, `window.berthBlocks()`));
+          // The mark belonging to one named command, found by the row that command is drawn on rather than
+          // by counting marks from the end: how many marks there are depends on what the box printed, and a
+          // probe that counted would quietly start pressing the wrong command's mark one day.
+          const onRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo cmd-made-this-output')`);
+          const mark = onRow === null ? null : await js<{ x: number; y: number } | null>(marked.view, `(() => {
+            const y = ${onRow.y};
+            const m = [...document.querySelectorAll('.berth-block-copy')].find((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top && y <= r.bottom; });
+            if (!m) return null;
+            const r = m.getBoundingClientRect();
+            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+          })()`);
+          check('and that mark sits on the row of the command it belongs to', mark !== null, [onRow, mark]);
+          clipboard.writeText('not-from-any-block');
+          if (mark) {
+            marked.view.webContents.focus();
+            marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+          }
+          const opened = await until(async () => (await termMenuWords()).length > 0, 3000);
+          const words = await termMenuWords();
+          check(`a plain right press on a command’s mark opens that command’s own menu, not a paste: ${words.join(', ')}`,
+            opened && words.includes('Copy the command') && words.includes('Copy the command and its output') && words.includes('Save the output as a file') && !words.includes('Paste'),
+            words);
+          check('and it pasted nothing, which is the one place in the terminal a right press does not', !(await shown(marked)).includes('not-from-any-block'), (await shown(marked)).slice(-120));
+          await sweepMenu(ctx.shell, "a command’s own menu");
+          await shot('block-menu', "one command's own menu, under the right button on its mark", null);
+          await read(ctx.shell);
+          const stillOpen = await termMenuWords();
+          const hitCommand = await clickOn('#term-menu-block-command');
+          // A longer wait than the rest: the clipboard here is the system's, and on this lab's screen taking
+          // it over is not instant. A probe that failed once in ten runs on that would be a probe nobody
+          // could read a failure from.
+          const gotCommand = await until(async () => (await clipboard.readText()).includes('echo cmd-made-this-output'), 8000);
+          const justCommand = (await clipboard.readText()).trim();
+          const saidCommand = await js<string>(marked.view, `document.documentElement.dataset.copied ?? ''`);
+          check('Copy the command puts the command on the clipboard and not what it printed', gotCommand && justCommand === 'echo cmd-made-this-output', [justCommand.slice(0, 120), hitCommand, saidCommand, stillOpen]);
+          // And the two together, which is the line the mark's own press cannot give.
+          await sleep(300);
+          clipboard.writeText('not-from-any-block');
+          if (mark) {
+            marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+            marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: mark.x, y: mark.y, button: 'right', clickCount: 1 });
+          }
+          await until(async () => (await termMenuWords()).length > 0, 3000);
+          await clickOn('#term-menu-block-both');
+          const gotBoth = await until(async () => (await clipboard.readText()).includes('echo cmd-made-this-output'), 8000);
+          const both = (await clipboard.readText()).trim();
+          check('and Copy the command and its output puts both, the command first', gotBoth && both.startsWith('echo cmd-made-this-output\n') && both.length > 'echo cmd-made-this-output'.length, both.slice(0, 160));
+          // And Clear on a tab that really draws blocks: everything goes, and the next command still gets a
+          // mark. The library drops its own markers when a terminal is cleared and the reading counts rows
+          // that are gone, so a Clear that put neither back would leave this tab without another block for
+          // as long as it stayed open, with nothing anywhere saying why.
+          await sleep(400);
+          const wipeAt = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('one-more-after-it')`);
+          if (wipeAt) {
+            marked.view.webContents.focus();
+            marked.view.webContents.sendInputEvent({ type: 'mouseDown', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
+            marked.view.webContents.sendInputEvent({ type: 'mouseUp', x: wipeAt.x, y: wipeAt.y, button: 'right', clickCount: 1, modifiers: ['shift'] });
+          }
+          await until(async () => (await termMenuWords()).length > 0, 3000);
+          const wiped = await clickOn('#term-menu-clear');
+          const wentEmpty = await until(async () => !(await shown(marked)).includes('cmd-made-this-output'), 5000);
+          await type(marked, 'echo after-the-wipe\n');
+          await until(async () => (await shown(marked)).includes('after-the-wipe'), 10_000);
+          await sleep(900);
+          // Not "is there a mark anywhere" but "does this one command have its own". A reading left counting
+          // rows that have gone catches up by itself once enough has been printed to pass where it stopped,
+          // so a probe asking only whether any mark came back would pass with the reading never put back and
+          // the first command after every Clear quietly missing its block. The mark is looked for on the row
+          // of the very first command typed after the Clear.
+          const afterRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo after-the-wipe')`);
+          const markedAgain = afterRow === null ? false : await js<boolean>(marked.view, `(() => {
+            const y = ${afterRow.y};
+            return [...document.querySelectorAll('.berth-block-copy')].some((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top && y <= r.bottom; });
+          })()`);
+          check('Clear on a tab drawing blocks empties it, and the very first command after it still gets its own mark', wiped && wentEmpty && markedAgain, [wiped, wentEmpty, markedAgain, afterRow, await js<unknown>(marked.view, `window.berthBlocks()`)]);
+          ctx.closeTab(marked.id);
+          await lab.tell('prompting'); // put the lab's shell back the way the probes after this one expect it
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${open1.id} })`);
+          await until(() => ctx.shellState().active === open1.id, 5000);
         }
         {
           // The one that could not fail by accident: an answer that belonged to no press main ever saw. A
@@ -4348,7 +4457,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onClear,onCopyAsk,onFilePage,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

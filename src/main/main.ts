@@ -601,12 +601,12 @@ const rightClicks = new Map<number, RightClick>();
 let termMenu: TermMenuShown | null = null;
 let rightClicksRefused = 0; // an answer that belonged to no press main saw: counted, never acted on
 
-function openTermMenu(tab: Tab, at: RightClick, selection: boolean, held: boolean): void {
+function openTermMenu(tab: Tab, at: RightClick, selection: boolean, held: boolean, block: boolean): void {
   if (tab.id !== active || overlay || !win?.isFocused() || !tab.box) {
     rightClicksRefused++;
     return;
   }
-  termMenu = { tab: tab.id, box: tab.box.name, x: at.x, y: at.y, selection, held };
+  termMenu = { tab: tab.id, box: tab.box.name, x: at.x, y: at.y, selection, held, block };
   overlay = true;
   stack();
   tellShell();
@@ -1999,14 +1999,14 @@ ipcMain.on(CH.tabReopen, (e, now: unknown) => {
 // What a right press landed on. It is only ever an answer to a press main itself saw, within the moment main
 // gave it: an answer to nothing is counted and dropped, so a view cannot open a menu or lose a paste of its
 // own accord.
-ipcMain.on(CH.tabRightClickWas, (e, what: unknown, selection: unknown, held: unknown) => {
+ipcMain.on(CH.tabRightClickWas, (e, what: unknown, selection: unknown, held: unknown, block: unknown) => {
   const tab = tabByContents.get(e.sender.id);
-  if (!tab || !fromMainFrameOf(e, tab.origin) || (what !== 'menu' && what !== 'paste') || typeof selection !== 'boolean' || typeof held !== 'boolean') return drop('tab:right-click-was', e);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || (what !== 'menu' && what !== 'paste') || typeof selection !== 'boolean' || typeof held !== 'boolean' || typeof block !== 'boolean') return drop('tab:right-click-was', e);
   const asked = rightClicks.get(tab.id);
   if (!asked || asked.answered || Date.now() - asked.at > RIGHT_CLICK_WAIT_MS) return void rightClicksRefused++;
   asked.answered = true;
   if (what === 'paste') return void pasteInto(tab, 'a right-click');
-  openTermMenu(tab, asked, selection, held);
+  openTermMenu(tab, asked, selection, held, block);
 });
 
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {
@@ -2199,6 +2199,9 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
     else if (c.line === 'all') sendTo(tab.view, CH.tabWhole, true);
     else if (c.line === 'save') sendTo(tab.view, CH.tabSaveAsk, true);
     else if (c.line === 'clear') sendTo(tab.view, CH.tabClear, true);
+    else if (c.line === 'blockCommand') sendTo(tab.view, CH.tabBlockAsk, 'command');
+    else if (c.line === 'blockBoth') sendTo(tab.view, CH.tabBlockAsk, 'command-and-output');
+    else if (c.line === 'blockSave') sendTo(tab.view, CH.tabBlockAsk, 'output-to-file');
     tellShell();
   } else if (c?.op === 'shutTermMenu') {
     closeTermMenu();

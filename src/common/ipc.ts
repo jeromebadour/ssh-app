@@ -46,6 +46,7 @@ export const CH = {
   tabRightClickWas: 'tab:right-click-was', // tab view to main: 'menu' or 'paste', and what the menu could offer
   tabCopyAsk: 'tab:copy-ask', // main to tab view: hand over what is selected now, for the clipboard
   tabClear: 'tab:clear', // main to tab view: clear this terminal
+  tabBlockAsk: 'tab:block-ask', // main to tab view: the block the right press was on, asked for one of its four
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -286,6 +287,10 @@ export interface TermMenuShown {
   y: number;
   selection: boolean; // something is selected in it, so Copy has something to copy
   held: boolean; // the terminal holds something, so Select all, Save output and Clear have something to act on
+  // The press was on one command's own mark, so the menu is about that command and nothing else. The mark
+  // is Berth's own drawing rather than the box's text, which is why a plain press on it opens this and a
+  // plain press anywhere else in the terminal still pastes.
+  block: boolean;
 }
 
 // A paste of more than one line, shown before it is sent: its own lines, and what in it cannot be seen by
@@ -322,7 +327,7 @@ export type ShellCmd =
   | { op: 'sendPaste' } // the paste being shown: send it to its box
   | { op: 'dropPaste' } // the paste being shown: send nothing
   // One line of the terminal's menu was pressed, on the window's own surface, so main saw the press itself.
-  | { op: 'termMenu'; line: 'copy' | 'paste' | 'all' | 'save' | 'clear' }
+  | { op: 'termMenu'; line: 'copy' | 'paste' | 'all' | 'save' | 'clear' | 'blockCommand' | 'blockBoth' | 'blockSave' }
   | { op: 'shutTermMenu' } // the terminal's menu went without a line being pressed
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'trustThenVisit'; box: string } // pin it, then open the first visit (decision O2) instead of a tab
@@ -376,7 +381,8 @@ export interface TabPort {
   onAgain(cb: () => void): void; // a new session has begun on the same box
   onPaste(cb: (text: string) => void): void; // put this text in, as a paste
   onRightClick(cb: () => void): void; // main saw a right press on this view: say what it landed on
-  rightClickWas(what: 'menu' | 'paste', selection: boolean, held: boolean): void;
+  rightClickWas(what: 'menu' | 'paste', selection: boolean, held: boolean, block: boolean): void;
+  onBlockAsk(cb: (what: 'command' | 'command-and-output' | 'output-to-file') => void): void;
   onCopyAsk(cb: () => void): void; // hand over what is selected now, for the clipboard
   onClear(cb: () => void): void; // clear this terminal
   pasteMode(protectedPaste: boolean): void; // its box asked for protected paste, or stopped asking

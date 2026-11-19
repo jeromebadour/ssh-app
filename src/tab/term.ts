@@ -77,6 +77,9 @@ export function inert(text: string): string {
   return out;
 }
 
+// What a press on a block is asking for.
+export type BlockWanted = 'output' | 'output-to-file' | 'command' | 'command-and-output';
+
 export interface Term {
   ready: Promise<void>; // drawn, in its own typeface: a cell has its true size from here on
   write(bytes: Uint8Array, done: () => void): void;
@@ -113,22 +116,31 @@ export interface Term {
   // One block: the prompt at this row is drawn in the box's own colour, with a line above it, so one command
   // and its output can be told from the next at a glance. It is the thing he said matters most about a
   // terminal (2026-11-15 07:32). Returns a way to take it off again.
-  // The press on a block: plain takes what it printed to the clipboard, with Shift it goes to a file.
+  // The press on a block, and what was asked of it: a plain press takes what the command printed to the
+  // clipboard and a press with Shift held puts it in a file, as they always have; the three the right
+  // button adds are the command on its own, the command with its output under it, and the output into a
+  // file. One callback with a word rather than four, because they are four answers to the same question:
+  // what of this block do you want.
   // Returns a way to take the block off again, and a way to ask where its row is now. A row number does not
   // stay still: once the scrollback is full the oldest lines are dropped and every row below them means a
   // different line, so a block that kept the number it was made with would copy somebody else's output. The
   // marker drawn with the block follows its own line, and that is what this asks.
-  blockAt(row: number, width: number, colour: string, press: (toFile: boolean) => void): { off(): void; rowNow(): number } | null;
+  blockAt(row: number, width: number, colour: string, press: (what: BlockWanted) => void): { off(): void; rowNow(): number } | null;
   // What one block printed: the rows after the prompt at this row, up to the next prompt or the end.
   outputAfter(row: number, until: number): string;
   rows(): number; // how many rows the terminal holds, on screen and scrolled out
+  lineAt(row: number): string; // one row of what it holds, as a person sees it: the prompt's own row, for the command on it
+  // The block the last right press landed on, asked for one of the four things a block can give. False when
+  // that press was not on a block at all, or the block it was on has gone since.
+  blockPressed(what: BlockWanted): boolean;
   hasSelection(): boolean; // something is selected in it right now
   selection(): string; // what is selected in it right now, for the clipboard
   clear(): void; // everything it holds, on screen and scrolled out, goes
   // The last right press on this terminal, and whether it asked for a menu rather than a paste. Main's own
   // `context-menu` event carries no modifier, so when main asks what a press landed on this is the answer:
-  // Shift held means the menu. A press older than a moment is no answer at all, which is why the time is here.
-  rightPress(): { at: number; menu: boolean } | null;
+  // Shift held means the menu, and so does the press landing on a block's mark, whose own menu is about that
+  // one command. A press older than a moment is no answer at all, which is why the time is here.
+  rightPress(): { at: number; menu: boolean; onBlock: boolean } | null;
 }
 
 // A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
@@ -245,8 +257,17 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   // A right press on the terminal is remembered, and its default is never prevented, because main must see
   // the same press to decide what it means: a paste is main's alone (plan B2.7, B3). Shift held is what asks
   // for the menu instead, as his reference client does.
-  let rightAt: { at: number; menu: boolean } | null = null;
-  host.addEventListener('contextmenu', (e) => { rightAt = { at: Date.now(), menu: e.shiftKey }; }, true);
+  // Which block each mark on the screen belongs to, so a right press on one can be answered about that one
+  // command. Keyed by the element the library draws, which is the only thing a press can hand back.
+  const blockOfMark = new WeakMap<HTMLElement, (what: BlockWanted) => void>();
+  let rightAt: { at: number; menu: boolean; onBlock: boolean; press: ((what: BlockWanted) => void) | null } | null = null;
+  host.addEventListener('contextmenu', (e) => {
+    const mark = (e.target as HTMLElement | null)?.closest<HTMLElement>('.berth-block-copy') ?? null;
+    const press = mark ? blockOfMark.get(mark) ?? null : null;
+    // A press on a block's mark asks for that block's menu whether or not Shift was held: the mark is
+    // Berth's own, not the box's text, and a paste into the middle of it would mean nothing.
+    rightAt = { at: Date.now(), menu: e.shiftKey || press !== null, onBlock: press !== null, press };
+  }, true);
 
   // Paste and drop are not the terminal's to take: main pastes, from a key or click it saw itself.
   for (const type of ['paste', 'drop', 'dragover', 'dragenter'] as const) {
@@ -346,7 +367,17 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       // asked for, and one of those is the bracketed paste a protected paste depends on.
       term.clear();
     },
-    rightPress: () => rightAt,
+    lineAt: (row) => {
+      const b = term.buffer.active;
+      return row < 0 || row >= b.length ? '' : (b.getLine(row)?.translateToString(true) ?? '');
+    },
+    blockPressed: (what) => {
+      const press = rightAt?.press;
+      if (!press) return false;
+      press(what);
+      return true;
+    },
+    rightPress: () => (rightAt === null ? null : { at: rightAt.at, menu: rightAt.menu, onBlock: rightAt.onBlock }),
     bracketedPaste: () => term.modes.bracketedPasteMode,
     drawnBy: () => drawnBy,
     takeAll: () => {
@@ -381,9 +412,10 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
         el.setAttribute('role', 'button');
         el.setAttribute('aria-label', 'Copy what this command printed, or hold Shift to save it as a file');
         el.addEventListener('mousedown', (ev) => ev.stopPropagation()); // a press here is not a selection
+        blockOfMark.set(el, press);
         el.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          press(ev.shiftKey);
+          press(ev.shiftKey ? 'output-to-file' : 'output');
         });
       });
       return {
