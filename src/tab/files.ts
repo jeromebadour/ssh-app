@@ -4,6 +4,7 @@
 // the first rows of a folder with thousands of files are on screen while the rest are still being read. Moving
 // to another folder abandons the listing that was running, and its late pages are dropped by their number
 // rather than drawn over the new one.
+import { BY_END, BY_FOLDER, BY_NAME } from './filetypes';
 import { whenAs, whenShort } from '../common/when';
 import { openMenu, shutMenu, type MenuLine } from '../ui/menu';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
@@ -1620,7 +1621,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // What kind of thing this is, by the end of its name, so a folder of a hundred files can be read by
     // colour before it is read by word. The colours are the ones the approved direction already uses, muted
     // and each meaning one thing (BUILD-RULES 2.2 and 2.3); the shapes stay as they are.
-    const mark = glyph(id === 'fb-up' ? 'up' : r.kind);
+    // What kind of thing this is: the picture of its own kind where Berth has one, and otherwise the shape
+    // and the colour it has always had. A kind the table does not know keeps those, so nothing is ever drawn
+    // as a guess.
+    const own = id === 'fb-up' ? null : kindPicture(r.name, r.kind);
+    const mark = own ?? glyph(id === 'fb-up' ? 'up' : r.kind);
     mark.classList.add('fb-ft', `fb-ft-${id === 'fb-up' ? 'up' : r.kind === 'file' ? byName(r.name) : r.kind}`);
     e.append(mark);
     const name = document.createElement('span');
@@ -2305,6 +2310,33 @@ export const SHAPES: Record<string, string> = {
   rename: 'M9.5 3.5l3 3-6 6h-3v-3zM8 5l3 3',
   newfolder: 'M2.5 4.5h4l1.5 1.5h5.5v7h-11zM8 8.5v3.5M6.25 10.25h3.5',
 };
+
+// Which kind of file a name says it is. The answer is a key of Berth's own table and never the file's own
+// letters, so a file on a box called "../../etc/passwd" reaches nothing at all.
+function kindOf(name: string, kind: string): string | undefined {
+  if (kind === 'folder') return BY_FOLDER[name.toLowerCase()];
+  if (kind !== 'file') return undefined;
+  const whole = BY_NAME[name.toLowerCase()];
+  if (whole !== undefined) return whole;
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return undefined;
+  return BY_END[name.slice(dot + 1).toLowerCase()];
+}
+// The picture for that kind, drawn as a picture: an <img> of a file this app ships. The first try read the
+// file with fetch and put the shapes into the page, and the page's own policy refused it, rightly: there is
+// no connect-src here and there is no reason to add one. A picture loaded as a picture runs nothing, and
+// img-src was already the app's own files, so this asks for nothing the page did not already have.
+function kindPicture(name: string, what: string): HTMLImageElement | null {
+  const kind = kindOf(name, what);
+  if (kind === undefined) return null;
+  const img = document.createElement('img');
+  img.className = 'fb-glyph fb-ft-own';
+  img.src = `filetypes/${kind}.svg`;
+  img.alt = '';
+  img.setAttribute('aria-hidden', 'true');
+  img.dataset['kind'] = kind;
+  return img;
+}
 
 export function glyph(kind: string): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
