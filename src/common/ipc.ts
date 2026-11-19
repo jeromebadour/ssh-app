@@ -23,6 +23,11 @@ export const CH = {
   // The tab's own file browser, on the box's files. Its asks and the pages that answer them: a listing arrives
   // a page at a time, so a folder of thousands of files is drawn as it is read.
   tabFileAsk: 'tab:file-ask', // tab view to main: list this folder, say what this path is, or stop an ask
+  // A file dragged in from Windows and dropped on a tab's file browser. The paths are resolved by that
+  // tab's preload, never by its page: a page may not name a file on this PC (plan B2.7), and a File a
+  // page made for itself has no path at all, so this channel can only ever carry something the system
+  // really dropped on the window.
+  tabDropped: 'tab:dropped', // tab preload to main: these paths were dropped into this folder
   tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
   tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
   tabSaveAsk: 'tab:save-ask', // main to tab view: hand over the whole terminal to be saved as a file (Ctrl+Shift+S)
@@ -343,6 +348,12 @@ export interface TabPort {
   reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only
   files(ask: FileAsk): void; // ask the box's files for something
+  // Files dropped on this tab from Windows. The page hands over what the drop gave it and the folder on
+  // the box they are for; the preload works out where each one lives on this PC and tells main. The page
+  // never learns a path, and a File it made itself has none, so it cannot name a file of its own
+  // choosing. Answers how many of them really had a path, so the pane can say when a drop was of
+  // something that is not a file at all.
+  dropped(files: readonly File[], folder: string): number;
   // What this tab's terminal is doing, as its own reading of this box's prompt sees it, and how long the
   // command that just finished took. It is used for the mark on a tab that is not in front and for the one
   // notification when something long ends; main writes every word of both (plan B2.7). A view that lies here
@@ -471,6 +482,7 @@ export interface FilePage {
   emptied?: number; // an emptying: how many things went
   freed?: number; // an emptying: how much they were holding
   alsoSending?: string; // more than one file was chosen: a transfer main began on its own, under this name
+  droppedInto?: string; // this transfer began with a drop from Windows, into this folder on the box
   waiting?: number; // more than one file was chosen: how many are still waiting their turn
   tooMany?: number; // more than one chooser may hand over was chosen: how many were left behind
   unqueued?: number; // what was waiting to be sent was dropped: how many were dropped

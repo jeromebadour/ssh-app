@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron';
-import { CH, INPUT_MAX, type TabInfo, type TabPort } from '../common/ipc';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { CH, INPUT_MAX, MOST_AT_ONCE, type TabInfo, type TabPort } from '../common/ipc';
 
 const port: TabPort = {
   sandboxed: process.sandboxed === true,
@@ -36,6 +36,26 @@ const port: TabPort = {
   },
   files(ask) {
     ipcRenderer.send(CH.tabFileAsk, ask);
+  },
+  // Where a dropped file really is on this PC is worked out here, in the preload, and goes straight to main.
+  // The page sees only what the drop handed it, which is the one thing it cannot forge: a File a page builds
+  // for itself has no path, so webUtils gives back an empty string for it and nothing is sent. That is what
+  // keeps plan B2.7 true while a drag from Windows works as it does in MobaXterm.
+  dropped(files, folder) {
+    if (typeof folder !== 'string' || folder === '' || folder.length > 4096) return 0;
+    const paths: string[] = [];
+    for (const f of files ?? []) {
+      let at = '';
+      try {
+        at = webUtils.getPathForFile(f);
+      } catch {
+        at = '';
+      }
+      if (typeof at === 'string' && at !== '') paths.push(at);
+      if (paths.length >= MOST_AT_ONCE) break;
+    }
+    if (paths.length > 0) ipcRenderer.send(CH.tabDropped, { folder, paths });
+    return paths.length;
   },
   doing(doing, finishedMs) {
     ipcRenderer.send(CH.tabDoing, String(doing), Number(finishedMs));

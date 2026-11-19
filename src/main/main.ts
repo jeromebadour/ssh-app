@@ -1101,6 +1101,31 @@ ipcMain.on(CH.tabResize, (e, cols: unknown, rows: unknown) => {
 // The tab's own file browser asks its own box, and nothing else. A path is a box's to understand, so main
 // checks only that it is a plain string of a sane length and hands it on; what it means is worked out on the
 // box itself and every answer names the folder as the box names it.
+// Files dragged in from Windows and dropped on a tab's file browser, which is how he moves a file to a box
+// every day (his, and the whole reason this app exists beside MobaXterm). The paths come from that tab's own
+// preload, which read them off the drop itself; a page cannot reach this channel with a file of its own
+// choosing, because a File a page builds has no path to give. From here it is the same send as one chosen in
+// the chooser, down to the same queue and the same checks.
+let droppedAsks = 0;
+ipcMain.on(CH.tabDropped, (e, what: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:dropped', e);
+  const a = what as Record<string, unknown> | null;
+  const folder = a?.['folder'];
+  const paths = a?.['paths'];
+  if (!a || typeof folder !== 'string' || folder === '' || folder.length > 4096 || !Array.isArray(paths) || paths.length === 0) return drop('tab:dropped', e);
+  const real = paths.filter((p): p is string => typeof p === 'string' && p !== '' && p.length <= 4096).slice(0, MOST_AT_ONCE);
+  if (real.length === 0) return drop('tab:dropped', e);
+  if (!win || !gate?.unlocked) return;
+  // An id of main's own, from a range the view's own asks never reach, so a drop cannot be answered as if it
+  // were an ask a page made and a page cannot stop or claim it by guessing a number.
+  droppedAsks += 1;
+  const id = 900_000_000 + droppedAsks;
+  sendTo(tab.view, CH.tabFilePage, { id, alsoSending: path.basename(real[0]!), droppedInto: folder });
+  settling.add(comingKey(tab.id, id));
+  void sendThese(tab, id, folder, real);
+});
+
 ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:file-ask', e);
@@ -1493,6 +1518,15 @@ async function sendOver(tab: Tab, id: number, folder: string): Promise<void> {
   } finally {
     choosing = false;
   }
+  if (stopWanted(tab, id)) return say('stopped');
+  await sendThese(tab, id, folder, chosen);
+}
+
+// Files on their way to a box, however they were named: chosen in the system's own chooser, or dragged in
+// from Windows and resolved by this tab's preload. Both arrive here with paths main is holding, and from
+// here on there is one road.
+async function sendThese(tab: Tab, id: number, folder: string, chosen: string[]): Promise<void> {
+  const say = (error: string): void => sendTo(tab.view, CH.tabFilePage, { id, done: true, error });
   if (stopWanted(tab, id)) return say('stopped');
   if (chosen.length === 0) return say('nothing-chosen');
   if (tabs.get(tab.id) !== tab) return;

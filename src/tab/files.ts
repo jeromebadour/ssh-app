@@ -2111,6 +2111,45 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     draw();
   };
 
+  // ---- A file dragged in from Windows ----
+  //
+  // The thing he does every day, and what he said MobaXterm does that Berth could not. The page's part is the
+  // smallest it can be: it says which folder on the box the drop was over, and it hands the drop's own files
+  // to the preload, which is the only side that may learn where a file lives on this PC (plan B2.7). A File a
+  // page made for itself has no path, so this cannot be turned into a page naming a file of its own choosing.
+  //
+  // A drag of something that is not a file at all, a selection of text or an address, is said rather than
+  // ignored: a drop that does nothing and says nothing is a drop he will try again.
+  const dropMark = (on: boolean): void => {
+    at.dataset['dropping'] = on ? 'yes' : 'no';
+  };
+  const carriesFiles = (e: DragEvent): boolean => [...(e.dataTransfer?.types ?? [])].includes('Files');
+  for (const kind of ['dragenter', 'dragover'] as const) {
+    at.addEventListener(kind, (e: DragEvent) => {
+      if (!carriesFiles(e) || bin.open || (where || asked) === '') return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      dropMark(true);
+    });
+  }
+  at.addEventListener('dragleave', (e: DragEvent) => {
+    if (e.relatedTarget instanceof Node && at.contains(e.relatedTarget)) return;
+    dropMark(false);
+  });
+  at.addEventListener('drop', (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropMark(false);
+    const here = where || asked;
+    if (here === '' || bin.open) return;
+    const files = [...(e.dataTransfer?.files ?? [])];
+    const took = files.length === 0 ? 0 : port.dropped(files, here);
+    said = took > 0
+      ? `${took === 1 ? 'A file' : `${took} files`} dropped into ${shorten(here, 34)}`
+      : 'That was not a file, so there was nothing to send';
+    draw();
+  });
+
   // Sending a file from the PC to this folder on the box. The view says the folder and nothing else: which
   // file leaves this PC is answered in the system's own chooser, which only a person can answer (plan B2.7).
   const send = (): void => {
