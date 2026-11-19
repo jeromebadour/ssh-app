@@ -416,7 +416,15 @@ export function readSettings(publicPart: unknown): AppSettings {
   const raw = (p?.['settings'] ?? {}) as Record<string, unknown>;
   const downloads = typeof raw['downloads'] === 'string' && raw['downloads'].length <= 4096 ? raw['downloads'] : '';
   const size = typeof raw['paneSize'] === 'number' && raw['paneSize'] >= 0.5 && raw['paneSize'] <= 3 ? raw['paneSize'] : 1;
-  return { downloads, paneSize: size };
+  // The widths of the columns he has dragged. A width the list does not hold, or one outside what a column
+  // can be, is left out rather than taken: a saved list is a file, and a file can be anything.
+  const raw2 = (raw['columns'] ?? {}) as Record<string, unknown>;
+  const columns: AppSettings['columns'] = {};
+  for (const name of ['name', 'size', 'changed', 'owner'] as const) {
+    const at = raw2[name];
+    if (typeof at === 'number' && Number.isFinite(at) && at >= 20 && at <= 4000) columns[name] = Math.round(at);
+  }
+  return { downloads, paneSize: size, columns };
 }
 
 export function readBoxes(publicPart: unknown): Box[] | null {

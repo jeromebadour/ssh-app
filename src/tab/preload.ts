@@ -81,6 +81,9 @@ const port: TabPort = {
   onSettings(cb) {
     ipcRenderer.on(CH.tabSettings, (_e, s) => cb(s));
   },
+  columns(widths) {
+    ipcRenderer.send(CH.tabColumns, widths);
+  },
   resize(cols, rows) {
     ipcRenderer.send(CH.tabResize, Number(cols), Number(rows));
   },
