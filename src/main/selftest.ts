@@ -219,7 +219,7 @@ const stories = (view: WebContentsView) => js<Story[]>(view, `(() => {
   }
   return out;
 })()`);
-interface Answer { what: string; tone: string; surface: boolean }
+interface Answer { what: string; tone: string; surface: boolean; shape: string }
 const answers = (view: WebContentsView) => js<Answer[]>(view, `(() => {
   const clear = (c) => c === 'transparent' || /rgba\\([^)]*,\\s*0\\s*\\)/.test(c);
   return [...document.querySelectorAll('.btn')].filter((el) => {
@@ -229,7 +229,8 @@ const answers = (view: WebContentsView) => js<Answer[]>(view, `(() => {
     const s = getComputedStyle(el);
     const filled = !clear(s.backgroundColor);
     const ringed = s.boxShadow !== 'none' || ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(s['border' + side + 'Width']) > 0 && s['border' + side + 'Style'] !== 'none' && !clear(s['border' + side + 'Color']));
-    return { what: (el.id || el.className) + ' "' + (el.textContent || '').trim().slice(0, 24) + '"', tone: el.className, surface: filled || ringed };
+    const mark = el.querySelector('svg path, svg rect, svg circle');
+    return { what: (el.id || el.className) + ' "' + (el.textContent || '').trim().slice(0, 24) + '"', tone: el.className, surface: filled || ringed, shape: mark ? (mark.getAttribute('d') || mark.outerHTML).slice(0, 80) : '' };
   });
 })()`);
 // Every glyph a menu draws, against the one the pane falls back to. A name the pane does not know is not an
@@ -362,14 +363,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
   // settings, a paste, an odd paste, a link, a changed identity, Edit box and Delete box. The floor is just
   // under that, so the measurement quietly stopping is a failure rather than a pass with nothing in it. The
   // other modes open no dialogs, and a minimum they cannot meet would fail them for nothing.
-  // The floor is 16 since the dialogs stopped telling stories: the first visit and the changed identity each
-  // say in one line what they used to say in two. It exists so a sweep that quietly never ran fails rather
-  // than passing over nothing, so it follows the app down rather than being left where it was.
-  const wantedReadings = ctx.mode === 'boxes-ui' ? 16 : 0;
-  // The answers those same dialogs offered. A floor under the count, so a sweep that quietly never ran is a
-  // failure rather than a pass over nothing.
+  // The floors exist so a sweep that quietly stopped running fails rather than passing over nothing, so they
+  // follow what the run really reads rather than being left where they were written. Both jumped when the
+  // sweeps moved onto every screen a picture is taken of: 44 sentences and 91 answers, against 16 and 14 at
+  // five moments chosen by hand.
+  const wantedReadings = ctx.mode === 'boxes-ui' ? 40 : 0;
+  // The answers those same dialogs offered.
   const seen: Answer[] = [];
-  const wantedAnswers = ctx.mode === 'boxes-ui' ? 14 : 0;
+  const wantedAnswers = ctx.mode === 'boxes-ui' ? 85 : 0;
   const told: Story[] = [];
   // Ten menus and one whole pane are swept in the box screens, 85 glyphs between them. A floor under that,
   // so the sweep quietly never running is a failure rather than a pass over nothing.
@@ -399,6 +400,14 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       readings.length >= wantedReadings && small.length === 0,
       { read: readings.length, wanted: wantedReadings, small });
     const bare = seen.filter((a) => !a.surface);
+    // Every glyph is read against the action it sits on (his, 2026-11-18 night). What that comes to, in
+    // something a build can hold: the answer that takes something away and the answer that keeps it must
+    // never wear the same shape. A square with nothing in it sat on Close Berth and on Delete a box while
+    // Keep Berth open wore the X that cancels, so one shape did two jobs and another said the opposite of
+    // the button it was on. Shapes are read off the buttons as they were really drawn, not from the set.
+    const danger = new Set(seen.filter((a) => a.tone.includes('btn-danger') && a.shape !== '').map((a) => a.shape));
+    const bothWays = seen.filter((a) => a.tone.includes('btn-plain') && a.shape !== '' && danger.has(a.shape));
+    check('no shape sits on both the answer that takes something away and the answer that keeps it', bothWays.length === 0, bothWays);
     const storytellers = told.filter((t) => t.lines > 1);
     check('no dialog tells him a story: a title, what it is about, and at most one line', storytellers.length === 0, storytellers);
     check('every answer a dialog offers is a surface he can see, not words beside a filled one',
@@ -758,12 +767,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const commit = process.env['SSHAPP_PICTURE_COMMIT'] ?? '';
       const size = ctx.win.getContentBounds();
       const shot = async (name: string, what: string, bring: Tab | null = null) => {
-        if (!shots) return;
+        // Every screen worth a picture is a screen worth sweeping, so the sweeps run here: the prose on it,
+        // the answers it offers and whether it tells a story. They used to run at five moments chosen by hand,
+        // which meant a dialog opened anywhere else was never read at all, and a probe over the answers could
+        // not fail for a dialog it never saw.
+        //
+        // The sweep follows the screen and not the picture, so it runs whether or not a picture is being
+        // written: the run that guards the merge writes none, and with the sweep behind that gate it read a
+        // third of what a run with pictures read, and the floors under it would have had to be a third as
+        // strong. Everything above the picture itself therefore happens either way, and the two runs walk the
+        // same path.
         if (bring && ctx.shellState().active !== bring.id) {
           await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${bring.id} })`);
           await sleep(200);
         }
         await sleep(350);
+        await read(ctx.shell);
+        if (!shots) return;
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
         const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
         check(`a picture: ${what}`, made.width > 0, made);

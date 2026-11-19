@@ -280,7 +280,7 @@ export function AddBoxDialog(props: AddBoxProps) {
               </div>
               {!editing && (
                 props.keyFile ? (
-                  <Button id="key-file-drop" glyph="close" onClick={props.onDropKeyFile}>Let Berth make one</Button>
+                  <Button id="key-file-drop" glyph="key" onClick={props.onDropKeyFile}>Let Berth make one</Button>
                 ) : (
                   <Button id="key-file-pick" glyph="fileKey" onClick={props.onPickKeyFile}>Use a key file</Button>
                 )
@@ -570,7 +570,7 @@ export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove():
   return (
     <div class="scrim">
       <div class="dialog dlg-remove" id="remove-box" role="dialog" aria-modal="true" aria-labelledby="remove-title">
-        <h1 id="remove-title"><Glyph name="stop" />Delete {b.name}?</h1>
+        <h1 id="remove-title"><Glyph name="bin" />Delete {b.name}?</h1>
         <ul class="goes" id="remove-goes">
           <li><Glyph name="box" /><span>{b.name}, {b.user}@{b.host}:{b.port}{b.places.length > 0 ? `, and its ${b.places.length} ${b.places.length === 1 ? 'place' : 'places'}` : ''}</span></li>
           <li><Glyph name="key" /><span>its key, which Berth made and holds nowhere else</span></li>
@@ -581,8 +581,8 @@ export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove():
           The key line Berth asked you to add stays on the box itself: only the box can take it out.
         </p>
         <div class="dlg-actions">
-          <Button id="remove-cancel" glyph="close" kbd="Esc" hold={keep} onClick={props.onCancel}>Keep it</Button>
-          <Button id="remove-do" tone="danger" glyph="stop" onClick={props.onRemove}>Delete {b.name}</Button>
+          <Button id="remove-cancel" glyph="back" kbd="Esc" hold={keep} onClick={props.onCancel}>Keep it</Button>
+          <Button id="remove-do" tone="danger" glyph="bin" onClick={props.onRemove}>Delete {b.name}</Button>
         </div>
       </div>
     </div>
@@ -623,7 +623,7 @@ export function ReplaceDialog(props: { asked: ReplaceAsked; onReplace(): void; o
           In {a.folder}. Replacing it cannot be undone from Berth: what is there now is gone, and only the box's own backups would have it.
         </p>
         <div class="dlg-actions">
-          <Button id="replacing-keep" glyph="close" kbd="Esc" hold={keep} onClick={props.onKeep}>Keep what is there</Button>
+          <Button id="replacing-keep" glyph="back" kbd="Esc" hold={keep} onClick={props.onKeep}>Keep what is there</Button>
           <Button id="replacing-do" tone="danger" glyph="file" onClick={props.onReplace}>Replace it</Button>
         </div>
       </div>
@@ -679,8 +679,12 @@ export function ClosingDialog(props: { what: 'app' | 'tab'; live: { id: number; 
           Whatever you started on {n === 1 ? 'the box' : 'those boxes'} keeps running there. What ends is Berth's way in, and what the terminal is holding.
         </p>
         <div class="dlg-actions">
-          <Button id="closing-keep" glyph="close" kbd="Esc" hold={keep} onClick={props.onKeep}>{app ? 'Keep Berth open' : 'Keep the tab'}</Button>
-          <Button id="closing-do" tone="danger" glyph="stop" onClick={props.onClose}>{app ? 'Close Berth' : 'Close the tab'}</Button>
+          {/* The answer that keeps everything goes back and changes nothing, so it wears the way back and not
+              the X that cancels. The answer that ends a link wears the mark every machine carries on the
+              button that turns it off, whether it is the program or one tab: ending a session is not
+              dismissing a dialog, and the two were wearing one shape. */}
+          <Button id="closing-keep" glyph="back" kbd="Esc" hold={keep} onClick={props.onKeep}>{app ? 'Keep Berth open' : 'Keep the tab'}</Button>
+          <Button id="closing-do" tone="danger" glyph="power" onClick={props.onClose}>{app ? 'Close Berth' : 'Close the tab'}</Button>
         </div>
       </div>
     </div>
