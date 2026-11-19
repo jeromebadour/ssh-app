@@ -10,6 +10,7 @@ import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialo
 import { LinkDialog } from '../ui/linkdialog';
 import { SettingsDialog } from '../ui/settings';
 import { FirstVisitDialog } from '../ui/firstvisit';
+import { TabDialog } from '../ui/tabdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateFoot, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
@@ -48,6 +49,7 @@ const noBar = {
   dropReopen: () => undefined,
   addBox: () => undefined,
   editBox: () => undefined,
+  nameTab: () => undefined,
   removeBox: () => undefined,
   menu: () => undefined,
   settings: () => undefined,
@@ -66,7 +68,7 @@ const act = {
 
 // What the window shows once unlocked: the bar, the middle (where the tab in front is drawn above this view),
 // the status line, and the one dialog that may be open. Every action is a message to main; nothing is decided here.
-type Dialog = { kind: 'none' } | { kind: 'add'; req: number; from?: string } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number };
+type Dialog = { kind: 'none' } | { kind: 'add'; req: number; from?: string } | { kind: 'edit'; box: string; req: number } | { kind: 'remove'; box: string } | { kind: 'changed'; tab: number } | { kind: 'closing'; tab: number } | { kind: 'nameTab'; tab: number };
 
 let nextReq = 1;
 
@@ -141,6 +143,7 @@ function Unlocked(props: { s: ShellState }) {
     },
     addBox: (from) => setDialog({ kind: 'add', req: nextReq++, ...(from === undefined ? {} : { from }) }),
     editBox: (box) => setDialog({ kind: 'edit', box, req: nextReq++ }),
+    nameTab: (tab) => setDialog({ kind: 'nameTab', tab }),
     removeBox: (box) => setDialog({ kind: 'remove', box }),
     menu: (open) => port.cmd({ op: 'overlay', on: open || over }),
     window: (what) => port.cmd({ op: 'window', do: what }),
@@ -260,6 +263,19 @@ function Unlocked(props: { s: ShellState }) {
         />
       )}
       {/* The settings, opened from the Boxes menu. Opening it changes nothing. */}
+      {dialog.kind === 'nameTab' && (() => {
+        const t = s.tabs.find((x) => x.id === dialog.tab);
+        if (!t) return null;
+        return (
+          <TabDialog
+            name={t.own}
+            colour={t.ownColour}
+            was={t.box ? `${t.box.name}${t.box.place === '' ? '' : `, ${t.box.place}`}` : `tab ${t.id}`}
+            onDone={(name, colour) => { port.cmd({ op: 'nameTab', id: t.id, name, colour }); setDialog({ kind: 'none' }); }}
+            onCancel={() => setDialog({ kind: 'none' })}
+          />
+        );
+      })()}
       {s.settingsOpen && (
         <SettingsDialog
           settings={s.settings}

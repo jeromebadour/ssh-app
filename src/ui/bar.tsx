@@ -17,6 +17,7 @@ export interface BarActions {
   open(box: string, place: string): void; // a pinned box: a tab; a box never checked: its check
   addBox(from?: string): void; // from: a box to make this one from (Duplicate)
   editBox(box: string): void;
+  nameTab(id: number): void; // what he calls one tab, and the colour he gives it
   removeBox(box: string): void;
   menu(open: boolean): void; // a menu is open: the shell must be above the tabs
   settings(): void; // open the settings
@@ -173,10 +174,19 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
     const look = tabLook(t);
     const isFront = t.id === front;
     return (
-      <span class={`tab ${isFront ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={look.mark} aria-selected={isFront} title={`${t.box?.name ?? `tab ${t.id}`} · ${placeLabel(t, props.s.boxes)} · ${look.words}`} onPointerDown={() => setPressed(t.id)} onClick={() => props.act.select(t.id)}>
+      <span class={`tab ${isFront ? 'active' : ''}`} key={t.id} data-tab={t.id} data-state={look.mark} aria-selected={isFront} title={`${t.own === '' ? '' : `${t.own} — `}${t.box?.name ?? `tab ${t.id}`} · ${placeLabel(t, props.s.boxes)} · ${look.words}`} onPointerDown={() => setPressed(t.id)} onClick={() => props.act.select(t.id)}>
         <TabMark t={t} />
-        <span class="tab-box">{t.box ? t.box.name : `tab ${t.id}`}</span>
-        <span class="tab-place">{placeLabel(t, props.s.boxes)}</span>
+        {/* A tab he has named says what he called it and nothing else: the box and the place are what it is,
+            and the name is what he calls it. Its own colour, if he gave it one, is this tab's alone; the
+            group's edge and its dot keep the box's own, because a box is what it is (his, 2026-11-18 night). */}
+        {t.own === '' ? (
+          <>
+            <span class="tab-box">{t.box ? t.box.name : `tab ${t.id}`}</span>
+            <span class="tab-place">{placeLabel(t, props.s.boxes)}</span>
+          </>
+        ) : (
+          <span class="tab-box tab-own" style={t.ownColour > 0 ? { '--hue': `var(--box-${t.ownColour})` } : undefined}>{t.own}</span>
+        )}
         <span class="tab-end">
           {look.sig === 'stopped' ? <Glyph name="identityBroken" class="sig sig-stopped" label="identity changed" /> : look.sig !== '' && <span class="sig sig-silent">{look.sig}</span>}
           {/* What happened in this tab while he was looking at another one. A command that finished says how
@@ -227,6 +237,9 @@ export function Bar(props: { s: ShellState; act: BarActions }) {
       if (after.length > 0) lines.push({ glyph: 'close', label: `Close the ${after.length === 1 ? 'one' : after.length} to the right`, danger: true, run: () => { for (const x of after) props.act.close(x.id); }, id: 'tab-menu-right' });
       if (t?.box) {
         lines.push({ apart: true });
+        // What he calls this one tab. Above Edit, because it is about the tab the press landed on and Edit
+        // is about the box behind it: the nearer thing comes first.
+        lines.push({ glyph: 'tag', label: t.own === '' ? 'Name this tab' : `Rename ${t.own}`, run: () => props.act.nameTab(id), id: 'tab-menu-name' });
         lines.push({ glyph: 'edit', label: `Edit ${t.box.name}`, run: () => props.act.editBox(t.box!.id), id: 'tab-menu-edit' });
       }
     } else {

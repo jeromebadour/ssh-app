@@ -56,7 +56,7 @@ export class Boxes {
   // change to one can never drop the other (which is what a second writer of the same file would do).
   settings: AppSettings = { ...SETTINGS_DEFAULT };
   // The tabs that were open when the app was last used, in the order they were in: what Reopen offers.
-  lastTabs: { box: string; place: string }[] = [];
+  lastTabs: { box: string; place: string; own?: string; ownColour?: number }[] = [];
   loaded = false;
   fault = ''; // the list opened but its boxes could not be read: said, and nothing is overwritten
   faultId = ''; // the id of that fault's line in the local log, so the window can say which failure it is
@@ -334,7 +334,7 @@ export class Boxes {
   // locked list like everything else, because which boxes he works on and what he calls those places is as
   // much his as the boxes themselves, and a plain file beside the list would be the one readable thing
   // saying where he works (plan B2.4).
-  setLastTabs(next: { box: string; place: string }[]): Promise<KeyReply> {
+  setLastTabs(next: { box: string; place: string; own?: string; ownColour?: number }[]): Promise<KeyReply> {
     const want = next.slice(0, TABS_REMEMBERED);
     if (JSON.stringify(want) === JSON.stringify(this.lastTabs)) return Promise.resolve({ ok: true });
     return this.oneAtATime(() => this.save(this.list, this.settings, want));
@@ -396,17 +396,26 @@ export const TABS_REMEMBERED = 16;
 // The tabs of the last session as they were saved. Anything of the wrong shape is left out rather than
 // refused whole: a list that cannot be read must still open, and a Reopen with one line missing is better
 // than a lock that will not open over it.
-export function readLastTabs(publicPart: unknown): { box: string; place: string }[] {
+export function readLastTabs(publicPart: unknown): { box: string; place: string; own?: string; ownColour?: number }[] {
   const p = publicPart as Record<string, unknown> | null;
   const raw = p?.['lastTabs'];
   if (!Array.isArray(raw)) return [];
-  const out: { box: string; place: string }[] = [];
+  const out: { box: string; place: string; own?: string; ownColour?: number }[] = [];
   for (const one of raw.slice(0, TABS_REMEMBERED) as Record<string, unknown>[]) {
     const box = one?.['box'];
     const place = one?.['place'];
     if (typeof box !== 'string' || !/^b[0-9a-f]{16}$/.test(box)) continue;
     if (typeof place !== 'string' || place.length > 256) continue;
-    out.push({ box, place });
+    // What he called this tab, and the colour he gave it. Both are his own and both are optional: a list
+    // written before they existed, or one damaged, simply has a tab with neither.
+    const own = one?.['own'];
+    const hue = one?.['ownColour'];
+    out.push({
+      box,
+      place,
+      ...(typeof own === 'string' && own.length <= 40 ? { own } : {}),
+      ...(typeof hue === 'number' && Number.isInteger(hue) && hue >= 1 && hue <= BOX_COLOURS ? { ownColour: hue } : {}),
+    });
   }
   return out;
 }

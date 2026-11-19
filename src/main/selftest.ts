@@ -64,6 +64,8 @@ interface Ctx {
   watchDrags(watch: ((file: string) => void) | null): void;
   chooseFolder(answer: (() => string | undefined) | null): void;
   settingsNow(): AppSettings;
+  // The tabs as they are written down for the morning, with what he called each of them.
+  lastTabsNow(): { box: string; place: string; own?: string; ownColour?: number }[];
   watchFirstVisits(watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => { ok: true; said: string } | { ok: false; cause: string; detail: string }) | null): void;
   dragsAsked(): number;
   canDrag(tab: number): number;
@@ -1263,12 +1265,43 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check(`the right button on a tab offers what can be done to it and the ones beside it (${openTabs} open): ${onTab.join(', ')}`,
             onTab.includes('Close this tab') && besides && onTab.some((w) => w.startsWith('Edit ')) && aboveWhileOpen,
             [onTab, openTabs, aboveWhileOpen]);
-          // Nothing in it may rename a tab or set its colour: both are his to decide (SSH-APP §7), and a
-          // line invented for either would be a line that means nothing in this app.
-          check('and nothing in it was invented: no rename, no colour, no duplicate', !onTab.some((w) => /rename|colour|color|duplicate/i.test(w)), onTab);
+          // Naming a tab was his to decide and he decided it on the night of 2026-11-18, so the line is
+          // there now. What is still not in it is what nobody decided: duplicating a tab, which is undecided
+          // for a place that keeps running, and reopening the last closed one, which needs state nothing
+          // keeps. A line invented for either would be a line that means nothing in this app.
+          check('and it offers what he decided, and nothing invented: naming this tab, no duplicate, no reopen', onTab.some((w) => /^Name this tab$|^Rename /.test(w)) && !onTab.some((w) => /duplicate|reopen/i.test(w)), onTab);
           await shutIt();
           await sleep(120);
           check('and the window is put back behind its tabs when the menu goes', await until(() => !ctx.overlayOn(), 3000), '');
+          // ---- A tab's own name and colour ----
+          //
+          // His, the night of 2026-11-18. Most tabs are left as what they are, one box and one place; this
+          // is for the two or three that are not. The group's edge and its dot keep the box's own colour
+          // whatever a tab is called, because a tab is his to name and a box is what it is.
+          {
+            const id = ctx.shellState().tabs[0]?.id ?? 0;
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'nameTab', id: ${id}, name: 'the deploy I am watching', colour: 2 })`);
+            const wears = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${id}"] .tab-own')?.textContent ?? ''`)) === 'the deploy I am watching', 5000);
+            const dotKeeps = await js<boolean>(ctx.shell, `(() => {
+              const tab = document.querySelector('[data-tab="${id}"]');
+              const own = tab?.querySelector('.tab-own');
+              const dot = tab?.querySelector('.box-dot') ?? tab?.querySelector('[class*="mark"]');
+              if (!own) return false;
+              const mine = getComputedStyle(own).getPropertyValue('--hue').trim();
+              const box = getComputedStyle(tab).getPropertyValue('--hue').trim();
+              return mine !== '' && mine !== box;
+            })()`);
+            check('a tab he names wears that name, in a colour of its own, while the box keeps its own', wears && dotKeeps, [wears, dotKeeps]);
+            // And it is written into his own locked list with the tabs the morning offers, so a tab he named
+            // is still that tab after a restart. What is held is what was saved, because the morning reads
+            // exactly this.
+            const saved = await until(() => ctx.lastTabsNow().some((t) => t.own === 'the deploy I am watching' && t.ownColour === 2), 15_000);
+            check('and what he called it is saved with the tabs the morning offers to open again', saved, ctx.lastTabsNow());
+            // Empty puts it back to what it is, which is the ordinary case and must be one press away.
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'nameTab', id: ${id}, name: '', colour: 0 })`);
+            const back = await until(async () => (await js<number>(ctx.shell, `document.querySelectorAll('[data-tab="${id}"] .tab-own').length`)) === 0, 5000);
+            check('and an empty name puts the tab back to its box and its place', back, back);
+          }
           const onStrip = await strip(`document.getElementById('bar')`);
           await sweepMenu(ctx.shell, 'the tab strip, empty part');
           check(`the right button on the empty part of the strip is about the strip: ${onStrip.join(', ')}`,

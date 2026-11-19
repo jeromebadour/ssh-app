@@ -69,6 +69,10 @@ const shapes: Record<string, JSX.Element> = {
   reconnect: <><path d="M12.5 8a4.5 4.5 0 0 1-7.7 3.2M3.5 8a4.5 4.5 0 0 1 7.7-3.2" /><path d="M11.5 2.5v2.5H9M4.5 13.5V11H7" /></>,
   silent: <><path d="M2.5 11.5h2M6 11.5V9M9 11.5V6.5M12.5 11.5V4" /></>,
   edit: <><path d="M3.5 12.5l.75-3 6.5-6.5 2.25 2.25-6.5 6.5z" /><path d="M9.5 4.25l2.25 2.25" /></>,
+  // Naming a tab: a label tied to the thing, not the pencil that edits it. The pencil already means editing
+  // a box, and two pencils on two lines of one menu meaning two different things is the fault he named on
+  // the night of 2026-11-18, in its other form.
+  tag: <><path d="M12.5 2.5h-4l-6 6 4 4 6-6z" /><circle cx="10.3" cy="4.7" r=".9" /></>,
   place: <><path d="M8 13.5s4-3.6 4-7a4 4 0 0 0-8 0c0 3.4 4 7 4 7z" /><circle cx="8" cy="6.5" r="1.5" /></>,
   fileKey: <><path d="M4 2.5h6l2.5 2.5v8.5H4z" /><circle cx="7" cy="9.75" r="1.25" /><path d="M8.1 9.1l2.2-2.1M9.5 7.75l.75.75" /></>,
   says: <><path d="M3 4h10v6.5H7l-3 2.5v-2.5H3z" /></>,

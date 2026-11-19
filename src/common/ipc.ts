@@ -126,6 +126,8 @@ export interface TabBox {
 
 export interface TabInfo {
   id: number;
+  own: string; // what he called this tab; empty when it goes by its box and place
+  ownColour: number; // the colour he gave it, 1 to BOX_COLOURS; 0 when it goes by its box's colour
   againAt: number; // when a new session opens by itself (ms since the epoch); 0 when none is coming
   state: EngineState;
   cause: string; // why it is gone, in plain words; empty otherwise
@@ -214,7 +216,7 @@ export interface ShellState {
   downloadsNow: string; // where downloads land as things stand, default or chosen: the folder, written out
   // The morning: what was open when he last used the app, offered to open again. It is there only while no
   // tab is open at all, because once he has opened one the morning is over and the offer is in the way.
-  reopen: { box: string; name: string; colour: number; place: string }[];
+  reopen: { box: string; name: string; colour: number; place: string; own: string; ownColour: number }[];
   // The list is open and this state is the real one. Until it is true the window knows nothing of his boxes,
   // so the screen that offers them draws nothing to press: a button drawn from a state the app does not have
   // yet is a button that moves out from under the press when the real state lands.
@@ -282,6 +284,9 @@ export type ShellCmd =
   | { op: 'new' } // the skeleton's tab with no box: the self-test's
   | { op: 'select'; id: number }
   | { op: 'close'; id: number }
+  // What he calls one tab, and the colour he gives it. A name of '' puts it back to its box and place,
+  // a colour of 0 back to its box's own. Both are saved with the tabs the morning offers to open again.
+  | { op: 'nameTab'; id: number; name: string; colour: number }
   | { op: 'open'; box: string; place: string } // a tab on a pinned box, in one of its places or its starting folder
   | { op: 'overlay'; on: boolean } // a menu or dialog is open: the shell must be above the tabs
   | { op: 'addBox'; req: number; draft: BoxDraft } // a new box: its key is made and it goes straight to its check
