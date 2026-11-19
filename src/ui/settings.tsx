@@ -4,6 +4,7 @@
 //
 // It is built from the same dialog the rest of the app uses, not from a screen of its own (BUILD-RULES 2.13).
 
+import { Button } from './button';
 import { useEffect, useRef } from 'preact/hooks';
 import type { AppSettings } from '../common/ipc';
 import { SectionHead } from './boxdialogs';
@@ -36,22 +37,16 @@ export function SettingsDialog(props: {
 
         <section class="sect">
           <SectionHead glyph="bring" title="Where downloads land" />
-          <p class="said" id="settings-downloads">{props.downloadsNow}</p>
+          {/* The folder itself, which is a value and not a sentence: it is what the setting is set to. */}
+          <p class="said" id="settings-downloads" data-value="yes">{props.downloadsNow}</p>
+          {/* One line a section. The warning is the half he cannot work out for himself, so it is the half
+              that stays whole. */}
           <p class="said quiet" id="settings-downloads-why">
-            {chosen
-              ? 'Everything brought over from a box lands here, under a name this PC can hold.'
-              : "Berth's own folder, made the first time something is brought over."}
-          </p>
-          <p class="said quiet" id="settings-downloads-warn">
-            A folder that syncs to the internet sends every file you bring over with it. Berth cannot tell which folders those are.
+            {chosen ? 'Everything brought over lands here' : "Berth's own folder, made the first time something is brought over"}. A folder that syncs to the internet sends every file with it, and Berth cannot tell which folders those are.
           </p>
           <div class="dlg-actions settings-actions">
-            <button type="button" class="btn keep-plain" id="settings-downloads-default" disabled={!chosen} onClick={props.onDefault}>
-              <Glyph name="back" />Use Berth's own folder
-            </button>
-            <button type="button" class="btn primary" id="settings-downloads-pick" onClick={props.onPick}>
-              <Glyph name="folder" />Choose a folder
-            </button>
+            <Button id="settings-downloads-default" glyph="back" disabled={!chosen} onClick={props.onDefault}>Use Berth's own folder</Button>
+            <Button id="settings-downloads-pick" tone="go" glyph="folder" onClick={props.onPick}>Choose a folder</Button>
           </div>
         </section>
 
@@ -77,9 +72,7 @@ export function SettingsDialog(props: {
         </section>
 
         <div class="dlg-actions">
-          <button type="button" class="btn primary" id="settings-close" ref={close} onClick={props.onClose}>
-            Done
-          </button>
+          <Button id="settings-close" tone="go" hold={close} onClick={props.onClose}>Done</Button>
         </div>
       </div>
     </div>

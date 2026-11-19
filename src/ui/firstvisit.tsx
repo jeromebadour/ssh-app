@@ -6,6 +6,7 @@
 // ever ask. What is typed goes straight to main, is used once, and is not kept anywhere: not by this screen,
 // not in the window's state, not on disk.
 
+import { Button } from './button';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { FirstVisitShown } from '../common/ipc';
 import { Glyph } from './glyphs';
@@ -66,11 +67,10 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
       <div class="dialog dlg-visit" id="first-visit" role="dialog" aria-modal="true" aria-labelledby="first-visit-title">
         <h1 id="first-visit-title"><Glyph name="fileKey" />Put Berth's key on {v.name}</h1>
 
+        {/* One line. The title says what this screen does; what it must add is the thing he cannot see: that
+            this is the one password Berth ever asks for a box, used once and written down nowhere. */}
         <p class="said" id="first-visit-what">
-          {v.name} is pinned: the machine at {v.addr} has proved it is the one you checked. Berth can now sign in once as <b>{v.user}</b> with that account's password, add its own key, and never ask for a password for this box again.
-        </p>
-        <p class="said quiet" id="first-visit-cost">
-          This is the only time Berth will ever ask you for a password for a box. It is used once, for one command, and is not written down anywhere. From here on this box is key only, even if the key is removed: starting over means deleting the box and adding it again.
+          The only password Berth ever asks for a box: used once, as <b>{v.user}</b>, to put its key on {v.name}, and written down nowhere.
         </p>
 
         {asking && (
@@ -94,8 +94,8 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
             />
             {v.error !== '' && <p class="said problem" id="first-visit-why">{WHY[v.error] ?? WHY['protocol']}{v.detail ? ` (${v.detail})` : ''}</p>}
             <div class="dlg-actions gap-top">
-              <button type="button" class="btn keep-plain" id="first-visit-cancel" onClick={props.onClose}><Glyph name="close" />Cancel</button>
-              <button type="submit" class="btn primary" id="first-visit-go" disabled={password === ''}><Glyph name="ok" />Put the key on</button>
+              <Button id="first-visit-cancel" glyph="close" onClick={props.onClose}>Cancel</Button>
+              <Button id="first-visit-go" tone="go" type="submit" glyph="ok" disabled={password === ''}>Put the key on</Button>
             </div>
           </form>
         )}
@@ -127,8 +127,8 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
               </label>
             ))}
             <div class="dlg-actions gap-top">
-              <button type="button" class="btn keep-plain" id="first-visit-answers-cancel" onClick={props.onClose}><Glyph name="close" />Don't answer</button>
-              <button type="submit" class="btn primary" id="first-visit-answers-go"><Glyph name="check" />Answer</button>
+              <Button id="first-visit-answers-cancel" glyph="close" onClick={props.onClose}>Don't answer</Button>
+              <Button id="first-visit-answers-go" tone="go" type="submit" glyph="check">Answer</Button>
             </div>
           </form>
         )}
@@ -154,7 +154,7 @@ export function FirstVisitDialog(props: { shown: FirstVisitShown; onGo(password:
 
         {!asking && !working && !answering && (
           <div class="dlg-actions gap-top">
-            <button type="button" class="btn primary" id="first-visit-close" ref={close} onClick={props.onClose}>Done</button>
+            <Button id="first-visit-close" tone="go" hold={close} onClick={props.onClose}>Done</Button>
           </div>
         )}
       </div>

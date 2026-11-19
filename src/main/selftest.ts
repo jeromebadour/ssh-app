@@ -192,6 +192,46 @@ const prose = (view: WebContentsView) => js<Reading[]>(view, `(() => {
   });
 })()`);
 const tooSmall = (r: Reading) => r.size < 14.5 || r.weight < 450 || r.ratio < 4.5;
+// Every answer a dialog offers, and whether it is a surface a person can see without reading. His, the night
+// of 2026-11-18, looking at Close Berth: the safe answer was bare text with a glyph and a key hint floating
+// beside it while the thing next to it was filled, so the dialog read as one button and a sentence. There is
+// one button component now with three tones, and the thing held here is the part he saw: a button that is
+// neither filled nor ringed is not a button, whatever it is called in the markup.
+// How many lines of prose a dialog puts in front of him. His own W3Arena asks "Rage quit, or a real goodbye?"
+// and gives one line; Berth asked "Close Berth and end 1 session?" and then a paragraph about what a session
+// is. The rule he set on the night of 2026-11-18: a dialog gets a title and at most one line, and where the
+// title says it already it gets none. A list of what goes is not prose: it is the facts of the thing being
+// asked about, which his own rule asks for by name.
+interface Story { dialog: string; lines: number; said: string[] }
+const stories = (view: WebContentsView) => js<Story[]>(view, `(() => {
+  const PROSE = 'p.said:not([data-value]), p.dlg-lead, p.dlg-fact, p.gate-lead, p.gate-fact';
+  // A dialog built of sections is counted a section at a time: each of its sections is one setting with its
+  // own question, and one line each is the rule. A dialog with no sections is one question, so it is counted
+  // whole. A value the setting is set to is not a sentence, and is marked as such where it is written.
+  const out = [];
+  for (const d of document.querySelectorAll('.dialog, .gate')) {
+    if (d.offsetParent === null) continue;
+    const parts = [...d.querySelectorAll('.sect')].filter((p) => p.offsetParent !== null);
+    for (const where of (parts.length > 0 ? parts : [d])) {
+      const said = [...where.querySelectorAll(PROSE)].filter((el) => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden' && (el.textContent || '').trim().length > 0);
+      out.push({ dialog: (d.id || d.className) + (parts.length > 0 ? ' / ' + ((where.querySelector('.sect-head, h2') || {}).textContent || '').trim().slice(0, 24) : ''), lines: said.length, said: said.map((el) => (el.textContent || '').trim().slice(0, 50)) });
+    }
+  }
+  return out;
+})()`);
+interface Answer { what: string; tone: string; surface: boolean }
+const answers = (view: WebContentsView) => js<Answer[]>(view, `(() => {
+  const clear = (c) => c === 'transparent' || /rgba\\([^)]*,\\s*0\\s*\\)/.test(c);
+  return [...document.querySelectorAll('.btn')].filter((el) => {
+    const s = getComputedStyle(el);
+    return el.offsetParent !== null && s.visibility !== 'hidden';
+  }).map((el) => {
+    const s = getComputedStyle(el);
+    const filled = !clear(s.backgroundColor);
+    const ringed = s.boxShadow !== 'none' || ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(s['border' + side + 'Width']) > 0 && s['border' + side + 'Style'] !== 'none' && !clear(s['border' + side + 'Color']));
+    return { what: (el.id || el.className) + ' "' + (el.textContent || '').trim().slice(0, 24) + '"', tone: el.className, surface: filled || ringed };
+  });
+})()`);
 // Every glyph a menu draws, against the one the pane falls back to. A name the pane does not know is not an
 // error anywhere: `SHAPES[kind] ?? SHAPES['unknown']` quietly draws the question mark, which is how "Back to
 // the folder" came to be marked with one. A menu line is a glyph and a few words, so a glyph that says
@@ -322,11 +362,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
   // settings, a paste, an odd paste, a link, a changed identity, Edit box and Delete box. The floor is just
   // under that, so the measurement quietly stopping is a failure rather than a pass with nothing in it. The
   // other modes open no dialogs, and a minimum they cannot meet would fail them for nothing.
-  const wantedReadings = ctx.mode === 'boxes-ui' ? 18 : 0;
+  // The floor is 16 since the dialogs stopped telling stories: the first visit and the changed identity each
+  // say in one line what they used to say in two. It exists so a sweep that quietly never ran fails rather
+  // than passing over nothing, so it follows the app down rather than being left where it was.
+  const wantedReadings = ctx.mode === 'boxes-ui' ? 16 : 0;
+  // The answers those same dialogs offered. A floor under the count, so a sweep that quietly never ran is a
+  // failure rather than a pass over nothing.
+  const seen: Answer[] = [];
+  const wantedAnswers = ctx.mode === 'boxes-ui' ? 14 : 0;
+  const told: Story[] = [];
   // Ten menus and one whole pane are swept in the box screens, 85 glyphs between them. A floor under that,
   // so the sweep quietly never running is a failure rather than a pass over nothing.
   const wantedMenus = ctx.mode === 'boxes-ui' ? 80 : 0;
-  const read = async (view: WebContentsView): Promise<void> => { readings.push(...(await prose(view))); };
+  const read = async (view: WebContentsView): Promise<void> => { readings.push(...(await prose(view))); seen.push(...(await answers(view))); told.push(...(await stories(view))); };
   const check = (name: string, ok: boolean, detail: unknown = '') => {
     stage = `after "${name}"`;
     // What a probe says about a failure is for a person to read, so it is bounded: one probe that happened to
@@ -350,6 +398,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     check('every sentence a dialog puts in front of him is at least 14.5px at weight 450 and 4.5:1 against its own surface',
       readings.length >= wantedReadings && small.length === 0,
       { read: readings.length, wanted: wantedReadings, small });
+    const bare = seen.filter((a) => !a.surface);
+    const storytellers = told.filter((t) => t.lines > 1);
+    check('no dialog tells him a story: a title, what it is about, and at most one line', storytellers.length === 0, storytellers);
+    check('every answer a dialog offers is a surface he can see, not words beside a filled one',
+      seen.length >= wantedAnswers && bare.length === 0,
+      { read: seen.length, wanted: wantedAnswers, bare });
     const code = asked === 0 && results.every((r) => r.ok) ? 0 : 1;
     process.stdout.write(`SELFTEST ${JSON.stringify({ ok: code === 0, kind: ctx.kind, results })}\n`);
     app.exit(code);

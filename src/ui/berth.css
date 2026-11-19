@@ -288,9 +288,24 @@ ul { list-style: none; }
    dialog had none at all: tabbing through Add box, Delete or the check showed nothing moving. */
 .btn:focus { outline: none; }
 .btn:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+/* One button, three tones, and every one of them a real surface. His, the night of 2026-11-18: the safe answer
+   was bare text with a glyph and a key hint floating beside it, while the thing next to it was filled, so a
+   dialog read as one button and a sentence. A person must see where to press without reading.
+     plain   the safe answer, and anything that is neither: its own surface and a hairline edge.
+     go      the answer the dialog is for, filled in the window's main colour.
+     danger  the answer that takes something away, filled in the remove colour. */
 .btn { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: var(--r); font-weight: 500; }
-.btn.keep { background: var(--panel); color: var(--text); box-shadow: inset 0 0 0 1px var(--line), 0 0 0 2px var(--panel-2), 0 0 0 3.5px var(--text-3); }
-.btn.danger { color: #eef0f1; background: color-mix(in srgb, var(--remove) 88%, #000); }
+.btn-plain { color: var(--text); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.btn-plain:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, var(--panel)); }
+.btn-go { color: #eef2f1; background: color-mix(in srgb, var(--main) 82%, #000); }
+.btn-danger { color: #eef0f1; background: color-mix(in srgb, var(--remove) 70%, #000); }
+.btn-wide { justify-content: center; width: 100%; height: 38px; margin-top: 4px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-words { display: flex; align-items: center; gap: 7px; }
+/* The dialog's own tone reaches its main answer, as it did when that answer was called primary. */
+.dialog.dlg-checked .btn-go { background: color-mix(in srgb, var(--checked) 70%, #000); }
+.dialog.dlg-problem .btn-go { background: color-mix(in srgb, var(--problem) 62%, #000); }
+.dialog.dlg-remove .btn-go { background: color-mix(in srgb, var(--remove) 62%, #000); }
 
 
 /* ---------- the Boxes menu (opened from the top, like a sessions menu) ---------- */
@@ -350,12 +365,8 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .rules li .glyph { width: 14px; height: 14px; }
 .rules li.met { color: var(--checked); }
 
-.btn.primary { color: #eef2f1; background: color-mix(in srgb, var(--main) 82%, #000); }
-.btn.wide { justify-content: center; height: 38px; margin-top: 4px; }
-.btn.waiting { background: var(--panel-2); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
+.btn-waiting { background: var(--panel-2); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
 .wait-ring { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--text-2); }
-.btn.quiet { color: var(--text-2); background: none; box-shadow: inset 0 0 0 1px var(--line); height: 32px; padding: 0 12px; }
-.btn.keep-plain { color: var(--text-2); }
 
 /* ---------- dialogs: one colour each, its action's ---------- */
 .dialog.wide { width: 620px; }
@@ -365,11 +376,9 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .dialog.dlg-main h1 .glyph { color: var(--main); }
 .dialog.dlg-checked { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--checked); }
 .dialog.dlg-checked h1 .glyph { color: var(--checked); }
-.dialog.dlg-checked .btn.primary { background: color-mix(in srgb, var(--checked) 70%, #000); }
 .dialog.dlg-problem { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--problem); }
 .dialog.dlg-problem h1 .glyph { color: var(--problem); }
 /* One colour per dialog: its action button takes it too, and nothing in it carries a second accent. */
-.dialog.dlg-problem .btn.primary { background: color-mix(in srgb, var(--problem) 62%, #000); }
 .dialog .input.focus { border-color: var(--text-3); box-shadow: none; }
 .dlg-fact { margin: 0 0 18px; line-height: 1.5; }
 
@@ -712,7 +721,6 @@ textarea.pastebox:focus { border-color: var(--text-2); }
 .bm-act.remove:hover { background: color-mix(in srgb, var(--remove) 22%, transparent); color: var(--remove); }
 .dialog.dlg-remove { box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 3px 0 var(--remove); }
 .dialog.dlg-remove h1 .glyph { color: var(--remove); }
-.dialog.dlg-remove .btn.primary { background: color-mix(in srgb, var(--remove) 62%, #000); }
 /* What a question says goes with it: one look for every dialog that ends something, not one per dialog. These
    were written against #remove-box alone, so the closing question, which is the same kind of question and uses
    the same shell, came out with none of it: a bare line of text run into the paragraph under it. */

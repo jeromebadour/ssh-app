@@ -1,5 +1,6 @@
 // The shell view: the password before anything else, then the bar of tabs. It only draws: what the lock says
 // and which tabs exist come from main, and everything it asks goes through the few messages in common/ipc.ts.
+import { Button } from '../ui/button';
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { SETTINGS_DEFAULT, type GateState, type ShellPort, type ShellState, type TabInfo } from '../common/ipc';
@@ -97,8 +98,8 @@ function Reopen(props: { s: ShellState; act: BarActions }) {
         ))}
       </div>
       <div class="ro-acts">
-        <button type="button" class="btn quiet" id="reopen-not-now" onClick={() => props.act.dropReopen()}><Glyph name="close" />Not now</button>
-        <button type="button" class="btn primary" id="reopen-go" disabled={picked.length === 0} onClick={() => props.act.reopen(picked)}><Glyph name="reopen" />Open {picked.length === props.s.reopen.length ? 'all' : picked.length}</button>
+        <Button id="reopen-not-now" glyph="close" onClick={() => props.act.dropReopen()}>Not now</Button>
+        <Button id="reopen-go" tone="go" glyph="reopen" disabled={picked.length === 0} onClick={() => props.act.reopen(picked)}>Open {picked.length === props.s.reopen.length ? 'all' : picked.length}</Button>
       </div>
     </div>
   );
@@ -189,7 +190,7 @@ function Unlocked(props: { s: ShellState }) {
                 ))}
               </div>
             )}
-            <button type="button" class={`btn ${s.boxes.length === 0 ? 'primary' : 'quiet'}`} id="first-add" onClick={() => act.addBox()}><Glyph name="plus" />Add box</button>
+            <Button id="first-add" tone={s.boxes.length === 0 ? 'go' : 'plain'} glyph="plus" onClick={() => act.addBox()}>Add box</Button>
             </>)}
           </div>
         )}

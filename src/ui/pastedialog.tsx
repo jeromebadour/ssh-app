@@ -2,6 +2,7 @@
 // command the moment it arrives, so a paste that holds one is read first, here, on a surface no tab can draw
 // on. What cannot be seen by looking at the text is marked: characters drawn as nothing, characters that turn
 // the reading round, and characters that look like a letter of the keyboard and are not.
+import { Button } from './button';
 import type { PasteShown } from '../common/ipc';
 import { Glyph } from './glyphs';
 import { useEffect } from 'preact/hooks';
@@ -82,15 +83,8 @@ export function PasteDialog(props: { p: PasteShown; act: PasteActions }) {
           ))}
         </ol>
         <div class="row end">
-          <button type="button" class="btn" id="paste-drop" onClick={props.act.drop}>
-            <Glyph name="close" />
-            Don't send<kbd>Esc</kbd>
-          </button>
-          <button type="button" class="btn primary" id="paste-send" onClick={props.act.send}>
-            <Glyph name="paste" />
-            Send to {p.box}
-            <kbd>Enter</kbd>
-          </button>
+          <Button id="paste-drop" glyph="close" kbd="Esc" onClick={props.act.drop}>Don't send</Button>
+          <Button id="paste-send" tone="go" glyph="paste" kbd="Enter" onClick={props.act.send}>Send to {p.box}</Button>
         </div>
       </div>
     </div>

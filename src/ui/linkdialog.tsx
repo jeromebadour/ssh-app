@@ -1,6 +1,7 @@
 // An address a box printed, shown whole before anything opens (plan B2.7). A box can print any text at all,
 // so what is drawn here is Berth's: the host on its own line, because the host is what decides where the
 // address really goes, and then the whole address, as it is, with nothing cut and nothing shortened.
+import { Button } from './button';
 import type { LinkAsked } from '../common/ipc';
 import { Glyph } from './glyphs';
 import { useEffect } from 'preact/hooks';
@@ -35,14 +36,8 @@ export function LinkDialog(props: { l: LinkAsked; act: LinkActions }) {
           <code>{l.url}</code>
         </p>
         <div class="row end">
-          <button type="button" class="btn" id="link-drop" onClick={props.act.drop}>
-            <Glyph name="close" />
-            Don't open<kbd>Esc</kbd>
-          </button>
-          <button type="button" class="btn primary" id="link-open" onClick={props.act.open}>
-            <Glyph name="link" />
-            Open<kbd>Enter</kbd>
-          </button>
+          <Button id="link-drop" glyph="close" kbd="Esc" onClick={props.act.drop}>Don't open</Button>
+          <Button id="link-open" tone="go" glyph="link" kbd="Enter" onClick={props.act.open}>Open</Button>
         </div>
       </div>
     </div>

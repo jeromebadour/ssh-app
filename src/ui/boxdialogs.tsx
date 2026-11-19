@@ -4,6 +4,7 @@
 //
 // Nothing here decides anything: every check of what is typed is the one in common/boxes.ts, which main applies
 // again before anything is saved; what the box showed is in the check only once main has compared a paste.
+import { Button } from './button';
 import { whenAs } from '../common/when';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { BOX_COLOURS, checkFolder, checkHost, checkName, checkPlace, checkPort, checkUser, draftFaults, type BoxDraft, type Check, type Place } from '../common/boxes';
@@ -239,9 +240,7 @@ export function AddBoxDialog(props: AddBoxProps) {
                       <div class="key-line">{editing.pinType}, pinned {editing.pinnedAt.slice(0, 10)}</div>
                       <div class="key-sub mono">{editing.pinFingerprint}</div>
                     </div>
-                    <button type="button" class="btn keep-plain" id="edit-forget" onClick={editing.onForget}>
-                      <Glyph name="identityBroken" />Forget it
-                    </button>
+                    <Button id="edit-forget" glyph="identityBroken" onClick={editing.onForget}>Forget it</Button>
                   </div>
                 )}
               </div>
@@ -281,9 +280,9 @@ export function AddBoxDialog(props: AddBoxProps) {
               </div>
               {!editing && (
                 props.keyFile ? (
-                  <button type="button" class="btn quiet" id="key-file-drop" onClick={props.onDropKeyFile}><Glyph name="close" />Let Berth make one</button>
+                  <Button id="key-file-drop" glyph="close" onClick={props.onDropKeyFile}>Let Berth make one</Button>
                 ) : (
-                  <button type="button" class="btn quiet" id="key-file-pick" onClick={props.onPickKeyFile}><Glyph name="fileKey" />Use a key file</button>
+                  <Button id="key-file-pick" glyph="fileKey" onClick={props.onPickKeyFile}>Use a key file</Button>
                 )
               )}
             </div>
@@ -296,16 +295,16 @@ export function AddBoxDialog(props: AddBoxProps) {
                   </span>
                   <span class="check check-hint">The key file's own passphrase, not your Berth password. It opens the file and is not kept.</span>
                 </label>
-                <button type="button" class="btn quiet" id="key-passphrase-go" onClick={sendPassphrase}><Glyph name="ok" />Open the key file</button>
+                <Button id="key-passphrase-go" glyph="ok" onClick={sendPassphrase}>Open the key file</Button>
               </div>
             )}
         <div class="dlg-actions">
           {props.error !== '' && <span class="to-fix" id="add-error"><Glyph name="fix" />{props.error}</span>}
           {props.error === '' && toFix > 0 && <span class="to-fix" id="add-to-fix"><Glyph name="fix" />{firstWord(faults)}{toFix > 1 ? `, ${toFix} fields to fix` : ''}</span>}
-          <button type="button" class="btn keep-plain" id="add-cancel" onClick={props.onCancel}><Glyph name="close" />Cancel</button>
-          <button type="button" class={`btn primary ${props.working ? 'waiting' : ''}`} id="add-submit" onClick={add}>
-            {props.working ? <><span class="wait-ring" />{editing ? 'Saving' : 'Making its key'}</> : <>{editing ? <><Glyph name="check" />Save</> : <><Glyph name="plus" />Add box</>}</>}
-          </button>
+          <Button id="add-cancel" glyph="close" onClick={props.onCancel}>Cancel</Button>
+          <Button id="add-submit" tone="go" waiting={props.working} {...(props.working ? {} : { glyph: editing ? 'check' : 'plus' })} onClick={add}>
+            {props.working ? <><span class="wait-ring" />{editing ? 'Saving' : 'Making its key'}</> : editing ? 'Save' : 'Add box'}
+          </Button>
         </div>
       </div>
     </div>
@@ -379,7 +378,7 @@ function CopyButton(props: { onCopy(): void }) {
   return (
     <button
       type="button"
-      class={`btn quiet copy ${copied ? 'copied' : ''}`}
+      class={`btn btn-plain copy ${copied ? 'copied' : ''}`}
       id="check-copy"
       onClick={() => {
         props.onCopy();
@@ -451,12 +450,12 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
                     <div class="reach-title">{unreachableWords(c).title}</div>
                     <div class="reach-sub">{unreachableWords(c).sub}</div>
                   </div>
-                  <button type="button" class="btn quiet" id="check-again" onClick={props.act.again}><Glyph name="reconnect" />Try again</button>
+                  <Button id="check-again" glyph="reconnect" onClick={props.act.again}>Try again</Button>
                 </div>
               </div>
             </div>
             <div class="dlg-actions gap-top">
-              <button type="button" class="btn keep-plain" id="check-close" onClick={props.act.close}><Glyph name="close" />Close</button>
+              <Button id="check-close" glyph="close" onClick={props.act.close}>Close</Button>
             </div>
           </>
         ) : (
@@ -498,20 +497,18 @@ export function CheckDialog(props: { c: CheckShown; act: CheckActions; demoPaste
             )}
 
             <div class={`dlg-actions ${mismatch || c.step === 'match' ? '' : 'gap-top'}`}>
-              {mismatch && <button type="button" class="btn quiet" id="check-again" onClick={props.act.again}><Glyph name="reconnect" />Check again</button>}
-              <button type="button" class={`btn ${mismatch ? 'keep' : 'keep-plain'}`} id="check-close" onClick={props.act.close}><Glyph name="close" />{mismatch ? 'Close' : 'Cancel'}</button>
+              {mismatch && <Button id="check-again" glyph="reconnect" onClick={props.act.again}>Check again</Button>}
+              <Button id="check-close" glyph="close" onClick={props.act.close}>{mismatch ? 'Close' : 'Cancel'}</Button>
               {/* A box that already holds Berth's key is connected to. A box that holds no key of his at all
                   cannot be, and the way in is the first visit: pinned first, then one password, once
                   (decision O2). Both are offered because only he knows which this box is. */}
               {c.step === 'match' && (
-                <button type="button" class={`btn keep-plain ${trusting ? 'waiting' : ''}`} id="check-visit" onClick={() => { setTrusting(true); props.act.trustThenVisit(); }}>
-                  <Glyph name="fileKey" />Trust, and put my key on it
-                </button>
+                <Button id="check-visit" glyph="fileKey" onClick={() => { setTrusting(true); props.act.trustThenVisit(); }}>Trust, and put my key on it</Button>
               )}
               {c.step === 'match' && (
-                <button type="button" class={`btn primary ${trusting ? 'waiting' : ''}`} id="check-trust" onClick={() => { setTrusting(true); props.act.trust(); }}>
-                  {trusting ? <><span class="wait-ring" />Trusting and connecting</> : <><Glyph name="identity" />Trust and connect</>}
-                </button>
+                <Button id="check-trust" tone="go" waiting={trusting} {...(trusting ? {} : { glyph: 'identity' })} onClick={() => { setTrusting(true); props.act.trust(); }}>
+                  {trusting ? <><span class="wait-ring" />Trusting and connecting</> : 'Trust and connect'}
+                </Button>
               )}
             </div>
           </>
@@ -532,7 +529,9 @@ export function ChangedDialog(props: { name: string; addr: string; pinType: stri
     <div class="scrim">
       <div class="dialog wide dlg-problem" id="changed" role="dialog" aria-modal="true" aria-labelledby="chg-title">
         <h1 id="chg-title"><Glyph name="identityBroken" />{props.name} is not the box Berth knows</h1>
-        <p class="dlg-lead">The box at {props.addr} answered with another identity than the one pinned for {props.name}. Berth stopped before signing in: no key was used and nothing was sent.</p>
+        {/* One line. The title says the box is not the one Berth knows; what it must add is that nothing was
+            sent, and what to do if it really was rebuilt. */}
+        <p class="dlg-lead">Berth stopped before signing in: no key was used and nothing was sent. If {props.name} was rebuilt, check its new identity the same way as the first time.</p>
         <div class="fp-pair">
           <div class="fp">
             <div class="fp-label"><Glyph name="identity" />Pinned, {props.pinnedAt.slice(0, 10)}</div>
@@ -543,9 +542,8 @@ export function ChangedDialog(props: { name: string; addr: string; pinType: stri
             <div class="fp-val mono">{props.pinType}<br />{props.shownFingerprint}</div>
           </div>
         </div>
-        <p class="dlg-fact">If {props.name} was rebuilt, its new identity is checked again the same way as the first time.</p>
         <div class="dlg-actions">
-          <button type="button" class="btn keep" id="changed-close" autofocus onClick={props.onClose}><Glyph name="close" />Close</button>
+          <Button id="changed-close" autofocus glyph="close" onClick={props.onClose}>Close</Button>
         </div>
       </div>
     </div>
@@ -583,8 +581,8 @@ export function RemoveBoxDialog(props: { box: BoxView; tabs: number; onRemove():
           The key line Berth asked you to add stays on the box itself: only the box can take it out.
         </p>
         <div class="dlg-actions">
-          <button type="button" class="btn keep-plain" id="remove-cancel" ref={keep} onClick={props.onCancel}><Glyph name="close" />Keep it<kbd>Esc</kbd></button>
-          <button type="button" class="btn primary" id="remove-do" onClick={props.onRemove}><Glyph name="stop" />Delete {b.name}</button>
+          <Button id="remove-cancel" glyph="close" kbd="Esc" hold={keep} onClick={props.onCancel}>Keep it</Button>
+          <Button id="remove-do" tone="danger" glyph="stop" onClick={props.onRemove}>Delete {b.name}</Button>
         </div>
       </div>
     </div>
@@ -625,8 +623,8 @@ export function ReplaceDialog(props: { asked: ReplaceAsked; onReplace(): void; o
           In {a.folder}. Replacing it cannot be undone from Berth: what is there now is gone, and only the box's own backups would have it.
         </p>
         <div class="dlg-actions">
-          <button type="button" class="btn keep-plain" id="replacing-keep" ref={keep} onClick={props.onKeep}><Glyph name="close" />Keep what is there<kbd>Esc</kbd></button>
-          <button type="button" class="btn danger" id="replacing-do" onClick={props.onReplace}><Glyph name="file" />Replace it</button>
+          <Button id="replacing-keep" glyph="close" kbd="Esc" hold={keep} onClick={props.onKeep}>Keep what is there</Button>
+          <Button id="replacing-do" tone="danger" glyph="file" onClick={props.onReplace}>Replace it</Button>
         </div>
       </div>
     </div>
@@ -681,8 +679,8 @@ export function ClosingDialog(props: { what: 'app' | 'tab'; live: { id: number; 
           Whatever you started on {n === 1 ? 'the box' : 'those boxes'} keeps running there. What ends is Berth's way in, and what the terminal is holding.
         </p>
         <div class="dlg-actions">
-          <button type="button" class="btn keep-plain" id="closing-keep" ref={keep} onClick={props.onKeep}><Glyph name="close" />{app ? 'Keep Berth open' : 'Keep the tab'}<kbd>Esc</kbd></button>
-          <button type="button" class="btn danger" id="closing-do" onClick={props.onClose}><Glyph name="stop" />{app ? 'Close Berth' : 'Close the tab'}</button>
+          <Button id="closing-keep" glyph="close" kbd="Esc" hold={keep} onClick={props.onKeep}>{app ? 'Keep Berth open' : 'Keep the tab'}</Button>
+          <Button id="closing-do" tone="danger" glyph="stop" onClick={props.onClose}>{app ? 'Close Berth' : 'Close the tab'}</Button>
         </div>
       </div>
     </div>
