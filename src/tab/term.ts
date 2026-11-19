@@ -193,9 +193,15 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
   // the bytes a box sent and he refused it). A machine with no WebGL, or one whose context is lost while it
   // runs, falls back to the plain renderer and the window says which it is drawing with.
   let drawnBy: 'webgl' | 'plain' = 'plain';
-  const PLAIN_SAID = 'Berth is drawing without the graphics renderer: the prompt keeps its shape, not its colour.';
-  const sayPlain = (what: string): void => {
-    term.write(`${term.buffer.active.cursorX > 0 ? '\r\n' : ''}\x1b[2m${what}\x1b[0m\r\n`);
+  // Which renderer is drawing is said in the terminal's own head and never in its output: the output is what
+  // the box said, and a line of Berth's own in it is a line he has to tell from the box's. It shows only
+  // while the renderer is the plain one, which is the state worth saying.
+  const sayPlain = (): void => {
+    const said = document.getElementById('term-drawn');
+    if (!said) return;
+    said.hidden = false;
+    said.textContent = 'no graphics renderer';
+    said.title = 'This machine has no graphics renderer, so the prompt keeps its shape but not its colour.';
   };
   const wearRenderer = (t: Terminal): 'webgl' | 'plain' => {
     try {
@@ -208,7 +214,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
         drawnBy = 'plain';
         // Said once, in Berth's own words, because a prompt that quietly stops being coloured is a terminal
         // that has changed under him with nothing saying so.
-        sayPlain(`Berth lost the graphics renderer. ${PLAIN_SAID.slice('Berth is drawing '.length).replace(/^w/, 'W')}`);
+        sayPlain();
       });
       t.loadAddon(gl);
       return 'webgl';
@@ -226,7 +232,7 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     drawnBy = wearRenderer(term);
     // A machine with no graphics renderer at all is said as well, once, at the start: a prompt that is not
     // coloured is a thing he would otherwise put down to Berth not doing what it said it would.
-    if (drawnBy === 'plain') sayPlain(PLAIN_SAID);
+    if (drawnBy === 'plain') sayPlain();
   });
 
   // Paste and drop are not the terminal's to take: main pastes, from a key or click it saw itself.

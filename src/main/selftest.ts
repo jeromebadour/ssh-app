@@ -1321,12 +1321,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               return 'no context among ' + all.length;
             })()`);
             const fellBack = await until(async () => (await renderer()) === 'plain', 8000);
-            const saidSo = await until(async () => (await js<string>(front.view, `window.berthTerm?.text?.() ?? ''`)).includes('lost the graphics renderer'), 8000);
+            const saidSo = await until(async () => (await js<string>(front.view, `(() => { const e = document.getElementById('term-drawn'); return e && !e.hidden ? (e.textContent ?? '') : ''; })()`)).includes('no graphics renderer'), 8000);
             const stillDraws = await js<boolean>(front.view, `!!document.querySelector('#term .xterm-screen')`);
             check('losing the graphics renderer leaves a terminal that still draws, and says what it lost', lost === 'lost' && fellBack && saidSo && stillDraws, [lost, fellBack, saidSo, stillDraws]);
           } else {
             // No graphics renderer on this machine at all: then the terminal must have said so by itself.
-            const saidSo = (await js<string>(front.view, `window.berthTerm?.text?.() ?? ''`)).includes('drawing without the graphics renderer');
+            const saidSo = await js<boolean>(front.view, `(() => { const e = document.getElementById('term-drawn'); return !!e && !e.hidden && (e.textContent ?? '').includes('no graphics renderer'); })()`);
             check('a machine with no graphics renderer is told so, rather than quietly losing the prompt\'s colour', saidSo, saidSo);
           }
           // And the window says which box it is on, for the taskbar: Berth draws its own title bar, so this is
@@ -3101,7 +3101,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // that neither said what it was, that they wore one theme, and that he could not give either of them
           // more room. Each has a head that names it now, the files are the lighter surface and the terminal
           // the deeper one, and the grip answers the hand and the keyboard.
-          const heads = await js<string[]>(quiet.view, `[document.getElementById('files-head')?.textContent ?? '', document.getElementById('term-head')?.textContent ?? '']`);
+          // What a head says it is, which is its own name and not the readouts beside it: the terminal's head
+          // also carries how large its letters are and, on a machine with no graphics renderer, that.
+          const heads = await js<string[]>(quiet.view, `['files-head', 'term-head'].map((id) => [...(document.getElementById(id)?.children ?? [])].filter((e) => e.id === '' && e.tagName === 'SPAN').map((e) => e.textContent ?? '').join(' '))`);
           const glyphs = await js<number>(quiet.view, `document.querySelectorAll('#files-head .pane-glyph, #term-head .pane-glyph').length`);
           check('each pane has a head that says what it is, glyph first', heads[0]?.trim() === 'Files' && heads[1]?.trim() === 'Terminal' && glyphs === 2, [heads, glyphs]);
           const skins = await js<string[]>(quiet.view, `['files-pane', 'term-pane'].map((id) => getComputedStyle(document.getElementById(id)).backgroundColor)`);

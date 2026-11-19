@@ -27,6 +27,10 @@
           <!-- How large its letters are, shown only while that is not its own size: a readout that always
                says 100% is a readout nobody reads (BUILD-RULES 2.8). -->
           <span id="term-zoom" hidden></span>
+          <!-- Which renderer is drawing, shown only while it is not the one that can colour a prompt: a
+               readout that always says the same thing is a readout nobody reads (BUILD-RULES 2.8). A state
+               belongs in the head, never in the output, where only what the box said is drawn. -->
+          <span id="term-drawn" hidden></span>
         </header>
         <div id="term"></div>
       </section>

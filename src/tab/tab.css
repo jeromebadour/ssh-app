@@ -66,6 +66,10 @@ body { position: relative; display: flex; flex-direction: column; font: 400 12px
 #files-head { background: color-mix(in srgb, #c3ccd3 4%, transparent); }
 #term-head { color: color-mix(in srgb, var(--hue) 55%, #c3ccd3); background: color-mix(in srgb, var(--hue) 9%, transparent); border-bottom-color: color-mix(in srgb, var(--hue) 35%, var(--line)); }
 #term-zoom { margin-left: auto; font-variant-numeric: tabular-nums; color: #c3ccd3; }
+/* Said in the head while the renderer cannot colour a prompt. Quiet: it is a thing about this machine,
+   not a fault of the box or of anything he did. */
+#term-drawn { margin-left: auto; color: #8b959e; }
+#term-zoom:not([hidden]) ~ #term-drawn { margin-left: 10px; }
 #term-zoom[hidden] { display: none; }
 .pane-glyph { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 
