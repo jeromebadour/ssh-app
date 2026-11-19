@@ -555,6 +555,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       await sleep(250);
       await clickOn('#win-max');
       const reached = await until(() => ctx.windowAsked().length >= asked + 2, 4000);
+      // And the window is given back the focus it may have lost over those two presses. On a screen with no
+      // window manager nothing is really maximized, but the presses still move the focus, and everything
+      // after this is about a window being typed into: a probe that walked away leaving it unfocused would
+      // fail the next thing that asks for the clipboard and say nothing about why.
+      ctx.win.focus();
+      await until(() => ctx.windowInUse(), 4000);
       check(`${where}: the maximize button is what the pointer finds at its own middle, and a press on it reaches main`, onTop === 'the button' && reached, [onTop, reached, ctx.windowAsked().slice(-2)]);
       check(`${where}: and so are the other two, which were dead for the same reason and nobody noticed`, alsoOnTop === 'win-min: itself, win-close: itself', alsoOnTop);
     };
