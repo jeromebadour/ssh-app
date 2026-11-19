@@ -4011,7 +4011,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         // Measured here, inside the resize this probe was already doing, and putting the window back where
         // it found it. Written as a step of its own further down it opened and closed a tab, and a probe
         // after it read the window's menus as it had left them and failed on a thing nothing to do with it.
-        {
+        // Only where pictures are being written. The window is asked to be wider here than it is anywhere
+        // else in the run, and the screen the merge gate runs on cannot hold it, so asking leaves the window
+        // somewhere neither this step nor the ones after it expect. The measurement exists for a picture he
+        // judges, and the gate writes no pictures.
+        if (shots) {
+          const was = ctx.win.getContentBounds();
           ctx.win.setContentSize(1366, 650);
           await sleep(700);
           const rows = await js<{ nav: number; strip: number }>(ctx.shell, `(() => {
@@ -4023,8 +4028,11 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check(`at 1366x650 the nav is ${rows.nav}px, the strip ${rows.strip}px, and the terminal keeps ${cells.rows} rows of ${cells.cols}`,
             rows.nav > 0 && rows.strip > 0 && rows.nav + rows.strip <= 80 && cells.rows >= 24,
             [rows, cells]);
-          ctx.win.setContentSize(1024, 640);
+          // Back exactly where it was found, read from the window rather than from a number written here.
+          ctx.win.setContentSize(was.width, was.height);
           await sleep(400);
+          const back = ctx.win.getContentBounds();
+          check('and the window is put back the size it was before that', back.width === was.width && back.height === was.height, [was, back]);
         }
         for (const t of [...ctx.tabs.values()]) ctx.closeTab(t.id);
 
