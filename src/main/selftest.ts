@@ -1292,6 +1292,43 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const wearing = await shadow();
           const plainFrame = await js<string>(front.view, `(() => { const d = document.createElement('div'); d.style.boxShadow = 'inset 0 0 0 1px var(--line)'; document.body.appendChild(d); const v = getComputedStyle(d).boxShadow; d.remove(); return v; })()`);
           check('the terminal is framed in its box\'s own colour, not the plain line colour', framed && (await live()) === 'yes' && wearing !== plainFrame, [await hue(), wearing.slice(0, 70), plainFrame.slice(0, 70)]);
+          // ---- Which renderer is drawing, and what happens when it goes ----
+          //
+          // The plain renderer ignores a colour set on a decoration, so the prompt's own letters can only be
+          // coloured by the WebGL one (his, 2026-11-18 night, after this chat proposed rewriting the bytes a
+          // box sends and he refused it). Two things are held: that the window knows which of the two is
+          // drawing, and that losing the graphics renderer leaves a terminal that still draws and says so.
+          // The loss is a real one, asked for through the browser's own way of losing a context, not a flag
+          // this app reads: a fallback proven by a switch of its own proves the switch.
+          const renderer = (): Promise<string> => js<string>(front.view, `window.berthTerm?.drawnBy?.() ?? '(not there)'`);
+          const drawing = await renderer();
+          check(`the window knows which renderer is drawing its terminal: ${drawing}`, drawing === 'webgl' || drawing === 'plain', drawing);
+          if (drawing === 'webgl') {
+            const lost = await js<string>(front.view, `(() => {
+              // A terminal has several canvases and only one of them is the graphics one: asking a canvas
+              // that already holds a flat drawing context for a graphics context gives nothing back, so they
+              // are all asked and the one that answers is the one to take the context from.
+              const all = [...document.querySelectorAll('#term canvas')];
+              if (all.length === 0) return 'no canvas';
+              for (const c of all) {
+                const gl = c.getContext('webgl2') ?? c.getContext('webgl');
+                if (!gl) continue;
+                const ext = gl.getExtension('WEBGL_lose_context');
+                if (!ext) return 'cannot lose it';
+                ext.loseContext();
+                return 'lost';
+              }
+              return 'no context among ' + all.length;
+            })()`);
+            const fellBack = await until(async () => (await renderer()) === 'plain', 8000);
+            const saidSo = await until(async () => (await js<string>(front.view, `window.berthTerm?.text?.() ?? ''`)).includes('lost the graphics renderer'), 8000);
+            const stillDraws = await js<boolean>(front.view, `!!document.querySelector('#term .xterm-screen')`);
+            check('losing the graphics renderer leaves a terminal that still draws, and says what it lost', lost === 'lost' && fellBack && saidSo && stillDraws, [lost, fellBack, saidSo, stillDraws]);
+          } else {
+            // No graphics renderer on this machine at all: then the terminal must have said so by itself.
+            const saidSo = (await js<string>(front.view, `window.berthTerm?.text?.() ?? ''`)).includes('drawing without the graphics renderer');
+            check('a machine with no graphics renderer is told so, rather than quietly losing the prompt\'s colour', saidSo, saidSo);
+          }
           // And the window says which box it is on, for the taskbar: Berth draws its own title bar, so this is
           // the only place that name is read.
           check('the window names the box and place it is on', ctx.win.title.startsWith('lab-box') && ctx.win.title.includes('logs') && ctx.win.title.includes('Berth'), ctx.win.title);
