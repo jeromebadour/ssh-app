@@ -1373,6 +1373,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await lab.tell('bare syslog');
             if (process.platform === 'win32') {
               check('a name this PC cannot hold: not provable here, because the lab\u2019s box is this PC', true, 'skipped on Windows: see tests/landing.test.ts');
+              // The five odd names are most of what this folder holds, and the probes further down need
+              // several rows to press, drag across and order. They need rows, not odd names, so here the lab
+              // makes plain ones instead: without them a Windows runner reaches the choosing probes with four
+              // rows and the one that takes a run between two of them presses a row that is not there.
+              const stood = await Promise.all(['pick-one.txt', 'pick-two.txt', 'pick-three.txt'].map((n) => lab.tell(`bigfile var/log/${n} 35`)));
+              check('the lab made plain files to choose among, in place of the names this PC cannot hold', stood.every((x) => x['bytes'] === 35), stood);
             } else {
             const odd = await lab.tell('oddnames var/log');
             check('the lab made files whose names a PC cannot hold', odd['made'] === 5, odd);
