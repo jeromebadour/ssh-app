@@ -109,8 +109,16 @@ port.onWhole(() => {
 // moment and pastes. Main is told what the menu could offer, never where it goes: main saw the press.
 port.onRightClick(() => {
   const press = term.rightPress();
+  // Only a press this terminal itself saw, and saw just now, is answered for. A press anywhere else in the
+  // page reaches main all the same, because main watches the whole view: on a grip, on either pane's head
+  // or on the foot of the file list there is nothing under the pointer that a paste belongs to, and
+  // answering 'paste' for one of those put the clipboard into the box from a press nowhere near it.
   const mine = press !== null && Date.now() - press.at < 1000;
-  port.rightClickWas(mine && press.menu ? 'menu' : 'paste', term.hasSelection(), term.held() > 0, mine && press.onBlock);
+  if (!mine) {
+    port.rightClickWas('none', false, false, false);
+    return;
+  }
+  port.rightClickWas(press.menu ? 'menu' : 'paste', term.hasSelection(), term.held() > 0, press.onBlock);
 });
 
 // One line of the block's own menu. What it hands over goes out on the same two guarded channels a press on
@@ -139,14 +147,13 @@ port.onClear(() => {
     return;
   }
   term.clear();
-  // Everything this tab had drawn on the rows that have gone goes with them. The library drops its own
-  // markers when a terminal is cleared, so each decoration hanging off one is already dead while this map
-  // still holds it, and a block already in here is never drawn a second time: left alone, the first command
-  // he typed after a Clear would quietly have no mark on it at all.
-  //
-  // What is deliberately not done here, because it was measured and made no difference: putting the prompt
-  // reading itself back to the start. It was written, it was taken out again, and the probe below held
-  // either way. Code that fixes nothing a probe can see does not ship.
+  // Everything this tab had drawn on the rows that have gone goes with them, and so does the reading's own
+  // memory of where those rows were. Two separate things break otherwise. The library drops its own markers
+  // when a terminal is cleared, so each decoration hanging off one is already dead while this map still
+  // holds it, and a block already in here is never drawn a second time: the first command he typed after a
+  // Clear would have no mark at all. And the rows the reading still holds marks for are rows that now hold
+  // something else, so those marks are drawn again where they never belonged: three lines, two prompts and
+  // four marks, one command after a Clear.
   for (const block of drawn.values()) {
     try {
       block.off();
@@ -155,6 +162,9 @@ port.onClear(() => {
     }
   }
   drawn.clear();
+  blocks.forgetMarks();
+  seenRow = 0;
+  readShape();
 });
 
 // Ctrl+Shift+S: the whole terminal into a file. The page hands over the text and nothing else; where the

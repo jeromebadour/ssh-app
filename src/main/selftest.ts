@@ -51,6 +51,7 @@ interface Ctx {
   windowAsked(): string[];
   keysRefused(): number;
   rightClicksRefused(): number; // an answer about a right press that belonged to no press main saw
+  rightClicksSeen(): number; // right presses main itself saw on a tab's view, wherever in it they landed
   typedInto(tab: number): number; // bytes typed into this tab's box, which only a person's own keys add to
   overlayOn(): boolean;
   windowInUse(): boolean;
@@ -3973,10 +3974,65 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             return [...document.querySelectorAll('.berth-block-copy')].some((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top && y <= r.bottom; });
           })()`);
           check('Clear on a tab drawing blocks empties it, and the very first command after it still gets its own mark', wiped && wentEmpty && markedAgain, [wiped, wentEmpty, markedAgain, afterRow, await js<unknown>(marked.view, `window.berthBlocks()`)]);
+          // And every mark it draws is on a prompt. A mark is drawn from a row the reading remembers, and
+          // the rows a Clear takes away are rows it still remembers: kept across one, those marks come back
+          // on whatever now stands at those numbers. Asking only whether the right row has a mark cannot see
+          // that, because the wrong rows have one too; so every mark is read against the row under it.
+          const stray = await js<{ marks: number; onPrompts: number; rows: string[] }>(marked.view, `(() => {
+            const screen = document.querySelector('.xterm-screen');
+            if (!screen) return { marks: -1, onPrompts: -1, rows: [] };
+            const box = screen.getBoundingClientRect();
+            const size = window.berthTerm.size();
+            const high = box.height / size.rows;
+            const lines = window.berthTerm.text().split('\\n');
+            const at = [...document.querySelectorAll('.berth-block-copy')]
+              .map((e) => e.getBoundingClientRect())
+              .filter((r) => r.width > 0 && r.height > 0)
+              .map((r) => Math.floor((r.top + r.height / 2 - box.top) / high));
+            const on = at.filter((row) => (lines[row] ?? '').includes('demo@lab-box'));
+            return { marks: at.length, onPrompts: on.length, rows: at.map((row) => (lines[row] ?? '').slice(0, 40)) };
+          })()`);
+          check('and every mark it draws stands on a prompt, not on a row a cleared one used to be at', stray.marks > 0 && stray.marks === stray.onPrompts, stray);
           ctx.closeTab(marked.id);
           await lab.tell('prompting'); // put the lab's shell back the way the probes after this one expect it
           await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${open1.id} })`);
           await until(() => ctx.shellState().active === open1.id, 5000);
+        }
+        {
+          // A right press that landed on nothing a paste belongs to. Main watches the whole view, so a press
+          // on a column grip, on either pane's head or on the foot of the file list reaches it exactly like
+          // one on the terminal does, and the page has to say so: answering 'paste' for those put the
+          // clipboard into the box from a press nowhere near it.
+          await sleep(400);
+          // Three places a press really does reach main. The file list, its head, the path and the
+          // transfers strip all answer the right button themselves and stop it there, so a press on one of
+          // those never reaches main at all and proves nothing either way; these three do.
+          for (const where of ['#fb-foot', '#grip']) {
+            clipboard.writeText(`off-the-terminal-${where.length}`);
+            const at = await js<{ x: number; y: number } | null>(open1.view, `(() => {
+              const e = document.querySelector(${JSON.stringify(where)});
+              if (!e) return null;
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && r.height > 0 ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null;
+            })()`);
+            if (!at) {
+              check(`a right press off the terminal: ${where} is there to press`, false, where);
+              continue;
+            }
+            const sawBefore = ctx.rightClicksSeen();
+            open1.view.webContents.focus();
+            open1.view.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'right', clickCount: 1 });
+            open1.view.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'right', clickCount: 1 });
+            await sleep(700);
+            // The terminal's own rows, joined: what a box echoes is wrapped at the width of the terminal,
+            // so a pasted word can be half on one row and half on the next and reading the rows one by one
+            // would say it never arrived.
+            const went = (await shown(open1)).replace(/\n/g, '').includes(`off-the-terminal-${where.length}`);
+            // Both halves, or this proves nothing: main has to have seen the press at all, and nothing may
+            // have been pasted because of it. Without the first half the probe would pass for a press that
+            // never reached main, which is the one way it could pass while the fault it is about is there.
+            check(`a right press on ${where} reaches main and pastes nothing into the box`, ctx.rightClicksSeen() > sawBefore && !went, [ctx.rightClicksSeen() - sawBefore, went, (await shown(open1)).replace(/\n/g, '').slice(-80)]);
+          }
         }
         {
           // The one that could not fail by accident: an answer that belonged to no press main ever saw. A
