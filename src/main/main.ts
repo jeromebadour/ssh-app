@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, rm, stat, statfs, writeFile } from 'node:fs/p
 import os from 'node:os';
 import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
-import { addrOf, signsWith, TMUX_NAME, type Box, type BoxDraft } from '../common/boxes';
+import { addrOf, BOX_COLOURS, signsWith, TMUX_NAME, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
 import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
 import { look } from '../common/paste';
@@ -204,6 +204,12 @@ interface Tab {
   origin: string;
   box: Box | null; // the one box this tab's engine was aimed at; null for the skeleton's tab with no box
   place: string;
+  // What he called this tab, and the colour he gave it, when he has given it either. A tab is one box and
+  // one place by default, and most are left that way; these are for the two that are not (his, the night of
+  // 2026-11-18). The group's edge and its dot keep the box's own colour whatever a tab is called: a tab is
+  // his to name, a box is what it is.
+  own: string; // empty when the tab goes by its box and place
+  ownColour: number; // 0 when it goes by its box's colour
 }
 
 
@@ -288,7 +294,7 @@ function info(t: Tab): TabInfo {
   // The id of the log line for the failure that ended this link, if one ended it, is main's to add: the
   // engine knows the cause, main is what wrote it down, and the window needs the id to say it.
   const said = doingNow.get(t.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
-  return { id: t.id, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519', keepsRunning: place?.tmux === true } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
+  return { id: t.id, own: t.own, ownColour: t.ownColour, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519', keepsRunning: place?.tmux === true } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
 }
 
 // The morning (B3, his own words 2026-11-15): the app starts with nothing open, and one offer to open again
@@ -297,14 +303,15 @@ function info(t: Tab): TabInfo {
 let reopenPut = false;
 // What the offer holds: the tabs of the last session that still point at a box he has, pinned, in the order
 // they were in. A box he has since removed or forgotten simply is not offered, with nothing said about it.
-function reopenOffer(): { box: string; name: string; colour: number; place: string }[] {
+function reopenOffer(): { box: string; name: string; colour: number; place: string; own: string; ownColour: number }[] {
   if (reopenPut || tabs.size > 0 || !boxes?.loaded) return [];
-  const out: { box: string; name: string; colour: number; place: string }[] = [];
+  const out: { box: string; name: string; colour: number; place: string; own: string; ownColour: number }[] = [];
   for (const one of boxes.lastTabs) {
     const box = boxes.get(one.box);
     if (!box || box.pin === '') continue;
     if (one.place !== '' && !box.places.some((p) => p.name === one.place)) continue;
-    out.push({ box: box.id, name: box.name, colour: box.colour, place: one.place });
+    // A tab he named is offered under the name he gave it, because that is what he will be looking for.
+    out.push({ box: box.id, name: box.name, colour: box.colour, place: one.place, own: one.own ?? '', ownColour: one.ownColour ?? 0 });
   }
   return out;
 }
@@ -316,7 +323,7 @@ let lastTabsAt = 0;
 let lastTabsSoon: ReturnType<typeof setTimeout> | null = null;
 function rememberTabs(now = false): void {
   if (!gate?.unlocked || !boxes) return;
-  const open = [...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place }));
+  const open = [...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place, own: t.own, ownColour: t.ownColour }));
   if (now) {
     if (lastTabsSoon) clearTimeout(lastTabsSoon);
     lastTabsSoon = null;
@@ -329,7 +336,7 @@ function rememberTabs(now = false): void {
   lastTabsSoon = setTimeout(() => {
     lastTabsSoon = null;
     lastTabsAt = Date.now();
-    if (gate?.unlocked && boxes) void boxes.setLastTabs([...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place })));
+    if (gate?.unlocked && boxes) void boxes.setLastTabs([...tabs.values()].filter((t) => t.box).map((t) => ({ box: t.box!.id, place: t.place, own: t.own, ownColour: t.ownColour })));
   }, wait);
   lastTabsSoon.unref();
 }
@@ -669,7 +676,8 @@ async function signFor(box: Box, req: SignRequest): Promise<SignAnswer> {
 
 // Opens a tab: on a box (which must be pinned: there is no way to a box whose identity was never checked), in
 // one of its places or in its starting folder; or, with no box, the skeleton's tab that the self-test uses.
-function openTab(boxId = '', place = ''): Tab | null {
+// A tab opened with a name and a colour of its own is one the morning is putting back the way he left it.
+function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | null {
   if (!win || tabs.size >= TABS_MAX) return null;
   let box: Box | null = null;
   let aim: EngineAim = { stub: true };
@@ -870,7 +878,7 @@ function openTab(boxId = '', place = ''): Tab | null {
     sendTo(view, CH.tabState, info(tab));
     tellShell();
   };
-  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, cancelled: false, origin, box, place };
+  const tab: Tab = { id, view, engine, begin, reopen, stopReopen, againAt: 0, cancelled: false, origin, box, place, own: ownName, ownColour };
   tabs.set(id, tab);
   tabByContents.set(view.webContents.id, tab);
   win.contentView.addChildView(view);
@@ -2183,7 +2191,7 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
       const one = typeof i === 'number' && Number.isInteger(i) ? offered[i] : undefined;
       if (!one) continue;
       if (tabs.size >= TABS_MAX) break;
-      if (openTab(one.box, one.place)) opened++;
+      if (openTab(one.box, one.place, one.own, one.ownColour)) opened++;
     }
     reopenPut = true; // offered once: a person who opened two of five is not asked about the other three
     done = opened === 0 ? 'Nothing was opened' : `${opened} ${opened === 1 ? 'tab' : 'tabs'} opened again`;
@@ -2211,6 +2219,18 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   } else if (c?.op === 'keepApp') {
     closingAsked = null;
     done = 'The window was kept open';
+    tellShell();
+  } else if (c?.op === 'nameTab' && typeof c.id === 'number') {
+    // What he calls one tab. The name is his own words, so it is held to a length and to characters that are
+    // not control codes, and nothing of it is ever run anywhere: it is drawn on a tab and written in his own
+    // locked list, and that is all it is for.
+    const t = tabs.get(c.id);
+    if (!t) return;
+    const want = typeof c.name === 'string' ? c.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40) : '';
+    const hue = typeof c.colour === 'number' && Number.isInteger(c.colour) && c.colour >= 0 && c.colour <= BOX_COLOURS ? c.colour : 0;
+    t.own = want;
+    t.ownColour = hue;
+    rememberTabs();
     tellShell();
   } else if (c?.op === 'close' && typeof c.id === 'number') closeTab(c.id);
   else drop('shell:cmd');
@@ -2416,7 +2436,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

@@ -385,6 +385,10 @@ kbd { margin-left: 6px; padding: 0 5px; border-radius: 3px; border: 1px solid va
 .form-grid { display: grid; grid-template-columns: 1fr 1fr 180px; gap: 12px 14px; margin: 16px 0 4px; }
 .span-2 { grid-column: span 2; }
 .swatches { display: flex; align-items: center; gap: 8px; height: 36px; }
+/* The box's own colour, offered beside the five: a ring with nothing in it, because that is what it is,
+   a tab taking the colour of the thing it belongs to rather than one of its own. */
+.swatch-none { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+.swatch-none.on { box-shadow: inset 0 0 0 1px var(--text-3), 0 0 0 2px var(--panel-2), 0 0 0 4px var(--text-3); }
 .swatch { width: 22px; height: 22px; border-radius: 50%; background: var(--hue); cursor: pointer; opacity: .9; }
 .swatch.on { box-shadow: 0 0 0 2px var(--panel-2), 0 0 0 4px var(--hue); opacity: 1; }
 .sect { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
