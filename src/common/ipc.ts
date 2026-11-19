@@ -35,7 +35,8 @@ export const CH = {
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
   tabDrag: 'tab:drag', // tab view to main: a file this tab brought over is being dragged out, named by its ask
   tabDragAll: 'tab:drag-all', // tab view to main: several of them at once, each named by its ask
-  tabSettings: 'tab:settings', // main to tab view: the settings a tab needs, today only how big its list starts
+  tabSettings: 'tab:settings', // main to tab view: the settings a tab needs: how big its list starts, and its columns
+  tabColumns: 'tab:columns', // tab view to main: a column of its file list was dragged to this width
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -367,7 +368,9 @@ export interface TabPort {
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void;
   dragAll(asks: number[]): void; // several files this tab brought over, dragged out together // begin dragging out the file this tab's own ask brought over; a view names no path
-  onSettings(cb: (s: { paneSize: number }) => void): void; // how big this tab's list starts
+  onSettings(cb: (s: { paneSize: number; columns: AppSettings['columns'] }) => void): void; // how its list starts
+  // A column of the file list was dragged to a new width: every tab is told, and the next one starts there.
+  columns(widths: AppSettings['columns']): void;
   resize(cols: number, rows: number): void;
   copy(text: string): void;
   link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
@@ -439,9 +442,13 @@ export interface FileRow {
 export interface AppSettings {
   downloads: string; // where everything brought over from a box lands; empty means the default folder
   paneSize: number; // how big the list's text starts in a new tab, as a share of its own size; 0 means 1
+  // How wide each column of the file list is, in pixels, for the columns he has dragged. A column he has
+  // not touched is not in here at all and takes the width its contents ask for. Saved because a column he
+  // set and found reset in the morning is a column he has to set again.
+  columns: Partial<Record<'name' | 'size' | 'changed' | 'owner', number>>;
 }
 
-export const SETTINGS_DEFAULT: AppSettings = { downloads: '', paneSize: 1 };
+export const SETTINGS_DEFAULT: AppSettings = { downloads: '', paneSize: 1, columns: {} };
 
 export const MOST_AT_ONCE = 64;
 

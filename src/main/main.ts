@@ -897,7 +897,7 @@ function openTab(boxId = '', place = ''): Tab | null {
     // How big this tab's list starts. It is sent once, as the view comes up: changing it later is about the
     // next tab, not about this one, because a list that resized itself under a reading hand would be worse
     // than one that waits (BUILD-RULES 2.4).
-    sendTo(view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1 });
+    sendTo(view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {} });
   });
   void view.webContents.loadURL(`${origin}/index.html`);
   if (box) setTimeout(() => begin(120, 40), 2000).unref();
@@ -1124,6 +1124,24 @@ ipcMain.on(CH.tabDropped, (e, what: unknown) => {
   sendTo(tab.view, CH.tabFilePage, { id, alsoSending: path.basename(real[0]!), droppedInto: folder });
   settling.add(comingKey(tab.id, id));
   void sendThese(tab, id, folder, real);
+});
+
+// A column of a tab's file list dragged to a new width. It is saved and every tab is told, so the shape he
+// set is the shape every tab has: columns that differ from tab to tab are columns he has to read twice.
+ipcMain.on(CH.tabColumns, (e, widths: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:columns', e);
+  const w = widths as Record<string, unknown> | null;
+  if (!w || typeof w !== 'object' || Array.isArray(w)) return drop('tab:columns', e);
+  const keep: Record<string, number> = {};
+  for (const name of ['name', 'size', 'changed', 'owner']) {
+    const at = w[name];
+    if (typeof at === 'number' && Number.isFinite(at) && at >= 20 && at <= 4000) keep[name] = Math.round(at);
+  }
+  void (async () => {
+    await boxes?.setSettings({ columns: keep });
+    for (const t of tabs.values()) sendTo(t.view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {} });
+  })();
 });
 
 ipcMain.on(CH.tabFileAsk, (e, ask: unknown) => {

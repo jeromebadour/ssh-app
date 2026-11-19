@@ -293,7 +293,85 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   head.id = 'fb-head';
   const headSpacer = document.createElement('span');
   headSpacer.className = 'fb-head-glyph';
-  head.append(headSpacer, ...byBtns.map((b) => b.btn));
+  // ---- Columns he can drag ----
+  //
+  // His, 2026-11-19, with his own MobaXterm beside it: a column whose width is fixed is a column that is
+  // either wasting room or cutting a name, and which it is changes with every folder. Each head sits in a
+  // cell of its own with a grip on its right edge, so a press on the grip is not a press on the head: one
+  // orders the list and the other changes its shape, and they are different things.
+  //
+  // A width is remembered for every tab and every morning, because a column he set and found reset is a
+  // column he has to set again (his own rule about a tab's name, 2026-11-18 night).
+  const COLS = ['name', 'size', 'changed', 'owner'] as const;
+  type Col = (typeof COLS)[number];
+  const SMALLEST = 44; // the narrowest a column goes: under this a head's own word has nowhere to be
+  let widths: Partial<Record<Col, number>> = {};
+  const showWidths = (): void => {
+    for (const c of COLS) {
+      const w = widths[c];
+      grid.style.setProperty(`--c-${c}`, w === undefined ? (c === 'name' ? 'minmax(11em, 1fr)' : 'auto') : `${w}px`);
+    }
+  };
+  const saveWidths = (): void => port.columns({ ...widths });
+  const headCell = (what: Col, btn: HTMLButtonElement): HTMLElement => {
+    const cell = document.createElement('span');
+    cell.className = 'fb-head-cell';
+    cell.append(btn);
+    const grip = document.createElement('span');
+    grip.className = 'fb-grip';
+    grip.id = `fb-grip-${what}`;
+    grip.tabIndex = 0;
+    grip.setAttribute('role', 'separator');
+    grip.setAttribute('aria-orientation', 'vertical');
+    grip.setAttribute('aria-label', `How wide the ${what === 'changed' ? 'modified' : what} column is`);
+    grip.title = 'Drag to change this column. Double-click to put it back';
+    const widthNow = (): number => Math.round(cell.getBoundingClientRect().width);
+    const setTo = (px: number): void => {
+      widths[what] = Math.max(SMALLEST, Math.round(px));
+      showWidths();
+    };
+    grip.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // The press is the grip's and nobody else's: not the head's, which would order the list, and not the
+      // list's, which would start a band across the rows.
+      e.preventDefault();
+      e.stopPropagation();
+      const from = e.clientX;
+      const was = widthNow();
+      grip.dataset['on'] = 'yes';
+      const move = (m: MouseEvent): void => setTo(was + (m.clientX - from));
+      const done = (): void => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', done);
+        delete grip.dataset['on'];
+        saveWidths();
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', done);
+    });
+    // Back to its own size, which is the width its contents ask for: the one thing a drag cannot give back.
+    grip.addEventListener('dblclick', (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      delete widths[what];
+      showWidths();
+      saveWidths();
+    });
+    // And from the keyboard, because a grip only a mouse can reach is a grip half the window cannot use.
+    grip.addEventListener('keydown', (e: KeyboardEvent) => {
+      const by = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
+      if (by === 0 && e.key !== 'Home') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Home') delete widths[what];
+      else setTo(widthNow() + by);
+      showWidths();
+      saveWidths();
+    });
+    cell.append(grip);
+    return cell;
+  };
+  head.append(headSpacer, ...byBtns.map((b) => headCell(b.what, b.btn)));
   const wayBtn = (what: 'back' | 'forward', title: string, press: () => void): HTMLButtonElement => {
     const b = document.createElement('button');
     b.className = 'fb-way';
@@ -344,6 +422,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   sheet.id = 'fb-sheet';
   el.list.append(sheet);
   grid.append(el.list);
+  showWidths();
   // The head lives inside the list, not above it. The list is the one thing that scrolls, in both directions,
   // and a head outside it would have to be kept in step by a listener, which is a frame behind by definition:
   // a column and its own name coming apart for a frame is the fault this is here to prevent. Sticky holds it
@@ -383,6 +462,17 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     let near = SIZES.indexOf(1);
     for (let i = 0; i < SIZES.length; i++) if (Math.abs(SIZES[i]! - want) < Math.abs(SIZES[near]! - want)) near = i;
     setSize(near, false);
+    // The widths he dragged, in this tab as in every other: a column that is one width here and another
+    // there is a column he has to read twice. A width this tab is already holding is replaced, so the tab he
+    // dragged it in and the tab beside it end up the same.
+    const came = (s?.columns ?? {}) as Partial<Record<Col, number>>;
+    const kept: Partial<Record<Col, number>> = {};
+    for (const c of COLS) {
+      const at = came[c];
+      if (typeof at === 'number' && Number.isFinite(at) && at >= SMALLEST && at <= 4000) kept[c] = Math.round(at);
+    }
+    widths = kept;
+    showWidths();
   });
   // The path, and every folder above it. He asked for a way to change folders from the path itself, the way
   // MobaXterm's path carries a list: the caret beside it already opens the folders this tab has been in, and

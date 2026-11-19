@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import os, { availableParallelism } from 'node:os';
 import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { COPY_MAX, type ShellState } from '../common/ipc';
+import { COPY_MAX, type AppSettings, type ShellState } from '../common/ipc';
 import { fingerprintOf, type Boxes } from './boxes';
 import type { SignAnswer, SignRequest } from './engine';
 import type { Gate } from './gate';
@@ -63,7 +63,7 @@ interface Ctx {
   stillToSend(tab: number): number;
   watchDrags(watch: ((file: string) => void) | null): void;
   chooseFolder(answer: (() => string | undefined) | null): void;
-  settingsNow(): { downloads: string; paneSize: number };
+  settingsNow(): AppSettings;
   watchFirstVisits(watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => { ok: true; said: string } | { ok: false; cause: string; detail: string }) | null): void;
   dragsAsked(): number;
   canDrag(tab: number): number;
@@ -1858,6 +1858,38 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               controls['field']!.edge && controls['field']!.fill && pressable(controls['path']!), controls);
             check('and every other control in the pane is a real control too, while the foot, which cannot be acted on, invites no press',
               pressable(controls['head']!) && pressable(controls['find']!) && controls['foot']!.cursor !== 'pointer', controls);
+            // ---- Columns he can drag ----
+            //
+            // His, 2026-11-19, with his own MobaXterm beside it. A press on a grip changes the column's width
+            // and does not order the list: one grip and one head are a hand's width apart, and a drag that
+            // also sorted would be a drag he could not use. Driven by real presses from outside the page.
+            {
+              const wide = (): Promise<number> => js<number>(front.view, `Math.round(document.getElementById('fb-by-size').closest('.fb-head-cell').getBoundingClientRect().width)`);
+              const orderWas = (await names()).join();
+              const was = await wide();
+              const grip = await at('#fb-grip-size', front);
+              const w = front.view.webContents;
+              if (grip) {
+                w.sendInputEvent({ type: 'mouseDown', x: grip.x, y: grip.y, button: 'left', clickCount: 1 });
+                for (let i = 1; i <= 5; i++) {
+                  w.sendInputEvent({ type: 'mouseMove', x: grip.x + i * 12, y: grip.y, button: 'left' });
+                  await sleep(25);
+                }
+                w.sendInputEvent({ type: 'mouseUp', x: grip.x + 60, y: grip.y, button: 'left', clickCount: 1 });
+                await sleep(250);
+              }
+              const now = await wide();
+              check('a grip in the head makes its column wider, and the press is not the head\'s own', grip !== null && now >= was + 40 && (await names()).join() === orderWas, [was, now, grip !== null]);
+              // And it is kept: main was told, so the next tab opens with the same shape rather than the one
+              // this tab was built with.
+              const saved = await until(async () => (ctx.settingsNow().columns?.size ?? 0) >= was + 40, 5000);
+              check('the width he dragged is saved, so the next tab starts with it', saved, ctx.settingsNow().columns);
+              // Home on the grip puts the column back to the width its own contents ask for.
+              await js(front.view, `(() => { const g = document.getElementById('fb-grip-size'); g.focus(); g.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); })()`);
+              await sleep(250);
+              const back = await wide();
+              check('and it goes back to its own size, which no drag can give back by hand', back < now - 30 && (ctx.settingsNow().columns?.size ?? 0) === 0, [now, back, ctx.settingsNow().columns]);
+            }
             // The folder is listed again before the columns are read. The lab has made several files since the
             // pane last asked, and on a Windows runner the probes that re-list are the ones skipped there, so
             // everything below used to be read off a list made before half of this folder existed: four rows
@@ -4053,7 +4085,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);

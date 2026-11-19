@@ -138,7 +138,9 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    "r.." while the sizes kept their full width, which is what he saw. */
 /* Glyph, name, size, when, owner. The name takes what is left and never less than 11em; the three columns
    after it take exactly what they need, and when the row outgrows the pane the pane scrolls to it. */
-.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em minmax(11em, 1fr) auto auto auto; align-items: center; gap: .66em; padding: 0 .84em; }
+/* The columns: a width each, set by the grips in the head and the same for the rows under them. Until one
+   is dragged, the name takes what is left and the rest take what they need, which is where they began. */
+.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em var(--c-name, minmax(11em, 1fr)) var(--c-size, auto) var(--c-changed, auto) var(--c-owner, auto); align-items: center; gap: .66em; padding: 0 .84em; }
 /* Nothing gives way: the list scrolls sideways instead (his, 2026-11-18 night, from MobaXterm's own answer).
    It used to hide the time and then the size when the pane grew narrow. Two things were wrong with that. On
    his own screen, at the width he actually works at, the heads had already lost their words and the modified
@@ -245,7 +247,15 @@ img.fb-glyph.fb-ft-own { object-fit: contain; }
    (his, 2026-11-18 night). It lights as a whole under the hand, and a hairline parts it from the head beside
    it, so the row above the files reads as four things rather than one line of words. */
 .fb-by { display: flex; align-items: center; gap: 4px; min-width: 0; height: 100%; padding: 0 .4em; border: 0; border-left: 1px solid transparent; background: none; color: #8b959e; font: inherit; font-size: .92em; cursor: pointer; }
-.fb-by + .fb-by { border-left-color: var(--line); }
+.fb-head-cell + .fb-head-cell .fb-by { border-left-color: var(--line); }
+/* Each head in a cell of its own, with the grip that changes its width on its right edge. The grip is
+   wider than the line it draws, because a two-pixel target is a target nobody hits. */
+.fb-head-cell { position: relative; display: flex; min-width: 0; height: 100%; }
+.fb-head-cell .fb-by { flex: 1; min-width: 0; }
+.fb-grip { position: absolute; z-index: 2; top: 0; right: -.42em; bottom: 0; width: .84em; cursor: col-resize; }
+.fb-grip::after { content: ''; position: absolute; top: 15%; bottom: 15%; left: 50%; width: 1px; background: transparent; }
+.fb-grip:hover::after, .fb-grip[data-on='yes']::after, .fb-grip:focus-visible::after { background: color-mix(in srgb, var(--hue) 75%, #c3ccd3); }
+.fb-grip:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
 #fb-by-size, #fb-by-changed { justify-content: flex-end; }
 #fb-by-changed { justify-content: flex-start; padding-left: .3em; }
 .fb-by:hover { color: #cfd6db; background: color-mix(in srgb, #c3ccd3 8%, transparent); }
