@@ -100,6 +100,15 @@ export class Blocks {
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
+  // The terminal was cleared, so every row this holds a mark for has gone. The marks go with them: a mark
+  // kept across a Clear names a row that now holds something else entirely, and the terminal draws it there.
+  // What was learned about the shape of this box's prompt stays, because the shell behind it is the same
+  // shell and learning it again would cost him his first block after every Clear.
+  forgetMarks(): void {
+    this.marks.length = 0;
+    this.promptRow = -1;
+  }
+
 
   // One line of the terminal as it now holds it. A prompt is a line the box stopped on, so the cursor's own
   // line is the only one anything is learned from; a line printed and moved past is output.

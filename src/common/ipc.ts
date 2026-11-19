@@ -43,7 +43,7 @@ export const CH = {
   // on the window's own surface, where the press on Paste is one main sees itself; anything else, and no
   // answer at all, pastes, which is what a right press in a terminal has always done here (plan B2.7, B3).
   tabRightClick: 'tab:right-click', // main to tab view: a right press main saw; say what it landed on
-  tabRightClickWas: 'tab:right-click-was', // tab view to main: 'menu' or 'paste', and what the menu could offer
+  tabRightClickWas: 'tab:right-click-was', // tab view to main: 'menu', 'paste' or 'none', and what a menu could offer
   tabCopyAsk: 'tab:copy-ask', // main to tab view: hand over what is selected now, for the clipboard
   tabClear: 'tab:clear', // main to tab view: clear this terminal
   tabBlockAsk: 'tab:block-ask', // main to tab view: the block the right press was on, asked for one of its four
@@ -381,7 +381,9 @@ export interface TabPort {
   onAgain(cb: () => void): void; // a new session has begun on the same box
   onPaste(cb: (text: string) => void): void; // put this text in, as a paste
   onRightClick(cb: () => void): void; // main saw a right press on this view: say what it landed on
-  rightClickWas(what: 'menu' | 'paste', selection: boolean, held: boolean, block: boolean): void;
+  // 'none' is the answer when the press was not on the terminal at all: the file pane's own menu answers
+  // for its rows, and a press on a grip, a pane's head or its foot means nothing, so nothing should happen.
+  rightClickWas(what: 'menu' | 'paste' | 'none', selection: boolean, held: boolean, block: boolean): void;
   onBlockAsk(cb: (what: 'command' | 'command-and-output' | 'output-to-file') => void): void;
   onCopyAsk(cb: () => void): void; // hand over what is selected now, for the clipboard
   onClear(cb: () => void): void; // clear this terminal

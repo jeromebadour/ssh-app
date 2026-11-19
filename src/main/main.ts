@@ -600,6 +600,7 @@ const RIGHT_CLICK_WAIT_MS = 120;
 const rightClicks = new Map<number, RightClick>();
 let termMenu: TermMenuShown | null = null;
 let rightClicksRefused = 0; // an answer that belonged to no press main saw: counted, never acted on
+let rightClicksSeen = 0; // right presses main itself saw on a tab's view, wherever in it they landed
 
 function openTermMenu(tab: Tab, at: RightClick, selection: boolean, held: boolean, block: boolean): void {
   if (tab.id !== active || overlay || !win?.isFocused() || !tab.box) {
@@ -933,6 +934,7 @@ function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | nul
     // the window's own surface; anything else, and no answer at all, pastes. Main stays the decider: the
     // worst a view can do here is lose its own paste or ask for a menu, and neither of those reaches a box.
     if (params.x < 0 || params.y < 0) return;
+    rightClicksSeen++;
     const asked: RightClick = { x: params.x, y: params.y + BAR, at: Date.now(), answered: false };
     rightClicks.set(tab.id, asked);
     sendTo(tab.view, CH.tabRightClick, true);
@@ -2001,10 +2003,13 @@ ipcMain.on(CH.tabReopen, (e, now: unknown) => {
 // own accord.
 ipcMain.on(CH.tabRightClickWas, (e, what: unknown, selection: unknown, held: unknown, block: unknown) => {
   const tab = tabByContents.get(e.sender.id);
-  if (!tab || !fromMainFrameOf(e, tab.origin) || (what !== 'menu' && what !== 'paste') || typeof selection !== 'boolean' || typeof held !== 'boolean' || typeof block !== 'boolean') return drop('tab:right-click-was', e);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || (what !== 'menu' && what !== 'paste' && what !== 'none') || typeof selection !== 'boolean' || typeof held !== 'boolean' || typeof block !== 'boolean') return drop('tab:right-click-was', e);
   const asked = rightClicks.get(tab.id);
   if (!asked || asked.answered || Date.now() - asked.at > RIGHT_CLICK_WAIT_MS) return void rightClicksRefused++;
   asked.answered = true;
+  // Nothing was under it that a right press means anything on: no menu, and above all no paste. It is still
+  // answered rather than left to run out, so the moment's wait does not end in a paste either.
+  if (what === 'none') return;
   if (what === 'paste') return void pasteInto(tab, 'a right-click');
   openTermMenu(tab, asked, selection, held, block);
 });
@@ -2533,7 +2538,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, rightClicksRefused: () => rightClicksRefused, typedInto: (tab: number) => typedInto.get(tab) ?? 0, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, rightClicksRefused: () => rightClicksRefused, rightClicksSeen: () => rightClicksSeen, typedInto: (tab: number) => typedInto.get(tab) ?? 0, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');
