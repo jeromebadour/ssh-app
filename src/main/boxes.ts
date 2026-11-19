@@ -433,7 +433,15 @@ export function readSettings(publicPart: unknown): AppSettings {
     const at = raw2[name];
     if (typeof at === 'number' && Number.isFinite(at) && at >= 20 && at <= 4000) columns[name] = Math.round(at);
   }
-  return { downloads, paneSize: size, columns };
+  // And the ones he turned off. Name is never among them, whatever the file says.
+  const rawOff = raw['columnsOff'];
+  const columnsOff: AppSettings['columnsOff'] = [];
+  if (Array.isArray(rawOff)) {
+    for (const one of rawOff) {
+      if ((one === 'size' || one === 'changed' || one === 'owner') && !columnsOff.includes(one)) columnsOff.push(one);
+    }
+  }
+  return { downloads, paneSize: size, columns, columnsOff };
 }
 
 export function readBoxes(publicPart: unknown): Box[] | null {

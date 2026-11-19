@@ -1924,6 +1924,34 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('the time and the owner do not run into each other', cols.apart >= 6, cols.apart);
             check('the quiet columns can be read: 4.5:1 or better against their own surface', cols.quiet.length === 3 && cols.quiet.every((q) => q.ratio >= 4.5 && q.size >= 12), cols.quiet);
 
+            // ---- Which columns are there at all ----
+            //
+            // His, 2026-11-19: he asked for Owner on the 18th with a real reason and asked the next morning
+            // whether it was worth its width. That is a question about one column that every column can be
+            // asked, so it is answered for all of them: a line a column under the right button on the head,
+            // saved the way the widths are. Name is never offered, because a list of files without their
+            // names is not a list.
+            {
+              const headAt = await at('#fb-by-size', front);
+              if (headAt) await js(front.view, `document.getElementById('fb-head').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: ${headAt.x}, clientY: ${headAt.y} }))`);
+              await sleep(150);
+              const onHead = await js<string[]>(front.view, `[...document.querySelectorAll('.fb-menu-one .fb-menu-words')].map((e) => e.textContent ?? '')`);
+              check('the right button on the head says which columns are there: ' + onHead.join(', '), onHead.length === 3 && onHead.includes('Hide Owner') && !onHead.some((w) => /Name/.test(w)), onHead);
+              await js(front.view, `[...document.querySelectorAll('.fb-menu-one')].find((b) => b.textContent.includes('Hide Owner'))?.click()`);
+              await sleep(250);
+              const gone = await js<number>(front.view, `document.querySelectorAll('#fb-list .fb-owner:not([hidden])').length && getComputedStyle(document.querySelector('#fb-list .fb-owner')).display === 'none' ? 0 : document.querySelectorAll('#fb-list .fb-owner').length`);
+              const headGone = await js<string>(front.view, `getComputedStyle(document.querySelector('.fb-head-owner')).display`);
+              const saved = await until(() => (ctx.settingsNow().columnsOff ?? []).includes('owner'), 5000);
+              check('turning a column off takes it off every row and off the head, and is saved', gone === 0 && headGone === 'none' && saved, [gone, headGone, ctx.settingsNow().columnsOff]);
+              // And back on the same way, because a column turned off must not be a column lost.
+              if (headAt) await js(front.view, `document.getElementById('fb-head').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: ${headAt.x}, clientY: ${headAt.y} }))`);
+              await sleep(150);
+              await js(front.view, `[...document.querySelectorAll('.fb-menu-one')].find((b) => b.textContent.includes('Show Owner'))?.click()`);
+              await sleep(250);
+              const backOn = await js<string>(front.view, `getComputedStyle(document.querySelector('.fb-head-owner')).display`);
+              check('and back on the same way', backOn !== 'none' && !(ctx.settingsNow().columnsOff ?? []).includes('owner'), [backOn, ctx.settingsNow().columnsOff]);
+            }
+
             // ---- Every scrollbar in the app is the app's own ----
             //
             // His, 2026-11-19. Windows draws a seventeen-pixel bar with an arrow at each end in a grey that
@@ -2367,6 +2395,18 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('ordered by when it changed, the newest is first and every row says when', times.every((n, i) => i === 0 || times[i - 1]! >= n) && saysWhen > 0, [times.slice(0, 4), saysWhen]);
             await clickOn('#fb-by-name', front);
             check('and the order goes back to the name', (await names()).join() === byName.join(), [(await names()).slice(0, 5), byName.slice(0, 5)]);
+            // ---- Finding something in this folder ----
+            //
+            // A glyph beside Name, not a row of its own (his, 2026-11-18 night, and again on 2026-11-19). It
+            // is not there until it is asked for, which is the whole point: a field that sits there all day
+            // costs a row of files for a thing he does for a few seconds at a time.
+            const fieldShown = (): Promise<boolean> => js<boolean>(front.view, `(() => { const f = document.querySelector('.fb-find'); return !!f && !f.hidden; })()`);
+            check('the find field is not there until it is asked for', !(await fieldShown()) && (await has('#fb-find-open', front)), await fieldShown());
+            await clickOn('#fb-find-open', front);
+            await sleep(150);
+            const opened = await fieldShown();
+            const inHand = await js<string>(front.view, `document.activeElement?.id ?? ''`);
+            check('the glyph beside Name opens it, with the hand already in it', opened && inHand === 'fb-find', [opened, inHand]);
             // Narrowing the list hides rows and nothing else: the folder is still the whole folder, the count
             // says what is hidden, and the box is asked for nothing.
             await js(front.view, `(document.getElementById('fb-find').value = 'log', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
@@ -2378,9 +2418,16 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const saidNone = await until(() => has('#fb-none-match', front), 5000);
             const stillHas = (await js<string>(front.view, `document.getElementById('fb-none-match')?.textContent ?? ''`)).includes('hidden by the filter');
             check('a filter that matches nothing says so, and says the folder is not empty', saidNone && stillHas && !(await has('#fb-empty', front)), [saidNone, stillHas]);
-            // One press gives the folder back.
-            await clickOn('#fb-find-clear', front);
+            // Escape closes it and clears it in one, which is the way out a person reaches for first, and a
+            // filter still on behind a closed field is a folder that looks empty for no reason he can see.
+            await js(front.view, `document.getElementById('fb-find')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            const shut = await until(async () => !(await fieldShown()), 5000);
             const back = await until(async () => (await names()).join() === byName.join(), 5000);
+            check('Escape closes it and gives the whole folder back, with nothing left filtering behind it', shut && back, [shut, back]);
+            // And it opens again as empty as it closed.
+            await clickOn('#fb-find-open', front);
+            await sleep(150);
+            check('and it opens again holding nothing', (await js<string>(front.view, `document.getElementById('fb-find')?.value ?? 'x'`)) === '', '');
 
             // ---- What is chosen is what comes over. ----
             // Choosing five and bringing one over is the same broken promise the delete had, in the other
@@ -2454,8 +2501,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const inBin = await lab.tell('read var/log/.berth-trash');
             check('and the box itself holds a trash with them in it', inBin !== undefined, inBin);
 
-            check('one press on the clear gives the whole folder back', back && (await js<string>(front.view, `document.getElementById('fb-find')?.value ?? 'x'`)) === '', [back]);
             // And moving to another folder does not carry the filter into it.
+            await clickOn('#fb-find-open', front);
+            await sleep(150);
             await js(front.view, `(document.getElementById('fb-find').value = 'log', document.getElementById('fb-find').dispatchEvent(new Event('input', { bubbles: true })))`);
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
             await until(async () => (await names()).includes('log'), 10_000);

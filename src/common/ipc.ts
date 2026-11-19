@@ -373,9 +373,9 @@ export interface TabPort {
   onFilePage(cb: (page: FilePage) => void): void; // one page of an answer
   drag(ask: number): void;
   dragAll(asks: number[]): void; // several files this tab brought over, dragged out together // begin dragging out the file this tab's own ask brought over; a view names no path
-  onSettings(cb: (s: { paneSize: number; columns: AppSettings['columns'] }) => void): void; // how its list starts
+  onSettings(cb: (s: { paneSize: number; columns: AppSettings['columns']; columnsOff: AppSettings['columnsOff'] }) => void): void;
   // A column of the file list was dragged to a new width: every tab is told, and the next one starts there.
-  columns(widths: AppSettings['columns']): void;
+  columns(widths: AppSettings['columns'], off: AppSettings['columnsOff']): void;
   resize(cols: number, rows: number): void;
   copy(text: string): void;
   link(url: string): void; // Ctrl+click on an address its box printed // selected text, offered for the clipboard: taken only from the tab in front of an active window
@@ -451,9 +451,13 @@ export interface AppSettings {
   // not touched is not in here at all and takes the width its contents ask for. Saved because a column he
   // set and found reset in the morning is a column he has to set again.
   columns: Partial<Record<'name' | 'size' | 'changed' | 'owner', number>>;
+  // The columns he has turned off. Name is never in here: a list of files without their names is not a
+  // list. Saved beside the widths, for the same reason: a column he turned off and found back in the
+  // morning is a column he has to turn off again.
+  columnsOff: ('size' | 'changed' | 'owner')[];
 }
 
-export const SETTINGS_DEFAULT: AppSettings = { downloads: '', paneSize: 1, columns: {} };
+export const SETTINGS_DEFAULT: AppSettings = { downloads: '', paneSize: 1, columns: {}, columnsOff: [] };
 
 export const MOST_AT_ONCE = 64;
 

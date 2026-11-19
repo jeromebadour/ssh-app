@@ -354,36 +354,39 @@ test('what was saved is read back whole or not at all, and a box must be with it
 // process is read, not what the app believes afterwards.
 test('a setting is written into the list, and a later save of the boxes carries it with them', async () => {
   const w = world();
-  assert.deepEqual(w.boxes.settings, { downloads: '', paneSize: 1, columns: {} });
+  assert.deepEqual(w.boxes.settings, { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
 
-  const saved = await w.boxes.setSettings({ downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 } });
+  const saved = await w.boxes.setSettings({ downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 }, columnsOff: [] });
   assert.equal(saved.ok, true);
-  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 } });
+  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 }, columnsOff: [] });
 
   // Adding a box writes the whole list again: the settings must still be in what is written.
   await w.boxes.add(draft());
-  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 } });
+  assert.deepEqual(readSettings(w.keys.saved), { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 }, columnsOff: [] });
   assert.equal(readBoxes(w.keys.saved)?.length, 1);
 
   // And a save that fails changes nothing the app holds.
   w.keys.failOn = 'setPublic';
   const refused = await w.boxes.setSettings({ downloads: '/somewhere/else' });
   assert.equal(refused.ok, false);
-  assert.deepEqual(w.boxes.settings, { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 } });
+  assert.deepEqual(w.boxes.settings, { downloads: '/srv/downloads', paneSize: 1.3, columns: { size: 120 }, columnsOff: [] });
 });
 
 // A list written by an older build has no settings in it at all, and one damaged in a way the seal did not
 // catch may have nonsense where they should be. Either must open, at the defaults, rather than refusing.
 test('settings that are missing, or not what they should be, come back as the defaults', () => {
-  assert.deepEqual(readSettings({ v: 1, boxes: [] }), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings(null), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings({ settings: { downloads: 7, paneSize: 'big' } }), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings({ settings: { paneSize: 99 } }), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings({ settings: { downloads: 'x'.repeat(9000) } }), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings({ settings: { downloads: '/a', paneSize: 1.5 } }), { downloads: '/a', paneSize: 1.5, columns: {} });
+  assert.deepEqual(readSettings({ v: 1, boxes: [] }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings(null), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { downloads: 7, paneSize: 'big' } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { paneSize: 99 } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { downloads: 'x'.repeat(9000) } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { downloads: '/a', paneSize: 1.5 } }), { downloads: '/a', paneSize: 1.5, columns: {}, columnsOff: [] });
   // The widths of the columns he has dragged. A list is a file, and a file can hold anything: a width that is
   // not a number, or one no column could be, is left out rather than taken.
-  assert.deepEqual(readSettings({ settings: { columns: { size: 120, name: 'wide', changed: 0, owner: 99999, nope: 50 } } }), { downloads: '', paneSize: 1, columns: { size: 120 } });
-  assert.deepEqual(readSettings({ settings: { columns: 'all of them' } }), { downloads: '', paneSize: 1, columns: {} });
-  assert.deepEqual(readSettings({ settings: { columns: { name: 180.4 } } }), { downloads: '', paneSize: 1, columns: { name: 180 } });
+  assert.deepEqual(readSettings({ settings: { columns: { size: 120, name: 'wide', changed: 0, owner: 99999, nope: 50 } } }), { downloads: '', paneSize: 1, columns: { size: 120 }, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { columns: 'all of them' } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
+  assert.deepEqual(readSettings({ settings: { columns: { name: 180.4 } } }), { downloads: '', paneSize: 1, columns: { name: 180 }, columnsOff: [] });
+  // The columns he turned off: only the three that may be, each once, and never the name.
+  assert.deepEqual(readSettings({ settings: { columnsOff: ['owner', 'owner', 'name', 'nope', 7] } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: ['owner'] });
+  assert.deepEqual(readSettings({ settings: { columnsOff: 'owner' } }), { downloads: '', paneSize: 1, columns: {}, columnsOff: [] });
 });

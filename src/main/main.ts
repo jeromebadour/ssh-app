@@ -905,7 +905,7 @@ function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | nul
     // How big this tab's list starts. It is sent once, as the view comes up: changing it later is about the
     // next tab, not about this one, because a list that resized itself under a reading hand would be worse
     // than one that waits (BUILD-RULES 2.4).
-    sendTo(view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {} });
+    sendTo(view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {}, columnsOff: boxes?.settings.columnsOff ?? [] });
   });
   void view.webContents.loadURL(`${origin}/index.html`);
   if (box) setTimeout(() => begin(120, 40), 2000).unref();
@@ -1139,16 +1139,24 @@ ipcMain.on(CH.tabDropped, (e, what: unknown) => {
 ipcMain.on(CH.tabColumns, (e, widths: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:columns', e);
-  const w = widths as Record<string, unknown> | null;
-  if (!w || typeof w !== 'object' || Array.isArray(w)) return drop('tab:columns', e);
+  const said = widths as Record<string, unknown> | null;
+  if (!said || typeof said !== 'object' || Array.isArray(said)) return drop('tab:columns', e);
+  const w = (said['widths'] ?? {}) as Record<string, unknown>;
   const keep: Record<string, number> = {};
   for (const name of ['name', 'size', 'changed', 'owner']) {
     const at = w[name];
     if (typeof at === 'number' && Number.isFinite(at) && at >= 20 && at <= 4000) keep[name] = Math.round(at);
   }
+  // And which of them he turned off. Name is never one: a list of files without their names is not a list,
+  // whatever a view asks for.
+  const rawOff = said['off'];
+  const gone: ('size' | 'changed' | 'owner')[] = [];
+  if (Array.isArray(rawOff)) {
+    for (const one of rawOff) if ((one === 'size' || one === 'changed' || one === 'owner') && !gone.includes(one)) gone.push(one);
+  }
   void (async () => {
-    await boxes?.setSettings({ columns: keep });
-    for (const t of tabs.values()) sendTo(t.view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {} });
+    await boxes?.setSettings({ columns: keep, columnsOff: gone });
+    for (const t of tabs.values()) sendTo(t.view, CH.tabSettings, { paneSize: boxes?.settings.paneSize ?? 1, columns: boxes?.settings.columns ?? {}, columnsOff: boxes?.settings.columnsOff ?? [] });
   })();
 });
 

@@ -205,11 +205,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // Narrowing the list to what is being looked for, and saying what the list is ordered by. Both sit on a
   // strip of their own under the folder's name: putting them beside it would push the folder's name about as
   // the order changed, and the folder's name is the one thing on this pane that must not move.
-  const tools = document.createElement('div');
-  tools.className = 'fb-tools';
+  // Finding something in this folder: a glyph beside Name, not a row of its own (his, 2026-11-18 night). A
+  // field that is there all day takes a row from the list for a thing he does for a few seconds at a time.
+  // It opens on a press, filters as he types exactly as it did, and Escape closes it and clears it.
   const find = document.createElement('div');
   find.className = 'fb-find';
-  find.append(glyph('search'));
   const findField = document.createElement('input');
   findField.type = 'text';
   findField.id = 'fb-find';
@@ -227,12 +227,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   });
   // Escape clears it and gives the list back, which is the way out a person reaches for first.
   findField.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || only === '') return;
+    if (e.key !== 'Escape') return;
     e.preventDefault();
     e.stopPropagation();
-    only = '';
-    findField.value = '';
-    draw();
+    shutFind();
+    el.list.focus();
   });
   const clearFind = document.createElement('button');
   clearFind.className = 'fb-stop';
@@ -241,13 +240,46 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   clearFind.title = 'Show everything in this folder again';
   clearFind.setAttribute('aria-label', 'Show everything in this folder again');
   clearFind.append(glyph('close'));
-  clearFind.addEventListener('click', () => {
+  clearFind.addEventListener('click', () => shutFind());
+  find.append(findField, clearFind);
+  // The glyph that opens it, in the head beside the name: the place a person looks for a search in a list of
+  // files. Open it and the Name head steps aside for the field; close it and the head comes back.
+  const findBtn = document.createElement('button');
+  findBtn.className = 'fb-find-open';
+  findBtn.id = 'fb-find-open';
+  findBtn.type = 'button';
+  findBtn.title = 'Find something in this folder';
+  findBtn.setAttribute('aria-label', 'Find something in this folder');
+  findBtn.setAttribute('aria-expanded', 'false');
+  findBtn.append(glyph('search'));
+  let finding = false;
+  const showFind = (): void => {
+    find.hidden = !finding;
+    findBtn.setAttribute('aria-expanded', finding ? 'true' : 'false');
+    findBtn.dataset['on'] = finding ? 'yes' : 'no';
+  };
+  const shutFind = (): void => {
+    if (!finding) return;
+    finding = false;
+    // It clears itself as it closes: a filter still on behind a closed field is a folder that looks empty
+    // for no reason anyone can see (his, 2026-11-18 night).
+    const had = only !== '';
     only = '';
     findField.value = '';
+    showFind();
+    if (had) draw();
+  };
+  const openFind = (): void => {
+    if (bin.open) return;
+    finding = true;
+    showFind();
     findField.focus();
-    draw();
+    findField.select();
+  };
+  findBtn.addEventListener('click', () => {
+    if (finding) shutFind();
+    else openFind();
   });
-  find.append(findField, clearFind);
   // One button a column: pressing the one already in use turns the order around, which is how every file list
   // a person has used behaves (BUILD-RULES 2.13: reuse, never reinvent).
   // Who owns a file, as the box says it: the name when it gave one in words, the number when it gave only a
@@ -288,7 +320,6 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     });
     return { what, btn, label };
   });
-  tools.append(find);
   // The heads of the columns, each one over the column it orders, which is where every file list a person has
   // used puts them. They were buttons in the tools row before, so a list of files had no columns at all and
   // the one column on the right said whatever the order was, which is a column that cannot be read against
@@ -312,17 +343,33 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   type Col = (typeof COLS)[number];
   const SMALLEST = 44; // the narrowest a column goes: under this a head's own word has nowhere to be
   let widths: Partial<Record<Col, number>> = {};
+  // The columns he has turned off, his own choice under the right button on the head. Name is never one of
+  // them: a list of files without their names is not a list. He asked for Owner and then asked whether it
+  // was worth its width, which is a question about this one column that every column can be asked, so it is
+  // answered for all of them at once rather than by this chat deciding which ones he is allowed.
+  type Off = Exclude<Col, 'name'>;
+  let off = new Set<Off>();
   const showWidths = (): void => {
+    const tracks = ['1.25em'];
     for (const c of COLS) {
+      if (c !== 'name' && off.has(c)) continue;
       const w = widths[c];
-      grid.style.setProperty(`--c-${c}`, w === undefined ? (c === 'name' ? 'minmax(11em, 1fr)' : 'auto') : `${w}px`);
+      tracks.push(w === undefined ? (c === 'name' ? 'minmax(11em, 1fr)' : 'auto') : `${w}px`);
     }
+    grid.style.setProperty('--cols', tracks.join(' '));
+    at.dataset['off'] = [...off].join(' ');
   };
-  const saveWidths = (): void => port.columns({ ...widths });
+  const saveWidths = (): void => port.columns({ ...widths }, [...off]);
   const headCell = (what: Col, btn: HTMLButtonElement): HTMLElement => {
     const cell = document.createElement('span');
-    cell.className = 'fb-head-cell';
+    cell.className = `fb-head-cell fb-head-${what}`;
     cell.append(btn);
+    // The name's head also carries the way to find something in this folder, and the field it opens, both in
+    // its own cell: the field then has the name column's width to be in and takes no row of its own.
+    if (what === 'name') {
+      cell.append(findBtn, find);
+      find.hidden = true;
+    }
     const grip = document.createElement('span');
     grip.className = 'fb-grip';
     grip.id = `fb-grip-${what}`;
@@ -378,6 +425,31 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     return cell;
   };
   head.append(headSpacer, ...byBtns.map((b) => headCell(b.what, b.btn)));
+  // Which columns are there at all, under the right button on the head, which is where every file list a
+  // person has used puts it. Each line says what pressing it does rather than carrying a tick: a tick is a
+  // state to read, and a verb is a thing to press.
+  head.addEventListener('contextmenu', (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const lines: MenuLine[] = [];
+    for (const c of ['size', 'changed', 'owner'] as const) {
+      const word = c === 'changed' ? 'Modified' : c === 'size' ? 'Size' : 'Owner';
+      const gone = off.has(c);
+      lines.push({
+        glyph: c === 'size' ? 'size' : c === 'owner' ? 'user' : 'clock',
+        label: gone ? `Show ${word}` : `Hide ${word}`,
+        id: `fb-menu-col-${c}`,
+        run: () => {
+          if (gone) off.delete(c);
+          else off.add(c);
+          showWidths();
+          saveWidths();
+          draw();
+        },
+      });
+    }
+    openMenu(at, e.clientX, e.clientY, lines, glyph);
+  });
   const wayBtn = (what: 'back' | 'forward', title: string, press: () => void): HTMLButtonElement => {
     const b = document.createElement('button');
     b.className = 'fb-way';
@@ -433,7 +505,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // and a head outside it would have to be kept in step by a listener, which is a frame behind by definition:
   // a column and its own name coming apart for a frame is the fault this is here to prevent. Sticky holds it
   // at the top while the rows run under it, and it scrolls sideways with them for nothing.
-  at.append(here, recentAt, tools, grid, el.moving, el.foot);
+  at.append(here, recentAt, grid, el.moving, el.foot);
 
   // ---- How big this pane's text is ----
   // His own words about MobaXterm: the terminal zooms and the file browser does not, and that annoys him.
@@ -478,7 +550,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       if (typeof at === 'number' && Number.isFinite(at) && at >= SMALLEST && at <= 4000) kept[c] = Math.round(at);
     }
     widths = kept;
+    const gone = (s?.columnsOff ?? []) as Off[];
+    off = new Set(gone.filter((c) => c === 'size' || c === 'changed' || c === 'owner'));
     showWidths();
+    draw();
   });
   // The path, and every folder above it. He asked for a way to change folders from the path itself, the way
   // MobaXterm's path carries a list: the caret beside it already opens the folders this tab has been in, and
@@ -1092,7 +1167,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       btn.title = on ? `Ordered by ${what}, ${which}. Press to turn it around` : `Order by ${what}`;
       btn.setAttribute('aria-label', btn.title);
     }
-    tools.dataset['off'] = bin.open ? 'yes' : 'no';
+    if (bin.open) shutFind();
     findField.disabled = bin.open;
     clearFind.disabled = bin.open || only === '';
 

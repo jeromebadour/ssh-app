@@ -140,7 +140,12 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    after it take exactly what they need, and when the row outgrows the pane the pane scrolls to it. */
 /* The columns: a width each, set by the grips in the head and the same for the rows under them. Until one
    is dragged, the name takes what is left and the rest take what they need, which is where they began. */
-.fb-row, .fb-head { display: grid; grid-template-columns: 1.25em var(--c-name, minmax(11em, 1fr)) var(--c-size, auto) var(--c-changed, auto) var(--c-owner, auto); align-items: center; gap: .9em; padding: 0 .84em; }
+.fb-row, .fb-head { display: grid; grid-template-columns: var(--cols, 1.25em minmax(11em, 1fr) auto auto auto); align-items: center; gap: .9em; padding: 0 .84em; }
+/* A column he turned off: its cells go, and the track with them, so nothing is left standing where it
+   was. The names never go: a list of files without them is not a list. */
+#files[data-off~='size'] .fb-size, #files[data-off~='size'] .fb-head-size,
+#files[data-off~='changed'] .fb-when, #files[data-off~='changed'] .fb-head-changed,
+#files[data-off~='owner'] .fb-owner, #files[data-off~='owner'] .fb-head-owner { display: none; }
 /* Nothing gives way: the list scrolls sideways instead (his, 2026-11-18 night, from MobaXterm's own answer).
    It used to hide the time and then the size when the pane grew narrow. Two things were wrong with that. On
    his own screen, at the width he actually works at, the heads had already lost their words and the modified
@@ -236,11 +241,16 @@ img.fb-glyph.fb-ft-own { object-fit: contain; }
 .fb-x-bad .fb-glyph { color: var(--problem, #cc9b47); }
 /* The strip under the folder's name: narrowing the list, and what it is ordered by. It keeps its height
    whatever is in it, so the list below never moves as a filter is typed (BUILD-RULES 2.4). */
-.fb-tools { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-bottom: 1px solid var(--line); }
-.fb-tools[data-off='yes'] { opacity: .45; }
-.fb-find { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; }
+/* Finding something in this folder: a glyph in the head beside Name, and the field it opens, which takes
+   the name column's own width and no row of the list's. A field that sits there all day costs a row of
+   files for a thing he does for a few seconds at a time (his, 2026-11-18 night). */
+.fb-find-open { flex: none; display: grid; place-items: center; width: 1.5em; height: 100%; padding: 0; border: 0; background: none; color: #8b959e; cursor: pointer; }
+.fb-find-open:hover, .fb-find-open[data-on='yes'] { color: #d7dee4; }
+.fb-find-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+.fb-find { position: absolute; z-index: 3; inset: 0; display: flex; align-items: center; gap: .3em; padding-right: .84em; background: #19222b; }
+.fb-find[hidden] { display: none; }
 .fb-find:focus-within { border-color: color-mix(in srgb, var(--hue) 65%, var(--line)); }
-.fb-find-field { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #cfd6db; font: inherit; font-size: 11px; }
+.fb-find-field { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #cfd6db; font: inherit; font-size: 1em; }
 .fb-find-field::placeholder { color: #6d7781; }
 .fb-find-field:disabled { color: #6d7781; }
 /* Only the column in use says its name: three words and a filter do not fit across a pane this narrow, and a
