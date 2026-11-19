@@ -68,8 +68,11 @@ const port: TabPort = {
   },
   // What the right press landed on, and what a menu over it could offer. Three plain values and nothing
   // else: the page cannot say where the menu goes, because main already knows where the press was.
-  rightClickWas(what, selection, held) {
-    ipcRenderer.send(CH.tabRightClickWas, what === 'menu' ? 'menu' : 'paste', Boolean(selection), Boolean(held));
+  rightClickWas(what, selection, held, block) {
+    ipcRenderer.send(CH.tabRightClickWas, what === 'menu' ? 'menu' : 'paste', Boolean(selection), Boolean(held), Boolean(block));
+  },
+  onBlockAsk(cb) {
+    ipcRenderer.on(CH.tabBlockAsk, (_e, what) => cb(what === 'command' || what === 'command-and-output' ? what : 'output-to-file'));
   },
   onCopyAsk(cb) {
     ipcRenderer.on(CH.tabCopyAsk, () => cb());

@@ -358,11 +358,25 @@ function TermMenu(props: { m: TermMenuShown | null }) {
     // nothing at all. That is not a thing a person could see going wrong; it is a line that quietly does
     // nothing, which is why it is written down here rather than left to the order the two sends happen in.
     let pressed = false;
-    const press = (line: 'copy' | 'paste' | 'all' | 'save' | 'clear') => () => {
+    const press = (line: 'copy' | 'paste' | 'all' | 'save' | 'clear' | 'blockCommand' | 'blockBoth' | 'blockSave') => () => {
       pressed = true;
       port.cmd({ op: 'termMenu', line });
     };
     const lines: MenuLine[] = [];
+    // A press on one command's own mark is about that command, so the menu is its three and nothing else:
+    // Paste into the middle of a mark would mean nothing, and the terminal's own menu is a press away with
+    // Shift held. The mark already copies what the command printed on a plain press and saves it with
+    // Shift, so what this adds is the command itself and the two together.
+    if (m.block) {
+      lines.push({ glyph: 'term', label: 'Copy the command', run: press('blockCommand'), id: 'term-menu-block-command' });
+      lines.push({ glyph: 'copy', label: 'Copy the command and its output', run: press('blockBoth'), id: 'term-menu-block-both' });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'save', label: 'Save the output as a file', keys: 'Shift and the mark', run: press('blockSave'), id: 'term-menu-block-save' });
+      const menu = openMenu(layer, m.x, m.y, lines, glyphNode, () => setTimeout(() => {
+        if (!pressed) port.cmd({ op: 'shutTermMenu' });
+      }, 0));
+      return () => menu?.close();
+    }
     if (m.selection) lines.push({ glyph: 'copy', label: 'Copy', keys: 'select to copy', run: press('copy'), id: 'term-menu-copy' });
     lines.push({ glyph: 'paste', label: 'Paste', keys: 'Ctrl+V, or the right button', run: press('paste'), id: 'term-menu-paste' });
     if (m.held) {

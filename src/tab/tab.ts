@@ -19,6 +19,10 @@ declare global {
     // asks here what the pane draws when it does not know a name, rather than holding a copy of that shape,
     // which would pass the day the shape changed.
     berthGlyphPath: (name: string) => string;
+    // Why this tab is or is not drawing blocks, read by the lab. A tab that draws none looks exactly like a
+    // tab whose blocks are broken, and the reasons it can draw none are all quiet ones: no colour read for
+    // its box yet, a prompt it never learned, a reading that stopped. Each of them is a number here.
+    berthBlocks: () => { hue: string; marks: number; drawn: number; prompts: number; gaveUp: boolean; seenRow: number; held: number; fault: string; shapeFault: string };
   }
 }
 
@@ -41,6 +45,7 @@ const term = openTerminal(host, {
   link: (url) => port.link(url),
 });
 window.berthGlyphPath = (name) => glyph(name).querySelector('path')?.getAttribute('d') ?? '';
+window.berthBlocks = () => ({ hue, marks: blocks.marks.length, drawn: drawn.size, prompts: blocks.prompts, gaveUp: blocks.gaveUp, seenRow, held: term.held(), fault: blocksFault, shapeFault });
 window.berthTerm = { ...term, policyFaults: () => policyFaults.slice(0, 20), pace: () => ({ front, share, rested, taken: total, waiting: waiting.length }) };
 
 // Output goes to the terminal one piece after another, and is counted as taken once the terminal has worked
@@ -105,7 +110,13 @@ port.onWhole(() => {
 port.onRightClick(() => {
   const press = term.rightPress();
   const mine = press !== null && Date.now() - press.at < 1000;
-  port.rightClickWas(mine && press.menu ? 'menu' : 'paste', term.hasSelection(), term.held() > 0);
+  port.rightClickWas(mine && press.menu ? 'menu' : 'paste', term.hasSelection(), term.held() > 0, mine && press.onBlock);
+});
+
+// One line of the block's own menu. What it hands over goes out on the same two guarded channels a press on
+// the mark already uses, so a line of this menu can do nothing a press on the mark could not.
+port.onBlockAsk((what) => {
+  if (!term.blockPressed(what)) term.note('Berth: that command is no longer in this terminal');
 });
 
 // One line of that menu: what is selected, handed over for the clipboard. The same guarded channel a
@@ -128,6 +139,22 @@ port.onClear(() => {
     return;
   }
   term.clear();
+  // Everything this tab had drawn on the rows that have gone goes with them. The library drops its own
+  // markers when a terminal is cleared, so each decoration hanging off one is already dead while this map
+  // still holds it, and a block already in here is never drawn a second time: left alone, the first command
+  // he typed after a Clear would quietly have no mark on it at all.
+  //
+  // What is deliberately not done here, because it was measured and made no difference: putting the prompt
+  // reading itself back to the start. It was written, it was taken out again, and the probe below held
+  // either way. Code that fixes nothing a probe can see does not ship.
+  for (const block of drawn.values()) {
+    try {
+      block.off();
+    } catch {
+      // It went with the rows it was drawn on. Nothing left to take off.
+    }
+  }
+  drawn.clear();
 });
 
 // Ctrl+Shift+S: the whole terminal into a file. The page hands over the text and nothing else; where the
@@ -172,20 +199,31 @@ const drawBlocksNow = (): void => {
     if (drawn.has(m.id)) continue;
     // What this block printed is read when the press happens, not now: the command may still be running,
     // and the rows under it are the box's to fill until its prompt comes back.
-    const block = term.blockAt(m.row, m.width, hue, (toFile) => {
+    const block = term.blockAt(m.row, m.width, hue, (what) => {
       // Where this block and the next one are now, not where they were when they were drawn: once the
       // scrollback is full the oldest lines go and every row below them means a different line, so the
       // numbers they were made with would have copied somebody else's output.
       const from = drawn.get(m.id)?.rowNow() ?? m.row;
       const next = blocks.marks.find((x) => x.id > m.id);
       const until = next ? (drawn.get(next.id)?.rowNow() ?? next.row) : term.rows();
-      const text = from < 0 || (until >= 0 && until <= from) ? '' : term.outputAfter(from, until < 0 ? term.rows() : until);
+      const output = from < 0 || (until >= 0 && until <= from) ? '' : term.outputAfter(from, until < 0 ? term.rows() : until);
+      // The command is what stands on the prompt's own row after the prompt itself, and the prompt's width
+      // is what the reading already measured. It is read at the press, like the output, because the row may
+      // have moved since the block was drawn.
+      const command = from < 0 ? '' : term.lineAt(from).slice(m.width).trim();
+      const wanted = what === 'command' ? command
+        : what === 'command-and-output' ? (command === '' ? output : output === '' ? command : `${command}\n${output}`)
+        : output;
+      const toFile = what === 'output-to-file';
       // A press that did nothing says so, in Berth's own line: a button that looks as if it worked when it
       // did nothing is the silence this app is built not to have.
-      if (text === '') term.note(`Berth: that command printed nothing, so nothing was ${toFile ? 'saved' : 'copied'}`);
-      else if (toFile) port.save(text.slice(0, SAVE_MAX), 'what one command printed');
-      else port.copy(text.slice(0, COPY_MAX));
-      copied = text === '' ? 'nothing' : toFile ? 'saving' : 'copied';
+      const nothing = what === 'command' ? 'that line has no command on it'
+        : what === 'command-and-output' ? 'there is nothing on that block to copy'
+        : 'that command printed nothing';
+      if (wanted === '') term.note(`Berth: ${nothing}, so nothing was ${toFile ? 'saved' : 'copied'}`);
+      else if (toFile) port.save(wanted.slice(0, SAVE_MAX), 'what one command printed');
+      else port.copy(wanted.slice(0, COPY_MAX));
+      copied = wanted === '' ? 'nothing' : toFile ? 'saving' : 'copied';
       document.documentElement.dataset['copied'] = copied;
     });
     if (block) drawn.set(m.id, block);

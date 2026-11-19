@@ -100,6 +100,7 @@ export class Blocks {
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
+
   // One line of the terminal as it now holds it. A prompt is a line the box stopped on, so the cursor's own
   // line is the only one anything is learned from; a line printed and moved past is output.
   //
