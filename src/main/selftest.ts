@@ -2618,6 +2618,48 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const said = await foot();
             const landed = await lab.tell('read var/log/from-the-pc.conf');
             check('the send button puts a file from the PC on the box, and the box agrees about it', sent && said.includes('the box holds the same file') && landed['text'] === 'a file this PC is sending\n', [said, landed]);
+
+            // ---- A file dragged in from Windows ----
+            //
+            // What he does every day, and what MobaXterm does that Berth could not. The page's part is the
+            // smallest it can be: it says which folder the drop was over and hands the drop's own files to
+            // the preload, which is the only side that may learn where a file lives on this PC (plan B2.7).
+            //
+            // The crux is what a page can do with that. A File a page builds for itself has no path, so the
+            // preload has nothing to send and the page cannot turn a drop into naming a file of its own
+            // choosing. That is what is held here, by doing it: a drop of a page's own File, on the real
+            // handler, driven through the real port.
+            {
+              const asksBefore = { ...ctx.filesAsked() };
+              const took = await js<number>(front.view, `(() => {
+                const made = new File(['not from the system at all'], 'made-up.conf', { type: 'text/plain' });
+                return window.tabPort.dropped([made], '/var/log');
+              })()`);
+              await sleep(400);
+              const onTheBox = await lab.tell('read var/log/made-up.conf');
+              check('a file a page made for itself has no path, so a drop of it names nothing and sends nothing', took === 0 && onTheBox['error'] === 'no such file' && JSON.stringify(ctx.filesAsked()) === JSON.stringify(asksBefore), [took, onTheBox, ctx.filesAsked(), asksBefore]);
+              // And the pane says so, rather than taking a drop that did nothing in silence.
+              await js(front.view, `(() => {
+                const made = new File(['x'], 'made-up-2.conf');
+                const t = new DataTransfer();
+                t.items.add(made);
+                document.getElementById('files').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: t }));
+              })()`);
+              const saidNothing = await until(async () => (await foot()).includes('nothing to send'), 5000);
+              check('a drop of something that is not a file says so, rather than doing nothing in silence', saidNothing, await foot());
+              // While a file is over the pane, the pane says it will take it: a drop with nowhere lit up is a
+              // drop he has to guess at.
+              const lit = await js<string>(front.view, `(() => {
+                const t = new DataTransfer();
+                t.items.add(new File(['x'], 'over.txt'));
+                const pane = document.getElementById('files');
+                pane.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: t }));
+                const on = pane.dataset.dropping ?? '';
+                pane.dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true, dataTransfer: t }));
+                return on + ',' + (pane.dataset.dropping ?? '');
+              })()`);
+              check('the pane lights up while a file is held over it, and goes quiet when it leaves', lit === 'yes,no', lit);
+            }
             // A file already on the box: Berth asks first, with both files in front of the person, and nothing
             // on the box is touched until the answer comes back (BUILD-RULES 2.20).
             await writeFile(sending, 'the second try, which only goes in if he says so\n');
