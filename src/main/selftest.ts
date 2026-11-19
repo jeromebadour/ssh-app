@@ -767,17 +767,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const commit = process.env['SSHAPP_PICTURE_COMMIT'] ?? '';
       const size = ctx.win.getContentBounds();
       const shot = async (name: string, what: string, bring: Tab | null = null) => {
-        if (!shots) return;
+        // Every screen worth a picture is a screen worth sweeping, so the sweeps run here: the prose on it,
+        // the answers it offers and whether it tells a story. They used to run at five moments chosen by hand,
+        // which meant a dialog opened anywhere else was never read at all, and a probe over the answers could
+        // not fail for a dialog it never saw.
+        //
+        // The sweep follows the screen and not the picture, so it runs whether or not a picture is being
+        // written: the run that guards the merge writes none, and with the sweep behind that gate it read a
+        // third of what a run with pictures read, and the floors under it would have had to be a third as
+        // strong. Everything above the picture itself therefore happens either way, and the two runs walk the
+        // same path.
         if (bring && ctx.shellState().active !== bring.id) {
           await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${bring.id} })`);
           await sleep(200);
         }
         await sleep(350);
-        // Every screen worth a picture is a screen worth sweeping, so the sweeps run here: the prose on it,
-        // the answers it offers and whether it tells a story. They used to run at five moments chosen by hand,
-        // which meant a dialog opened anywhere else was never read at all, and a probe over the answers could
-        // not fail for a dialog it never saw.
         await read(ctx.shell);
+        if (!shots) return;
         const front = [...ctx.tabs.values()].find((t) => t.id === ctx.shellState().active);
         const made = await takePicture({ win: ctx.win, views: front ? [front.view, ctx.shell] : [ctx.shell], file: path.join(shots, `berth-app-dark-${size.width}x${size.height}-${name}.png`), strip: `Berth, the app as built   |   dark   |   window ${size.width}x${size.height}   |   ${what}   |   commit ${commit}`, dist: ctx.dist, harden: ctx.harden });
         check(`a picture: ${what}`, made.width > 0, made);
