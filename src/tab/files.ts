@@ -339,6 +339,14 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const grid = document.createElement('div');
   grid.className = 'fb-grid';
   grid.id = 'fb-grid';
+  // One sheet inside the list, holding the head and every row. The list is what scrolls; the sheet is as wide
+  // as its widest row and never narrower than the pane, so every row is the same width as every other. Without
+  // it each row is only as wide as the pane, and a short row's chosen band stopped at the pane's edge while
+  // the list was scrolled sideways: a row chosen edge to edge that does not reach the edge.
+  const sheet = document.createElement('div');
+  sheet.className = 'fb-sheet';
+  sheet.id = 'fb-sheet';
+  el.list.append(sheet);
   grid.append(el.list);
   // The head lives inside the list, not above it. The list is the one thing that scrolls, in both directions,
   // and a head outside it would have to be kept in step by a listener, which is a frame behind by definition:
@@ -999,7 +1007,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // Everything but the head is replaced, and the head itself is left where it is, never taken out and put
     // back: removing a focused element blurs it to the body, and the head holds the buttons that order the
     // list, so a redraw caused by pressing one would take the focus off the very thing just pressed.
-    if (head.parentNode !== el.list) el.list.replaceChildren(head);
+    if (head.parentNode !== sheet) sheet.replaceChildren(head);
     else {
       while (head.previousSibling) head.previousSibling.remove();
       while (head.nextSibling) head.nextSibling.remove();
@@ -1016,13 +1024,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       fault.className = 'fb-why';
       fault.id = 'fb-why';
       fault.textContent = why;
-      el.list.append(fault);
+      sheet.append(fault);
     } else if (rows.length === 0) {
       const none = document.createElement('div');
       none.className = 'fb-why quiet';
       none.id = 'fb-empty';
       none.textContent = busy ? 'Reading the folder' : 'This folder is empty';
-      el.list.append(none);
+      sheet.append(none);
     } else if (shown(rows).length === 0) {
       // The folder has things in it and the filter hides all of them. That is said, with a way back in one
       // press, rather than a list that looks like an empty folder (NOTHING fails silently).
@@ -1030,7 +1038,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       none.className = 'fb-why quiet';
       none.id = 'fb-none-match';
       none.textContent = `Nothing here is called "${shorten(only.trim(), 24)}". ${rows.length} ${rows.length === 1 ? 'thing is' : 'things are'} hidden by the filter.`;
-      el.list.append(none);
+      sheet.append(none);
     } else {
       const frag = document.createDocumentFragment();
       // One row above, when there is one: the window's own way up, rather than a "..' among the files.
@@ -1044,7 +1052,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
         const enter = r.kind === 'folder' ? () => goTo(join(here, r.name)) : r.kind === 'file' ? () => openFile(join(here, r.name), r.name, r.size) : undefined;
         frag.append(row(r, enter));
       }
-      el.list.append(frag);
+      sheet.append(frag);
     }
 
     // Where the keyboard stands is settled from the rows that are really on screen, and from nothing else.
@@ -1071,7 +1079,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     head.className = 'fb-why quiet';
     head.id = 'fb-bin-head';
     head.textContent = bin.busy && bin.rows.length === 0 ? 'Reading the trash' : bin.rows.length === 0 ? 'Nothing has been deleted on this disk' : `Deleted on this disk, newest first`;
-    el.list.append(head);
+    sheet.append(head);
     if (bin.rows.length > 0) {
       const empty = document.createElement('button');
       empty.className = 'fb-bin-empty';
@@ -1082,7 +1090,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       word.textContent = `Empty what is older than ${TRASH_DAYS} days`;
       empty.append(word);
       empty.addEventListener('click', () => emptyTrash());
-      el.list.append(empty);
+      sheet.append(empty);
     }
     for (const t of bin.rows) {
       const row = document.createElement('div');
@@ -1105,7 +1113,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       back.append(glyph('back'));
       back.addEventListener('click', () => putBack(t.name));
       row.append(words, when, back);
-      el.list.append(row);
+      sheet.append(row);
     }
   };
 
@@ -1797,6 +1805,87 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     else if (e.ctrlKey || e.metaKey) chooseAlso(name);
     else chooseOne(name);
   };
+
+  // ---- A press dragged across the empty part of the list takes everything it covers ----
+  //
+  // The band begins on the empty part of the list and nowhere else: a press that begins on a row is that row
+  // being taken, and on a head it is that column being ordered by, both of which already mean something. This
+  // is where every file list a person has used puts it, his own MobaXterm included.
+  //
+  // While the band is being dragged the rows it covers are marked where they stand rather than the whole pane
+  // being drawn again: a draw empties the list, and the band lives in it, so drawing would take the band out
+  // of the page under the hand holding it. The pane is drawn once, at the end.
+  const band = document.createElement('div');
+  band.className = 'fb-band';
+  band.id = 'fb-band';
+  band.hidden = true;
+  // What is chosen, written onto the rows that are already drawn. This says nothing about which rows exist:
+  // it is the same set the draw reads, put onto the page without building it again.
+  const markChosen = (): void => {
+    for (const e of el.list.querySelectorAll<HTMLElement>('.fb-row')) {
+      const name = e.dataset['name'] ?? '';
+      const yes = chosen.has(name);
+      if (yes) e.dataset['chosen'] = 'yes';
+      else delete e.dataset['chosen'];
+      e.setAttribute('aria-selected', yes ? 'true' : 'false');
+    }
+    drawFoot();
+  };
+  el.list.addEventListener('mousedown', (ev: MouseEvent) => {
+    if (ev.button !== 0 || bin.open) return;
+    const on = ev.target instanceof Element ? ev.target : null;
+    if (on === null || on.closest('.fb-row') !== null || on.closest('.fb-head') !== null) return;
+    // Where the press landed, in the list's own content, so the band stays over the same rows when the list
+    // is scrolled under it.
+    const box = () => el.list.getBoundingClientRect();
+    const startX = ev.clientX - box().left + el.list.scrollLeft;
+    const startY = ev.clientY - box().top + el.list.scrollTop;
+    const was = new Set(chosen);
+    const adding = ev.ctrlKey || ev.metaKey || ev.shiftKey;
+    if (!adding) chosen = new Set();
+    let moved = false;
+    el.list.append(band);
+    const drag = (m: MouseEvent): void => {
+      const at = box();
+      const nowX = m.clientX - at.left + el.list.scrollLeft;
+      const nowY = m.clientY - at.top + el.list.scrollTop;
+      // A press that has not really moved is a press, not a band: without this, a plain click on the empty
+      // part would flash a band of nothing across the pane.
+      if (!moved && Math.abs(nowX - startX) < 4 && Math.abs(nowY - startY) < 4) return;
+      moved = true;
+      band.hidden = false;
+      band.style.left = `${Math.min(startX, nowX)}px`;
+      band.style.top = `${Math.min(startY, nowY)}px`;
+      band.style.width = `${Math.abs(nowX - startX)}px`;
+      band.style.height = `${Math.abs(nowY - startY)}px`;
+      // Which rows it covers, read from where they really are on screen rather than from their order: a row
+      // is covered when the band and the row overlap at all, which is what a person sees it do.
+      const over = band.getBoundingClientRect();
+      const under = new Set<string>();
+      for (const e of el.list.querySelectorAll<HTMLElement>('.fb-row')) {
+        const name = e.dataset['name'] ?? '';
+        if (name === '' || name === '..') continue;
+        const r = e.getBoundingClientRect();
+        if (r.bottom > over.top && r.top < over.bottom) under.add(name);
+      }
+      chosen = adding ? new Set([...was, ...under]) : under;
+      markChosen();
+    };
+    const done = (): void => {
+      window.removeEventListener('mousemove', drag);
+      window.removeEventListener('mouseup', done);
+      band.hidden = true;
+      band.remove();
+      // Nothing was dragged, so nothing was chosen by a band: a press on the empty part of a list clears what
+      // is chosen, which is what every file list does and what a person presses there to do.
+      if (!moved && !adding) chosen = new Set();
+      anchor = '';
+      draw();
+    };
+    window.addEventListener('mousemove', drag);
+    window.addEventListener('mouseup', done);
+    ev.preventDefault();
+  });
   // How much is chosen, in bytes, counting only the files: a folder's own size says nothing about what is in it.
   const chosenBytes = (): number => rows.filter((r) => chosen.has(r.name) && r.kind === 'file').reduce((n, r) => n + r.size, 0);
 
