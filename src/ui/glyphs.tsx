@@ -51,6 +51,10 @@ const shapes: Record<string, JSX.Element> = {
   // The bin, in the same shape the file pane draws, so the two windows do not each have their own idea of
   // what deleting looks like. This is the one glyph that means a thing is being taken away.
   bin: <path d="M3.5 4.5h9M6 4.5V3h4v1.5M4.5 4.5l.75 8.5h5.5l.75-8.5M7 7v3.5M9 7v3.5" />,
+  // Output on its way into a file he names. The sheet is the one the file glyphs are drawn on, with the arrow
+  // going down into it: `download` is a file coming over from a box and means something else entirely, and a
+  // plain text file says what the thing is rather than what the press does.
+  save: <><path d="M4 2.5h6l2.5 2.5v8.5H4z" /><path d="M8 6v4M6.25 8.25L8 10l1.75-1.75" /></>,
   // Ending the program itself: the mark every machine made in the last forty years carries on the button
   // that turns it off. Closing a tab is not this, and wears the X it has always worn.
   power: <><path d="M8 2.5v5.5" /><path d="M4.8 4.8a4.5 4.5 0 1 0 6.4 0" /></>,

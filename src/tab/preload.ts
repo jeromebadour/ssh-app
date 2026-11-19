@@ -63,6 +63,20 @@ const port: TabPort = {
   onWhole(cb) {
     ipcRenderer.on(CH.tabWhole, () => cb());
   },
+  onRightClick(cb) {
+    ipcRenderer.on(CH.tabRightClick, () => cb());
+  },
+  // What the right press landed on, and what a menu over it could offer. Three plain values and nothing
+  // else: the page cannot say where the menu goes, because main already knows where the press was.
+  rightClickWas(what, selection, held) {
+    ipcRenderer.send(CH.tabRightClickWas, what === 'menu' ? 'menu' : 'paste', Boolean(selection), Boolean(held));
+  },
+  onCopyAsk(cb) {
+    ipcRenderer.on(CH.tabCopyAsk, () => cb());
+  },
+  onClear(cb) {
+    ipcRenderer.on(CH.tabClear, () => cb());
+  },
   onSaveAsk(cb) {
     ipcRenderer.on(CH.tabSaveAsk, () => cb());
   },

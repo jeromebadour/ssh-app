@@ -37,6 +37,15 @@ export const CH = {
   tabDragAll: 'tab:drag-all', // tab view to main: several of them at once, each named by its ask
   tabSettings: 'tab:settings', // main to tab view: the settings a tab needs: how big its list starts, and its columns
   tabColumns: 'tab:columns', // tab view to main: a column of its file list was dragged to this width
+  // The terminal's own right-button menu. Main's `context-menu` event is the only thing in Berth that can
+  // start a paste, and it carries no modifier and no idea what is under the pointer, so main asks the view
+  // what the press landed on and the view answers within a moment. A press that asked for a menu opens one
+  // on the window's own surface, where the press on Paste is one main sees itself; anything else, and no
+  // answer at all, pastes, which is what a right press in a terminal has always done here (plan B2.7, B3).
+  tabRightClick: 'tab:right-click', // main to tab view: a right press main saw; say what it landed on
+  tabRightClickWas: 'tab:right-click-was', // tab view to main: 'menu' or 'paste', and what the menu could offer
+  tabCopyAsk: 'tab:copy-ask', // main to tab view: hand over what is selected now, for the clipboard
+  tabClear: 'tab:clear', // main to tab view: clear this terminal
   meterReport: 'meter:report', // any view to main: its worst numbers since the last report (numbers only)
   meterFrame: 'meter:frame', // any view to main: I have painted (the first frame, or the one after tab:shown)
   // The password. Shell view only: it is the one screen that exists before unlock (plan B2.4).
@@ -205,6 +214,7 @@ export interface ShellState {
   added: { req: number; ok: boolean; id: string; error: string; fields: Record<string, string> } | null;
   done: string; // the last thing done, for the status line; empty for nothing yet
   paste: PasteShown | null; // the one paste waiting to be looked at before it is sent
+  termMenu: TermMenuShown | null; // the terminal's right-button menu, drawn by the window because one line of it pastes
   link: LinkAsked | null; // the one address a box printed, waiting to be looked at before anything opens
   maximized: boolean; // the window fills the screen: the restore glyph is shown in place of the maximize one
   closing: ClosingAsked | null; // the window was asked to close while sessions are open: what would end
@@ -266,6 +276,18 @@ export interface LinkAsked {
   scheme: string;
 }
 
+// The terminal's menu, as the window draws it. Where the press landed is in the window's own coordinates,
+// and what the menu may offer is what the terminal really has: nothing in it is a line that cannot be used
+// (BUILD-RULES 2.8).
+export interface TermMenuShown {
+  tab: number;
+  box: string;
+  x: number;
+  y: number;
+  selection: boolean; // something is selected in it, so Copy has something to copy
+  held: boolean; // the terminal holds something, so Select all, Save output and Clear have something to act on
+}
+
 // A paste of more than one line, shown before it is sent: its own lines, and what in it cannot be seen by
 // looking (plan B3). The text itself is main's; the shell only draws it and says yes or no.
 export interface PasteShown {
@@ -299,6 +321,9 @@ export type ShellCmd =
   | { op: 'dropLink' } // the address being shown: open nothing
   | { op: 'sendPaste' } // the paste being shown: send it to its box
   | { op: 'dropPaste' } // the paste being shown: send nothing
+  // One line of the terminal's menu was pressed, on the window's own surface, so main saw the press itself.
+  | { op: 'termMenu'; line: 'copy' | 'paste' | 'all' | 'save' | 'clear' }
+  | { op: 'shutTermMenu' } // the terminal's menu went without a line being pressed
   | { op: 'trust'; box: string } // pin the identity that matched, then open a tab on the box
   | { op: 'trustThenVisit'; box: string } // pin it, then open the first visit (decision O2) instead of a tab
   | { op: 'closeCheck'; box: string }
@@ -350,6 +375,10 @@ export interface TabPort {
   onPace(cb: (share: number) => void): void; // how much of its time a tab behind may spend on output
   onAgain(cb: () => void): void; // a new session has begun on the same box
   onPaste(cb: (text: string) => void): void; // put this text in, as a paste
+  onRightClick(cb: () => void): void; // main saw a right press on this view: say what it landed on
+  rightClickWas(what: 'menu' | 'paste', selection: boolean, held: boolean): void;
+  onCopyAsk(cb: () => void): void; // hand over what is selected now, for the clipboard
+  onClear(cb: () => void): void; // clear this terminal
   pasteMode(protectedPaste: boolean): void; // its box asked for protected paste, or stopped asking
   reopen(now: boolean): void; // now: open a new session at once; otherwise: stop the one that is coming
   onBanner(cb: (bytes: Uint8Array) => void): void; // the box's sign-in text: for the terminal only

@@ -97,6 +97,39 @@ port.onWhole(() => {
   term.note(`Berth: the whole terminal is copied, ${all.split('\n').length} lines`);
 });
 
+// Main saw a right press on this view and asks what it landed on. The page answers; it does not decide. A
+// press with Shift held on the terminal asks for the menu, and the answer carries what a menu over it could
+// offer so that no line is drawn for something the terminal does not have. Anything else is a paste, which
+// is what a right press in a terminal has always done here, and so is saying nothing at all: main waits a
+// moment and pastes. Main is told what the menu could offer, never where it goes: main saw the press.
+port.onRightClick(() => {
+  const press = term.rightPress();
+  const mine = press !== null && Date.now() - press.at < 1000;
+  port.rightClickWas(mine && press.menu ? 'menu' : 'paste', term.hasSelection(), term.held() > 0);
+});
+
+// One line of that menu: what is selected, handed over for the clipboard. The same guarded channel a
+// selection goes out on, so the tab in front of a window in use is the only one that can write a clipboard.
+port.onCopyAsk(() => {
+  const text = term.selection();
+  if (text === '') {
+    term.note('Berth: there is nothing selected to copy');
+    return;
+  }
+  port.copy(text.slice(0, COPY_MAX));
+});
+
+// Clear: everything this terminal holds goes. Nothing is typed into the box, because nothing in Berth is
+// ever typed into a shell by the app (plan B2.5): the terminal's own buffer is emptied and the box is not
+// told, which is why the prompt he is standing on stays where it is.
+port.onClear(() => {
+  if (term.held() === 0) {
+    term.note('Berth: there is nothing in this terminal to clear');
+    return;
+  }
+  term.clear();
+});
+
 // Ctrl+Shift+S: the whole terminal into a file. The page hands over the text and nothing else; where the
 // file goes is main's to ask and his to answer, because a page may never name a file (plan B2.7).
 port.onSaveAsk(() => {
