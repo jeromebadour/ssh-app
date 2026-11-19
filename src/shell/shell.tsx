@@ -3,7 +3,7 @@
 import { Button } from '../ui/button';
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
-import { SETTINGS_DEFAULT, type GateState, type ShellPort, type ShellState, type TabInfo } from '../common/ipc';
+import { SETTINGS_DEFAULT, type GateState, type ShellPort, type ShellState, type TabInfo, type TermMenuShown } from '../common/ipc';
 import { ending } from '../common/link-words';
 import { Bar, placeLabel, tabLook, WindowStrip, type BarActions } from '../ui/bar';
 import { AddBoxDialog, ChangedDialog, CheckDialog, ClosingDialog, RemoveBoxDialog, ReplaceDialog } from '../ui/boxdialogs';
@@ -14,7 +14,8 @@ import { TabDialog } from '../ui/tabdialog';
 import { PasteDialog } from '../ui/pastedialog';
 import { watchView } from '../common/meter-view';
 import { CreateScreen, GateFoot, GateNotice, RestoreScreen, UnlockScreen } from '../ui/gate';
-import { Glyph } from '../ui/glyphs';
+import { Glyph, glyphNode } from '../ui/glyphs';
+import { openMenu, type MenuLine } from '../ui/menu';
 import { Mark } from '../ui/marks';
 
 declare global {
@@ -28,7 +29,7 @@ const port = window.shellPort;
 // What main says is taken from the first moment this script runs, before anything is drawn: main speaks as
 // soon as the page has loaded, and a listener added later (after the first paint) would miss its first words.
 let gateNow: GateState = { phase: 'starting', wrong: false, waitMs: 0, backupDir: '', backupOk: false, detail: '', hasPrevious: false, restoreFrom: '' };
-let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [], ready: false };
+let shellNow: ShellState = { tabs: [], active: 0, boxes: [], boxesFault: '', check: null, added: null, done: '', paste: null, termMenu: null, link: null, maximized: false, closing: null, keyFile: null, replacing: null, settings: { ...SETTINGS_DEFAULT }, settingsOpen: false, downloadsNow: '', firstVisit: null, reopen: [], ready: false };
 let redraw = (): void => undefined;
 port.onGate((g) => {
   gateNow = g;
@@ -330,6 +331,7 @@ function Unlocked(props: { s: ShellState }) {
       {s.paste && (
         <PasteDialog p={s.paste} act={{ send: () => port.cmd({ op: 'sendPaste' }), drop: () => port.cmd({ op: 'dropPaste' }) }} />
       )}
+      <TermMenu m={s.termMenu} />
       {changedTab && changedBox && (
         <ChangedDialog name={changedBox.name} addr={`${changedBox.host}:${changedBox.port}`} pinType={changedBox.pinType} pinFingerprint={changedBox.pinFingerprint} pinnedAt={changedBox.pinnedAt} shownFingerprint={changedTab.link.shownFingerprint} onClose={() => { setSeenChanged([...seenChanged, changedTab.id]); setDialog({ kind: 'none' }); }} />
       )}
@@ -337,6 +339,47 @@ function Unlocked(props: { s: ShellState }) {
   );
 }
 let pendingAdd = 0;
+
+// The terminal's right-button menu, drawn here and nowhere else. The window draws it because one of its lines
+// pastes: a press on the window's own surface is a press main sees itself, and a paste in Berth is never
+// anything less than that (plan B2.7, B3). Main decided this menu should open, from the press it saw; what is
+// in it is what the terminal really has, so no line stands for something that cannot happen (BUILD-RULES 2.8).
+//
+// Find is not in it. His reference menu has it, and it needs the library's search add-on, which is not in yet
+// (plan B3: an add-on joins when something needs it). A line for it now would be a line that does nothing.
+function TermMenu(props: { m: TermMenuShown | null }) {
+  const m = props.m;
+  useLayoutEffect(() => {
+    const layer = document.getElementById('shell-menus');
+    if (!m || !layer) return;
+    // A press on a line shuts the menu and then runs it, in that order and in the one task. So the word
+    // that says the menu went has to wait a turn: sent straight away it would reach main first, main would
+    // have let the menu go, and the line pressed would arrive about a menu that no longer existed and do
+    // nothing at all. That is not a thing a person could see going wrong; it is a line that quietly does
+    // nothing, which is why it is written down here rather than left to the order the two sends happen in.
+    let pressed = false;
+    const press = (line: 'copy' | 'paste' | 'all' | 'save' | 'clear') => () => {
+      pressed = true;
+      port.cmd({ op: 'termMenu', line });
+    };
+    const lines: MenuLine[] = [];
+    if (m.selection) lines.push({ glyph: 'copy', label: 'Copy', keys: 'select to copy', run: press('copy'), id: 'term-menu-copy' });
+    lines.push({ glyph: 'paste', label: 'Paste', keys: 'Ctrl+V, or the right button', run: press('paste'), id: 'term-menu-paste' });
+    if (m.held) {
+      lines.push({ apart: true });
+      lines.push({ glyph: 'copy', label: 'Select all and copy', keys: 'Ctrl+Shift+A', run: press('all'), id: 'term-menu-all' });
+      lines.push({ glyph: 'save', label: 'Save output as a file', keys: 'Ctrl+Shift+S', run: press('save'), id: 'term-menu-save' });
+      lines.push({ apart: true });
+      lines.push({ glyph: 'bin', label: 'Clear', danger: true, run: press('clear'), id: 'term-menu-clear' });
+    }
+    // However it goes, main is told, because main is holding the window above the tabs for it.
+    const menu = openMenu(layer, m.x, m.y, lines, glyphNode, () => setTimeout(() => {
+      if (!pressed) port.cmd({ op: 'shutTermMenu' });
+    }, 0));
+    return () => menu?.close();
+  }, [m]);
+  return null;
+}
 
 function TabStateMark(props: { t: TabInfo }) {
   return <span class={`conn conn-${tabLook(props.t).mark}`} />;

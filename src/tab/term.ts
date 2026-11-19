@@ -122,6 +122,13 @@ export interface Term {
   // What one block printed: the rows after the prompt at this row, up to the next prompt or the end.
   outputAfter(row: number, until: number): string;
   rows(): number; // how many rows the terminal holds, on screen and scrolled out
+  hasSelection(): boolean; // something is selected in it right now
+  selection(): string; // what is selected in it right now, for the clipboard
+  clear(): void; // everything it holds, on screen and scrolled out, goes
+  // The last right press on this terminal, and whether it asked for a menu rather than a paste. Main's own
+  // `context-menu` event carries no modifier, so when main asks what a press landed on this is the answer:
+  // Shift held means the menu. A press older than a moment is no answer at all, which is why the time is here.
+  rightPress(): { at: number; menu: boolean } | null;
 }
 
 // A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
@@ -235,6 +242,12 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     if (drawnBy === 'plain') sayPlain();
   });
 
+  // A right press on the terminal is remembered, and its default is never prevented, because main must see
+  // the same press to decide what it means: a paste is main's alone (plan B2.7, B3). Shift held is what asks
+  // for the menu instead, as his reference client does.
+  let rightAt: { at: number; menu: boolean } | null = null;
+  host.addEventListener('contextmenu', (e) => { rightAt = { at: Date.now(), menu: e.shiftKey }; }, true);
+
   // Paste and drop are not the terminal's to take: main pastes, from a key or click it saw itself.
   for (const type of ['paste', 'drop', 'dragover', 'dragenter'] as const) {
     host.addEventListener(type, (e) => { e.preventDefault(); e.stopImmediatePropagation(); }, true);
@@ -324,6 +337,16 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       }
       return null;
     },
+    hasSelection: () => term.hasSelection(),
+    selection: () => term.getSelection(),
+    clear: () => {
+      // Everything, not only the screen: a terminal cleared with its scrollback still behind it is one he
+      // would scroll up into and find the thing he asked to be rid of. The line he is standing on stays,
+      // because that is his prompt. The terminal is not reset: a reset would put back the modes the box
+      // asked for, and one of those is the bracketed paste a protected paste depends on.
+      term.clear();
+    },
+    rightPress: () => rightAt,
     bracketedPaste: () => term.modes.bracketedPasteMode,
     drawnBy: () => drawnBy,
     takeAll: () => {

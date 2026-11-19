@@ -8,7 +8,7 @@ import path from 'node:path';
 import firstConnection from '../../protocol/first-connection.json';
 import { addrOf, BOX_COLOURS, signsWith, TMUX_NAME, type Box, type BoxDraft } from '../common/boxes';
 import { freeName, safeName } from '../common/landing';
-import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo } from '../common/ipc';
+import { CH, COPY_MAX, GRAB_MAX, SAVE_MAX, INPUT_MAX, MOST_AT_ONCE, SETTINGS_DEFAULT, type FirstVisitShown, TABS_MAX, type BoxView, type CheckShown, type ClosingAsked, type FileRow, type KeyFileChosen, type LinkAsked, type PasteShown, type ReplaceAsked, type ShellCmd, type ShellState, type TabInfo, type TermMenuShown } from '../common/ipc';
 import { look } from '../common/paste';
 import { AGAIN_AFTER_MS, mayOpenAgain } from './again';
 import { FaultLog } from './faultlog';
@@ -388,7 +388,7 @@ function checkShown(): CheckShown | null {
 }
 
 function shellState(): ShellState {
-  return { tabs: [...tabs.values()].map(info), active, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
+  return { tabs: [...tabs.values()].map(info), active, ready: !!boxes?.loaded, boxes: boxes?.loaded ? boxes.list.map(boxView) : [], boxesFault: boxes?.fault ? `${boxes.fault}${boxes.faultId ? ` (fault ${boxes.faultId})` : ''}` : '', check: boxes?.loaded ? checkShown() : null, added, done, paste: waitingPaste?.shown ?? null, termMenu, link: waitingLink, maximized: win?.isMaximized() ?? false, closing: closingAsked, keyFile: keyFile?.shown ?? null, replacing: replaceAsked, settings: boxes?.settings ?? { ...SETTINGS_DEFAULT }, settingsOpen, downloadsNow: downloadsInto(), firstVisit: firstVisitShown, reopen: reopenOffer() };
 }
 
 // ---- An address a box printed (plan B2.7) ----
@@ -589,6 +589,38 @@ async function pasteInto(tab: Tab, how: string): Promise<void> {
   stack();
   tellShell();
   void how;
+}
+
+// ---- The terminal's menu (plan B2.7, B3) ----
+// It exists for one reason: one of its lines pastes, and a paste is main's alone. So the menu is drawn on the
+// window's own surface, as the paste preview and the link question are, and the press on each line is one main
+// sees itself. Nothing here trusts the view for more than what the press landed on and what the terminal has.
+interface RightClick { x: number; y: number; at: number; answered: boolean }
+const RIGHT_CLICK_WAIT_MS = 120;
+const rightClicks = new Map<number, RightClick>();
+let termMenu: TermMenuShown | null = null;
+let rightClicksRefused = 0; // an answer that belonged to no press main saw: counted, never acted on
+
+function openTermMenu(tab: Tab, at: RightClick, selection: boolean, held: boolean): void {
+  if (tab.id !== active || overlay || !win?.isFocused() || !tab.box) {
+    rightClicksRefused++;
+    return;
+  }
+  termMenu = { tab: tab.id, box: tab.box.name, x: at.x, y: at.y, selection, held };
+  overlay = true;
+  stack();
+  tellShell();
+}
+
+// However the menu goes: by a line, by Escape, by a press outside it. The tab it was about is given back, so
+// the one line that pastes can be acted on with the overlay already down, which is what mayPaste asks for.
+function closeTermMenu(): Tab | null {
+  const was = termMenu;
+  termMenu = null;
+  if (!was) return null;
+  overlay = false;
+  stack();
+  return tabs.get(was.tab) ?? null;
 }
 
 function closePaste(send: boolean): void {
@@ -896,7 +928,19 @@ function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | nul
   });
   view.webContents.on('context-menu', (_e, params) => {
     // Right-click pastes, as MobaXterm does. Only a real click on the terminal, never a menu asked for in code.
-    if (params.x >= 0 && params.y >= 0) void pasteInto(tab, 'a right-click');
+    // The view is asked what the press landed on, because this event carries no modifier and no idea what is
+    // under the pointer, and it has a moment to answer. A press with Shift held opens the terminal's menu on
+    // the window's own surface; anything else, and no answer at all, pastes. Main stays the decider: the
+    // worst a view can do here is lose its own paste or ask for a menu, and neither of those reaches a box.
+    if (params.x < 0 || params.y < 0) return;
+    const asked: RightClick = { x: params.x, y: params.y + BAR, at: Date.now(), answered: false };
+    rightClicks.set(tab.id, asked);
+    sendTo(tab.view, CH.tabRightClick, true);
+    setTimeout(() => {
+      if (asked.answered || rightClicks.get(tab.id) !== asked) return;
+      asked.answered = true;
+      void pasteInto(tab, 'a right-click');
+    }, RIGHT_CLICK_WAIT_MS).unref();
   });
   view.webContents.once('did-finish-load', () => {
     sendTo(view, CH.tabState, info(tab));
@@ -927,10 +971,13 @@ function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | nul
 // all, and Ctrl+Alt+a number is nobody's: Ctrl with a number alone is not free (Ctrl+2 is a zero byte to a
 // terminal, Ctrl+6 and Ctrl+8 are bytes too), and neither are Ctrl+PageUp and Ctrl+PageDown, which real
 // programs on a box use to move between their own windows. Those stay the box's.
+const typedInto = new Map<number, number>(); // bytes a person has typed into each tab, and nothing else has
 let keysRefused = 0; // a window key pressed where the window is not the person's to drive: counted, never acted on
 
 function goToTab(id: number): void {
   if (!tabs.has(id)) return;
+  // A menu about one terminal never stands over another one.
+  if (termMenu && termMenu.tab !== id) closeTermMenu();
   active = id;
   // A mark says "something happened here while you were elsewhere". Looking at the tab is the answer to it,
   // so it goes the moment the tab is in front, and never needs a press of its own.
@@ -1006,6 +1053,9 @@ function closeTab(id: number): void {
   meter.forget(id);
   frontTold.delete(id);
   protectedPaste.delete(id);
+  rightClicks.delete(id); // a press on a tab that has gone answers nothing
+  typedInto.delete(id);
+  if (termMenu?.tab === id) closeTermMenu(); // and its menu goes with it rather than standing over another tab
   queuedToSend.delete(id); // a tab that has gone takes what it still had to send with it
   for (const key of [...draggable.keys()]) if (key.startsWith(`${id}:`)) draggable.delete(key); // and what it could drag out
   for (const key of [...grabbing]) if (key.startsWith(`${id}:`)) grabbing.delete(key);
@@ -1039,6 +1089,11 @@ ipcMain.on(CH.tabInput, (e, bytes: unknown) => {
     return;
   }
   tab.engine.input(bytes);
+  // Counted, per tab, for one reason: nothing in Berth is ever typed into a shell by the app (plan B2.5),
+  // and the only way to hold anything to that is to count what really went down this one path and show the
+  // count. Everything a person types passes here, and so would anything the app sent, which is what makes a
+  // count that does not move the proof that nothing was sent.
+  typedInto.set(tab.id, (typedInto.get(tab.id) ?? 0) + bytes.byteLength);
 });
 
 ipcMain.on(CH.tabTaken, (e, total: unknown) => {
@@ -1941,6 +1996,19 @@ ipcMain.on(CH.tabReopen, (e, now: unknown) => {
   else tab.stopReopen(true);
 });
 
+// What a right press landed on. It is only ever an answer to a press main itself saw, within the moment main
+// gave it: an answer to nothing is counted and dropped, so a view cannot open a menu or lose a paste of its
+// own accord.
+ipcMain.on(CH.tabRightClickWas, (e, what: unknown, selection: unknown, held: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin) || (what !== 'menu' && what !== 'paste') || typeof selection !== 'boolean' || typeof held !== 'boolean') return drop('tab:right-click-was', e);
+  const asked = rightClicks.get(tab.id);
+  if (!asked || asked.answered || Date.now() - asked.at > RIGHT_CLICK_WAIT_MS) return void rightClicksRefused++;
+  asked.answered = true;
+  if (what === 'paste') return void pasteInto(tab, 'a right-click');
+  openTermMenu(tab, asked, selection, held);
+});
+
 ipcMain.on(CH.tabCopy, (e, text: unknown) => {
   const tab = tabByContents.get(e.sender.id);
   if (!tab || !fromMainFrameOf(e, tab.origin) || typeof text !== 'string' || text.length === 0 || text.length > COPY_MAX) return drop('tab:copy', e);
@@ -2116,6 +2184,24 @@ ipcMain.on(CH.shellCmd, (e, cmd: unknown) => {
   } else if (c?.op === 'closeCheck' && isBox(c.box)) {
     boxes!.cancelCheck(c.box);
     if (openCheck === c.box) openCheck = '';
+    tellShell();
+  } else if (c?.op === 'termMenu') {
+    // The press was on the window's own surface, so main saw it. The menu is taken down first, because the
+    // line that pastes is refused while anything of the shell's is over the tabs, and that is the same guard
+    // that makes a paste his own doing rather than a page's.
+    const tab = closeTermMenu();
+    if (!tab) {
+      tellShell();
+      return;
+    }
+    if (c.line === 'paste') void pasteInto(tab, 'the terminal menu');
+    else if (c.line === 'copy') sendTo(tab.view, CH.tabCopyAsk, true);
+    else if (c.line === 'all') sendTo(tab.view, CH.tabWhole, true);
+    else if (c.line === 'save') sendTo(tab.view, CH.tabSaveAsk, true);
+    else if (c.line === 'clear') sendTo(tab.view, CH.tabClear, true);
+    tellShell();
+  } else if (c?.op === 'shutTermMenu') {
+    closeTermMenu();
     tellShell();
   } else if (c?.op === 'copyBlock' && isBox(c.box)) {
     // Main writes only the text it made itself: the block, with the box's own key line in it.
@@ -2444,7 +2530,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, rightClicksRefused: () => rightClicksRefused, typedInto: (tab: number) => typedInto.get(tab) ?? 0, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

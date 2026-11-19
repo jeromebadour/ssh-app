@@ -50,6 +50,8 @@ interface Ctx {
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
   keysRefused(): number;
+  rightClicksRefused(): number; // an answer about a right press that belonged to no press main saw
+  typedInto(tab: number): number; // bytes typed into this tab's box, which only a person's own keys add to
   overlayOn(): boolean;
   windowInUse(): boolean;
   downloads: string;
@@ -3739,6 +3741,142 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await read(ctx.shell);
         await clickOn('#paste-drop');
 
+        // The terminal's own right-button menu, and the rule under it: main decides a paste. A right press
+        // reaches main as an event that carries no modifier and no idea what is under the pointer, so the
+        // view is asked what the press landed on. These probes drive real mouse events through the window,
+        // not synthetic ones in the page, because a synthetic press produces no such event in main at all:
+        // a probe that fired one would be testing nothing and saying it passed.
+        await lab.tell('quiet off');
+        const termMenuWords = (): Promise<string[]> => js<string[]>(ctx.shell, `[...document.querySelectorAll('#shell-menus .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+        const shutTermMenu = (): Promise<unknown> => js(ctx.shell, `document.querySelector('#shell-menus .fb-menu')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+        // Where a press should land, from words this terminal really drew. Asked twice over, because the
+        // first ask may only bring the words into view and answer nothing. Nothing here guesses a point: a
+        // guessed one could land on the file pane beside the terminal, where a right press means something
+        // else entirely, and the probe would quietly be testing that instead.
+        const spotOf = async (words: string): Promise<{ x: number; y: number } | null> => {
+          let at = await js<{ x: number; y: number } | null>(open1.view, `window.berthTerm.spot(${JSON.stringify(words)})`);
+          if (!at) {
+            await sleep(300);
+            at = await js<{ x: number; y: number } | null>(open1.view, `window.berthTerm.spot(${JSON.stringify(words)})`);
+          }
+          return at;
+        };
+        // A fresh marker on the last line, so the point to press is on screen and nothing has to scroll to
+        // find it. Each press gets its own, because the one before it may have been cleared away.
+        const markAndSpot = async (mark: string): Promise<{ x: number; y: number } | null> => {
+          await type(open1, `echo ${mark}\n`);
+          await until(async () => (await shown(open1)).includes(mark), 6000);
+          await sleep(300);
+          return spotOf(mark);
+        };
+        const rightPressAt = (p: { x: number; y: number }, modifiers: 'shift'[]): void => {
+          open1.view.webContents.focus();
+          open1.view.webContents.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'right', clickCount: 1, modifiers });
+          open1.view.webContents.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'right', clickCount: 1, modifiers });
+        };
+        {
+          // Shift held opens the menu, on the window's own surface. What is in it is what this terminal
+          // really has: nothing is selected, so there is no Copy line to press (BUILD-RULES 2.8).
+          await sleep(300); // two pastes closer together than a person's own hands are refused as a repeat
+          clipboard.writeText('this must not arrive by itself\n');
+          const p = await markAndSpot('menu-marker-aaa');
+          check('the terminal says where its own words are drawn, so a press can be put on them', p !== null, p);
+          if (p) rightPressAt(p, ['shift']);
+          const opened = await until(async () => (await termMenuWords()).length > 0, 3000);
+          const words = await termMenuWords();
+          check(`Shift and the right button on the terminal opens its menu, drawn by the window: ${words.join(', ')}`,
+            opened && words.includes('Paste') && words.includes('Select all and copy') && words.includes('Save output as a file') && words.includes('Clear') && !words.includes('Copy') && !words.includes('Find'),
+            words);
+          check('and the window is above its tabs while it is open, so the menu is not drawn behind the terminal it is about', ctx.overlayOn(), '');
+          check('and opening it pasted nothing: the menu is the answer to that press, not a paste as well', !(await shown(open1)).includes('this must not arrive by itself') && !(await has('#paste')), (await shown(open1)).slice(-120));
+          await sweepMenu(ctx.shell, "the terminal's menu");
+          await shot('term-menu', "the terminal's own menu, drawn on the window because one of its lines pastes", null);
+          await read(ctx.shell);
+          await shutTermMenu();
+          check('Escape shuts it and the window goes back behind its tabs', (await until(async () => (await termMenuWords()).length === 0, 3000)) && (await until(() => !ctx.overlayOn(), 3000)), '');
+        }
+        {
+          // A plain right press still pastes, which is what it has always done here and what his reference
+          // client does. This is the probe that would catch the menu quietly taking that away.
+          await sleep(300);
+          clipboard.writeText('right-press-pasted-this');
+          const p = await markAndSpot('menu-marker-bbb');
+          if (p) rightPressAt(p, []);
+          const arrived = await until(async () => (await shown(open1)).includes('right-press-pasted-this'), 5000);
+          const noMenu = await termMenuWords();
+          check('a plain right press still pastes what is on the clipboard', p !== null && arrived, (await shown(open1)).slice(-120));
+          check('and it opens no menu: the menu is what Shift asks for, and nothing else about a right press changed', noMenu.length === 0, noMenu);
+          await type(open1, '\u0015'); // what was pasted is taken off the line again, not run
+        }
+        {
+          // Something selected: the Copy line is there, and pressing it writes that selection in place of
+          // what was on the clipboard.
+          //
+          // The order here is the whole probe. Selecting in this terminal copies by itself, so a clipboard
+          // set before the selection would hold the right words whether the Copy line worked or not: the
+          // probe would pass with the line doing nothing, which is worse than having no probe at all. So
+          // the clipboard is taken over AFTER the selection has settled and been copied, and only the press
+          // can put those words back.
+          await sleep(300);
+          const sel = await markAndSpot('pick-this-line-up');
+          if (sel) {
+            open1.view.webContents.sendInputEvent({ type: 'mouseDown', x: sel.x, y: sel.y, button: 'left', clickCount: 1 });
+            for (let i = 1; i <= 20; i++) open1.view.webContents.sendInputEvent({ type: 'mouseMove', x: sel.x + i * 20, y: sel.y, button: 'left' });
+            open1.view.webContents.sendInputEvent({ type: 'mouseUp', x: sel.x + 400, y: sel.y, button: 'left', clickCount: 1 });
+          }
+          await sleep(600); // longer than the wait a settled selection is copied after
+          const selected = await js<boolean>(open1.view, `window.berthTerm.hasSelection()`);
+          const copiedItself = (await clipboard.readText()).includes('this-line-up');
+          check('a drag across a line selects it, and selecting copies by itself', selected && copiedItself, [selected, (await clipboard.readText()).slice(0, 60)]);
+          clipboard.writeText('not-what-was-selected');
+          if (sel) rightPressAt(sel, ['shift']);
+          await until(async () => (await termMenuWords()).length > 0, 3000);
+          const words = await termMenuWords();
+          check(`with something selected the menu offers Copy: ${words.join(', ')}`, words.includes('Copy'), words);
+          const pressed = await clickOn('#term-menu-copy');
+          const wrote = await until(async () => (await clipboard.readText()).includes('this-line-up'), 3000);
+          check('and pressing it puts that selection on the clipboard, in place of what was on it', pressed && wrote && !(await clipboard.readText()).includes('not-what-was-selected'), (await clipboard.readText()).slice(0, 80));
+        }
+        {
+          // Clear: everything the terminal holds goes. The marker carries neither of the words the second
+          // half of this looks for, or the probe would fail on its own marker rather than on what the app did.
+          await sleep(300);
+          const p = await markAndSpot('before-the-wipe');
+          const heldBefore = await js<number>(open1.view, `window.berthTerm.held()`);
+          const typedBefore = ctx.typedInto(open1.id);
+          if (p) rightPressAt(p, ['shift']);
+          await until(async () => (await termMenuWords()).length > 0, 3000);
+          const pressed = await clickOn('#term-menu-clear');
+          const emptied = await until(async () => !(await shown(open1)).includes('before-the-wipe'), 4000);
+          const heldAfter = await js<number>(open1.view, `window.berthTerm.held()`);
+          // What it holds is counted in rows of its buffer, which never falls below the rows on screen: a
+          // cleared terminal of thirty-one rows still holds thirty-one. So what is checked is that the words
+          // are gone from everything it holds, screen and scrollback alike, and the count is only shown.
+          check('Clear empties the terminal, everything it held and not only the screen', pressed && emptied, [pressed, emptied, heldBefore, heldAfter, (await shown(open1)).slice(-200)]);
+          // And the box was told nothing at all. Nothing in Berth is ever typed into a shell by the app
+          // (plan B2.5), so a Clear that sent `clear` down to the box would be the one thing this app may
+          // never do. It is held by counting the bytes that went down the one path anything typed goes
+          // down: not a byte more than before, with the terminal emptied all the same. The count is proved
+          // to be a live one first, by typing into the box and watching it move, because a counter stuck
+          // at a number would make this probe pass whatever the app did.
+          await sleep(500);
+          const typedAfter = ctx.typedInto(open1.id);
+          await type(open1, 'echo the-counter-moves\n');
+          await until(async () => (await shown(open1)).includes('the-counter-moves'), 8000);
+          check('and not a byte was typed into the box to do it, on a count proved to be live', typedAfter === typedBefore && ctx.typedInto(open1.id) > typedAfter, [typedBefore, typedAfter, ctx.typedInto(open1.id)]);
+        }
+        {
+          // The one that could not fail by accident: an answer that belonged to no press main ever saw. A
+          // view that said "that was a menu" out of the blue must open nothing, because then the menu would
+          // be a way for a page to reach the clipboard without a person pressing anything (plan B2.7).
+          await sleep(300);
+          const refusedBefore = ctx.rightClicksRefused();
+          await js(open1.view, `window.tabPort.rightClickWas('menu', true, true)`);
+          await sleep(400);
+          const nothing = (await termMenuWords()).length === 0;
+          check('an answer that belonged to no press main saw opens nothing, and is counted', nothing && ctx.rightClicksRefused() > refusedBefore, [nothing, refusedBefore, ctx.rightClicksRefused()]);
+        }
+
         // Seven tabs on one box in a 1024-wide window: the box's tabs fold into one, and the count opens them.
         for (let i = 0; i < 6; i++) ctx.openTab(id, i % 2 ? 'logs' : '');
         ctx.win.setContentSize(1024, 640);
@@ -4210,7 +4348,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onFilePage,onOutput,onPace,onPaste,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onClear,onCopyAsk,onFilePage,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
