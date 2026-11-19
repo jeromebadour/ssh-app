@@ -1858,6 +1858,50 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               controls['field']!.edge && controls['field']!.fill && pressable(controls['path']!), controls);
             check('and every other control in the pane is a real control too, while the foot, which cannot be acted on, invites no press',
               pressable(controls['head']!) && pressable(controls['find']!) && controls['foot']!.cursor !== 'pointer', controls);
+            // ---- The heads line up with their columns, and the quiet ones can be read ----
+            //
+            // His, 2026-11-19, looking at the built window: the Name head did not start where the names
+            // start, the time ran into the owner beside it, and the three quiet columns were barely
+            // readable. All three are measured here rather than looked at.
+            const cols = await js<{ headLeft: number; nameLeft: number; apart: number; quiet: { what: string; size: number; ratio: number; colour?: string; on?: string }[] }>(front.view, `(() => {
+              const lum = (c) => { const [r, g, b] = c.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+              const rgb = (s) => (s.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+              const under = (el) => { for (let n = el; n; n = n.parentElement) { const st = getComputedStyle(n); const bg = rgb(st.backgroundColor); const a = (st.backgroundColor.match(/[\\d.]+/g) || [])[3]; if (bg.length === 3 && a !== '0') return bg; } return [0, 0, 0]; };
+              const row = [...document.querySelectorAll('#fb-list .fb-row')].find((r) => r.dataset.kind === 'file');
+              const word = document.querySelector('#fb-by-name span');
+              const name = row?.querySelector('.fb-name');
+              const when = row?.querySelector('.fb-when');
+              const owner = row?.querySelector('.fb-owner');
+              const quiet = ['.fb-size', '.fb-when', '.fb-owner'].map((q) => {
+                const e = row?.querySelector(q);
+                if (!e) return { what: q, size: 0, ratio: 0 };
+                const st = getComputedStyle(e);
+                const a = lum(rgb(st.color)), b = lum(under(e));
+                const r = Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+                return { what: q, size: Math.round(parseFloat(st.fontSize) * 10) / 10, ratio: Number.isFinite(r) ? r : -1, colour: st.color, on: JSON.stringify(under(e)) };
+              });
+              return {
+                headLeft: word ? Math.round(word.getBoundingClientRect().left) : -1,
+                nameLeft: name ? Math.round(name.getBoundingClientRect().left) : -1,
+                apart: when && owner ? Math.round(owner.getBoundingClientRect().left - when.getBoundingClientRect().right) : -1,
+                quiet,
+              };
+            })()`);
+            check('the Name head starts where the names under it start', cols.headLeft > 0 && Math.abs(cols.headLeft - cols.nameLeft) <= 2, cols);
+            check('the time and the owner do not run into each other', cols.apart >= 6, cols.apart);
+            check('the quiet columns can be read: 4.5:1 or better against their own surface', cols.quiet.length === 3 && cols.quiet.every((q) => q.ratio >= 4.5 && q.size >= 12), cols.quiet);
+
+            // ---- Every scrollbar in the app is the app's own ----
+            //
+            // His, 2026-11-19. Windows draws a seventeen-pixel bar with an arrow at each end in a grey that
+            // belongs to no part of this window. What is held here is the thing a rule written once either
+            // reaches or does not: every surface that really has a scrollbar on screen measures the app's
+            // own width and not the browser's. The measurement is the gap between what a surface is and what
+            // it can show, which is the bar itself.
+            const bars = await js<{ where: string; wide: number; tall: number }[]>(front.view, `[...document.querySelectorAll('*')].map((e) => ({ where: e.id || e.className || e.tagName, wide: e.offsetWidth - e.clientWidth, tall: e.offsetHeight - e.clientHeight })).filter((b) => b.wide > 2 || b.tall > 2)`);
+            const ours = bars.filter((b) => (b.wide === 0 || b.wide === 10) && (b.tall === 0 || b.tall === 10));
+            check('every scrollbar on screen is the app\'s own thin one, not the browser\'s', bars.length > 0 && ours.length === bars.length, bars.slice(0, 6));
+
             // ---- Columns he can drag ----
             //
             // His, 2026-11-19, with his own MobaXterm beside it. A press on a grip changes the column's width
