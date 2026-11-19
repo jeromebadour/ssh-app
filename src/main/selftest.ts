@@ -1893,6 +1893,96 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('a press dragged across the list carries no ghost of its letters, and the terminal and the search field keep their own selection',
                 dragAcross === '' && picks.list === 'none' && picks.row === 'none' && picks.term !== 'none' && picks.find === 'text',
                 [dragAcross.slice(0, 60), picks]);
+
+              // And a press begun on the empty part of the list and dragged back up over the rows takes every
+              // row it covers, which is how every file list a person has used works and how his own MobaXterm
+              // does it. Driven the same way, by real presses from outside the page: a band drawn by made-up
+              // events would prove the handler and not the thing.
+              const band = await js<{ x: number; yEmpty: number; yTop: number; want: string[] } | null>(front.view, `(() => {
+                const list = document.getElementById('fb-list');
+                const rows = [...document.querySelectorAll('#fb-list .fb-row')].filter((r) => r.dataset.name !== '..');
+                if (rows.length < 3) return null;
+                const box = list.getBoundingClientRect();
+                const last = rows[rows.length - 1].getBoundingClientRect();
+                // Below the last row there must really be empty list to press on, or this is pressing a row.
+                if (box.bottom - last.bottom < 40) return null;
+                const third = rows[rows.length - 3].getBoundingClientRect();
+                return {
+                  x: Math.round(box.left + 40),
+                  yEmpty: Math.round(last.bottom + 24),
+                  yTop: Math.round(third.top + third.height / 2),
+                  want: rows.slice(rows.length - 3).map((r) => r.dataset.name),
+                };
+              })()`);
+              // What the list says is chosen, read where it is drawn.
+              const taken = (): Promise<string[]> => js<string[]>(front.view, `[...document.querySelectorAll('#fb-list .fb-row[data-chosen="yes"]')].map((r) => r.dataset.name)`);
+              if (band === null) {
+                check('a press dragged up from the empty part of the list takes every row it covers', false, 'there was no empty part of the list to press on');
+              } else {
+                w.sendInputEvent({ type: 'mouseDown', x: band.x, y: band.yEmpty, button: 'left', clickCount: 1 });
+                for (let i = 1; i <= 6; i++) {
+                  w.sendInputEvent({ type: 'mouseMove', x: band.x + 60, y: Math.round(band.yEmpty + ((band.yTop - band.yEmpty) * i) / 6), button: 'left' });
+                  await sleep(25);
+                }
+                const drawn = await js<boolean>(front.view, `!!document.getElementById('fb-band') && !document.getElementById('fb-band').hidden`);
+                const whileHeld = await taken();
+                w.sendInputEvent({ type: 'mouseUp', x: band.x + 60, y: band.yTop, button: 'left', clickCount: 1 });
+                await sleep(150);
+                const after = await taken();
+                const gone = await js<boolean>(front.view, `!document.getElementById('fb-band')`);
+                check('a press dragged up from the empty part of the list takes every row it covers', drawn && gone && after.join() === band.want.join() && whileHeld.join() === after.join() && (await foot()).includes(`${band.want.length} chosen`), [drawn, gone, after, band.want, whileHeld]);
+                // The way out of the folder is not a row a person can act on, so a band over it takes nothing.
+                check('and the way out of the folder is never taken by it', !after.includes('..'), after);
+                // A press on the empty part that is not dragged is a press, not a band: it clears what is
+                // chosen, and it must not leave a band of nothing lying across the pane.
+                w.sendInputEvent({ type: 'mouseDown', x: band.x, y: band.yEmpty, button: 'left', clickCount: 1 });
+                w.sendInputEvent({ type: 'mouseUp', x: band.x, y: band.yEmpty, button: 'left', clickCount: 1 });
+                await sleep(150);
+                check('a press on the empty part that is not dragged clears what is chosen and draws no band', (await taken()).length === 0 && (await js<boolean>(front.view, `!document.getElementById('fb-band')`)), [await taken(), await foot()]);
+                // A chosen row reaches both edges of the list, wherever the list is scrolled to. Every row is
+                // the same width as every other, which is the only way that can be true: a row only as wide as
+                // the pane leaves its own colour short of the end as soon as the list is scrolled sideways,
+                // and the shortest row in any folder is the way out of it.
+                const edges = await js<{ scrolled: number; widths: number[]; sheet: number; reach: number[] } | null>(front.view, `(() => {
+                  const list = document.getElementById('fb-list');
+                  const sheet = document.getElementById('fb-sheet');
+                  if (!list || !sheet) return null;
+                  list.scrollLeft = list.scrollWidth;
+                  const rows = [...document.querySelectorAll('#fb-list .fb-row')];
+                  const at = list.getBoundingClientRect();
+                  return {
+                    scrolled: list.scrollLeft,
+                    widths: rows.map((r) => Math.round(r.getBoundingClientRect().width)),
+                    sheet: Math.round(sheet.getBoundingClientRect().width),
+                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - at.right)),
+                  };
+                })()`);
+                // The list is made to scroll first, by making its text big enough that a row does not fit.
+                for (let i = 0; i < 5; i++) {
+                  await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
+                  await sleep(60);
+                }
+                await sleep(200);
+                const wide = await js<{ scrolled: number; widths: number[]; sheet: number; reach: number[] } | null>(front.view, `(() => {
+                  const list = document.getElementById('fb-list');
+                  const sheet = document.getElementById('fb-sheet');
+                  if (!list || !sheet) return null;
+                  list.scrollLeft = list.scrollWidth;
+                  const rows = [...document.querySelectorAll('#fb-list .fb-row')];
+                  const at = list.getBoundingClientRect();
+                  return {
+                    scrolled: list.scrollLeft,
+                    widths: rows.map((r) => Math.round(r.getBoundingClientRect().width)),
+                    sheet: Math.round(sheet.getBoundingClientRect().width),
+                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - at.right)),
+                  };
+                })()`);
+                const allOneWidth = wide !== null && wide.widths.length > 2 && wide.widths.every((w) => w === wide.sheet);
+                const noneFallsShort = wide !== null && wide.reach.every((d) => d >= 0);
+                check('every row is the width of the widest, so a chosen row reaches the edge however far the list is scrolled', wide !== null && wide.scrolled > 0 && allOneWidth && noneFallsShort, [edges, wide]);
+                await js(front.view, `document.getElementById('files')?.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, bubbles: true }))`);
+                await sleep(200);
+              }
             }
             const onFile = await menuOn(`document.querySelector('#fb-list .fb-row[data-name="${aFile}"]')`);
             check(`a file's menu offers what a file can do: ${onFile.join(', ')}`, onFile.includes('Open') && onFile.includes('Bring it over') && onFile.includes('Rename') && onFile.includes('Delete') && onFile.includes("The box's own hash"), onFile);
