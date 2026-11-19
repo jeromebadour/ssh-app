@@ -1720,6 +1720,30 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await clickOn('#fb-back', front);
             await until(async () => (await pathNow()) === startedAt, 8000);
 
+            // ---- Anything that can be acted on looks like it, and anything that cannot does not ----
+            //
+            // His, the night of 2026-11-18, and the biggest of that night's decisions. The path was the pane's
+            // own colour with no edge, so the one thing on the pane that can be pressed to go somewhere read as
+            // a line of text. The rule is swept, not patched: every control named here is a real button or a
+            // real field, so the keyboard reaches it and a reader is told what it is, and each carries
+            // something at rest that says it can be pressed. The other half matters as much: the foot says what
+            // is in the folder and can be acted on in no way at all, so it must not invite a press.
+            const controls = await js<Record<string, { tag: string; cursor: string; edge: boolean; fill: boolean }>>(front.view, `(() => {
+              const look = (sel) => {
+                const e = document.querySelector(sel);
+                if (!e) return { tag: '(not there)', cursor: '', edge: false, fill: false };
+                const s = getComputedStyle(e);
+                const up = e.parentElement ? getComputedStyle(e.parentElement).backgroundColor : '';
+                const edged = ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(s['border' + side + 'Width']) > 0 && s['border' + side + 'Style'] !== 'none' && !s['border' + side + 'Color'].includes('rgba(0, 0, 0, 0)'));
+                return { tag: e.tagName, cursor: s.cursor, edge: edged, fill: s.backgroundColor !== up && s.backgroundColor !== 'rgba(0, 0, 0, 0)' };
+              };
+              return { field: look('#fb-field'), path: look('#fb-path'), head: look('#fb-by-name'), find: look('#fb-find'), foot: look('#fb-foot') };
+            })()`);
+            const pressable = (c: { tag: string; cursor: string }): boolean => (c.tag === 'BUTTON' || c.tag === 'INPUT') && (c.cursor === 'pointer' || c.cursor === 'text');
+            check('the path is a field and looks like one: a real control, with its own edge and its own fill',
+              controls['field']!.edge && controls['field']!.fill && pressable(controls['path']!), controls);
+            check('and every other control in the pane is a real control too, while the foot, which cannot be acted on, invites no press',
+              pressable(controls['head']!) && pressable(controls['find']!) && controls['foot']!.cursor !== 'pointer', controls);
             // The folder is listed again before the columns are read. The lab has made several files since the
             // pane last asked, and on a Windows runner the probes that re-list are the ones skipped there, so
             // everything below used to be read off a list made before half of this folder existed: four rows
@@ -1954,7 +1978,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
                     scrolled: list.scrollLeft,
                     widths: rows.map((r) => Math.round(r.getBoundingClientRect().width)),
                     sheet: Math.round(sheet.getBoundingClientRect().width),
-                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - at.right)),
+                    // Against the list's own content, not its border box: a vertical scrollbar sits inside the
+                    // border, so measuring to the border would ask the rows to reach under the scrollbar.
+                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - (at.left + list.clientWidth))),
                   };
                 })()`);
                 // The list is made to scroll first, by making its text big enough that a row does not fit.
@@ -1974,7 +2000,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
                     scrolled: list.scrollLeft,
                     widths: rows.map((r) => Math.round(r.getBoundingClientRect().width)),
                     sheet: Math.round(sheet.getBoundingClientRect().width),
-                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - at.right)),
+                    // Against the list's own content, not its border box: a vertical scrollbar sits inside the
+                    // border, so measuring to the border would ask the rows to reach under the scrollbar.
+                    reach: rows.map((r) => Math.round(r.getBoundingClientRect().right - (at.left + list.clientWidth))),
                   };
                 })()`);
                 const allOneWidth = wide !== null && wide.widths.length > 2 && wide.widths.every((w) => w === wide.sheet);
@@ -2426,16 +2454,35 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${front.id} })`);
             await until(() => ctx.shellState().active === front.id, 3000);
           }
+          // The three glyph buttons beside the path are gone (his, 2026-11-18 night), so what they did is asked
+          // for under the right button on the empty part of the folder, where the thing being acted on is what
+          // was pressed. One way in, used by every probe below that used to press one of them.
+          const fromTheFolderMenu = async (line: string, settle = 150): Promise<void> => {
+            await js(front.view, `(() => {
+              const list = document.getElementById('fb-list');
+              const r = list.getBoundingClientRect();
+              list.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: Math.round(r.left + 30), clientY: Math.round(r.bottom - 12) }));
+            })()`);
+            await sleep(120);
+            await js(front.view, `[...document.querySelectorAll('.fb-menu-one')].find((b) => b.textContent.includes(${JSON.stringify(line)}))?.click()`);
+            await sleep(settle);
+          };
           // Sending a file from the PC to the box. Which file leaves this PC is answered in the system's own
           // chooser, which no view and no box can answer: the lab answers it in main's place, and the view's
           // part is only naming the folder it is looking at.
           {
             const foot = (): Promise<string> => js<string>(front.view, `(document.getElementById('fb-moving')?.textContent ?? '') + (document.getElementById('fb-foot')?.textContent ?? '')`);
+            // Sending is asked for under the right button on the empty part of the folder, which is where it
+            // lives now: the glyph button beside the path is gone (his, 2026-11-18 night). The press is on the
+            // thing being acted on, which is the folder itself.
+            // No settling after this one: what the strip says while several files are going is read straight
+            // after the press, and a wait here is time the first of them has already spent moving.
+            const askToSend = (): Promise<void> => fromTheFolderMenu('Send a file here', 0);
             const mine = await mkdtemp(path.join(os.tmpdir(), 'berth-send-'));
             const sending = path.join(mine, 'from-the-pc.conf');
             await writeFile(sending, 'a file this PC is sending\n');
             ctx.chooseToSend(() => sending);
-            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            await askToSend();
             const sent = await until(async () => (await foot()).includes('is on the box'), 25_000);
             const said = await foot();
             const landed = await lab.tell('read var/log/from-the-pc.conf');
@@ -2443,7 +2490,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // A file already on the box: Berth asks first, with both files in front of the person, and nothing
             // on the box is touched until the answer comes back (BUILD-RULES 2.20).
             await writeFile(sending, 'the second try, which only goes in if he says so\n');
-            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            await askToSend();
             const asked = await until(() => has('#replacing'), 25_000);
             await shot('replace-asks', 'a file already on the box, asked about before anything is replaced', front);
             const bothShown = await text('#replacing-both');
@@ -2463,7 +2510,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const afterKeeping = await lab.tell('read var/log/from-the-pc.conf');
             check('Keep what is there leaves the box exactly as it was, and says so', kept && !(await has('#replacing')) && afterKeeping['text'] === 'a file this PC is sending\n', [await foot(), afterKeeping]);
             // Replace it: the new one goes in, over the old, and the box agrees about what arrived.
-            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            await askToSend();
             await until(() => has('#replacing'), 25_000);
             await clickOn('#replacing-do');
             const over = await until(async () => (await foot()).includes('over the file that was there'), 25_000);
@@ -2471,7 +2518,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check('Replace it puts the new file in over the old one, and the box agrees about it', over && (await foot()).includes('the box holds the same file') && afterReplacing['text'] === 'the second try, which only goes in if he says so\n', [await foot(), afterReplacing]);
             // The chooser answered with nothing: the window says so and the box is not touched.
             ctx.chooseToSend(() => undefined);
-            await js(front.view, `document.getElementById('fb-send')?.click()`);
+            await askToSend();
             check('a chooser answered with nothing is said, and nothing is sent', await until(async () => (await foot()).includes('No file was chosen'), 10_000), await foot());
             // More than one file chosen in one go. They are sent one at a time, each with a line of its own,
             // and the strip says how many are still waiting. One at a time matters: a box asked for everything
@@ -2481,7 +2528,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               for (const [i, n] of three.entries()) await writeFile(path.join(mine, n), `file number ${i + 1} of a batch\n`.repeat(400));
               ctx.chooseToSend(() => three.map((n) => path.join(mine, n)));
               await lab.tell('filepace 60'); // so each send has a middle long enough to be looked at
-              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              await askToSend();
               // While they go: how many lines are about a transfer still moving (the waiting line is not one
               // of them), and whether the count of what is waiting was ever shown.
               let mostAtOnce = 0;
@@ -2517,7 +2564,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               for (const n of six) await writeFile(path.join(mine, n), 'one of six\n'.repeat(50_000));
               ctx.chooseToSend(() => six.map((n) => path.join(mine, n)));
               await lab.tell('filepace 120');
-              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              await askToSend();
               const shown = await until(() => has('#fb-waiting-stop', front), 25_000);
               await clickOn('#fb-waiting-stop', front);
               const dropped = await until(async () => (await foot()).includes('will not be sent'), 10_000);
@@ -2538,7 +2585,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const many = Array.from({ length: 66 }, (_, i) => `heap-${String(i).padStart(2, '0')}.conf`);
               for (const n of many) await writeFile(path.join(mine, n), 'one of a heap\n');
               ctx.chooseToSend(() => many.map((n) => path.join(mine, n)));
-              await js(front.view, `document.getElementById('fb-send')?.click()`);
+              await askToSend();
               const toldAbout = await until(() => has('#fb-too-many', front), 20_000);
               const tooMany = await js<string>(front.view, `document.getElementById('fb-too-many')?.textContent ?? ''`);
               const quiet = await until(async () => ctx.stillToSend(front.id) === 0 && (await js<number>(front.view, `[...document.querySelectorAll('#fb-moving .fb-moving-one')].filter((e) => e.id !== 'fb-waiting' && e.querySelector('.fb-stop')).length`)) === 0, 120_000, 200);
@@ -2583,7 +2630,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const onTheBox = await lab.tell('read var/log/syslog');
             check('Delete it moves the file out of the folder, says so, and the box no longer has it there', gone && went && onTheBox['error'] === 'no such file', [await foot(), onTheBox]);
             // The trash says what is in it, where each came from and when.
-            await js(front.view, `document.getElementById('fb-bin')?.click()`);
+            await fromTheFolderMenu('What was deleted here');
             const inBin = await until(async () => (await js<string>(front.view, `document.getElementById('fb-list')?.textContent ?? ''`)).includes('/var/log/syslog'), 15_000);
             const binText = await js<string>(front.view, `document.getElementById('fb-list')?.textContent ?? ''`);
             check('the trash says what has been deleted on this disk, with where it came from and when', inBin && binText.includes('Deleted on this disk') && binText.includes('a moment ago'), binText.slice(0, 160));
@@ -2636,7 +2683,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await js(front.view, `(window.tabPort.files({ id: 91001, do: 'restore', path: '/var/log', name: '../../etc/passwd' }), window.tabPort.files({ id: 91002, do: 'restore', path: '/var/log', name: '' }), window.tabPort.files({ id: 91003, do: 'restore', path: '/var/log' }))`);
             await sleep(400);
             check('a view putting something back may name one thing in the trash and nothing path-shaped', ctx.dropped() === droppedBefore + 3, ctx.dropped() - droppedBefore);
-            await js(front.view, `document.getElementById('fb-bin')?.click()`);
+            await fromTheFolderMenu('Back to the folder');
             await until(async () => (await names()).includes('syslog'), 15_000);
             // What Berth will not delete is refused, and the box keeps it.
             await js(front.view, `document.getElementById('fb-up')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
@@ -2753,7 +2800,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await sleep(150);
 
             // A new folder: it is in the list, and the box itself has a folder there.
-            await js(front.view, `document.getElementById('fb-newfolder')?.click()`);
+            await fromTheFolderMenu('New folder');
             await until(() => has('#fb-name-field', front), 5000);
             const emptyToStart = await field();
             await type('kept logs');
