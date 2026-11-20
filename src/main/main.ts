@@ -641,8 +641,15 @@ function closePaste(send: boolean): void {
 
 // The shell is above the tabs while one of its menus or dialogs is open, so nothing a tab draws can cover them
 // and no click reaches a tab meanwhile; otherwise the tab in front is above the shell's empty middle.
+// What this last stacked as, so the keyboard is moved when something comes over the tabs or goes away and
+// at no other time. stack() is called for every tab switch and for a good deal else; taking the keyboard on
+// each of those would be moving it when nothing a person can see has changed.
+let stackedOver: boolean | null = null;
+
 function stack(): void {
   if (!win || !shell) return;
+  const changed = stackedOver !== overlay;
+  stackedOver = overlay;
   if (overlay) {
     win.contentView.addChildView(shell);
     // Raising the window's own surface above the tabs is not the same as handing it the keyboard. Until
@@ -650,13 +657,16 @@ function stack(): void {
     // behind it: Enter answered the screen he had stopped looking at, and the only way to make the dialog
     // hear him was to click it first. Every dialog in the app is drawn on this surface, so this is the one
     // place it has to be done, and doing it anywhere else would be doing it once per dialog and forgetting.
-    shell.webContents.focus();
+    if (changed && !shell.webContents.isFocused()) shell.webContents.focus();
   } else {
     for (const t of tabs.values()) win.contentView.addChildView(t.view);
     // And when the surface goes back down the keyboard goes with it, to the tab in front rather than being
     // left on a window with nothing on it to type into.
     const front = tabs.get(active);
-    if (front && !front.view.webContents.isDestroyed()) front.view.webContents.focus();
+    // Only when it is not already where it belongs. Taking focus a view already holds puts the page's own
+    // focus back to nothing, and a dialog of the pane's own that had just put the cursor on its safe answer
+    // would lose it: the fix for one dialog would have broken another.
+    if (changed && front && !front.view.webContents.isDestroyed() && !front.view.webContents.isFocused()) front.view.webContents.focus();
   }
 }
 
