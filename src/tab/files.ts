@@ -354,7 +354,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     for (const c of COLS) {
       if (c !== 'name' && off.has(c)) continue;
       const w = widths[c];
-      tracks.push(w === undefined ? (c === 'name' ? 'minmax(11em, 1fr)' : 'auto') : `${w}px`);
+      tracks.push(w === undefined ? (c === 'name' ? 'minmax(16em, 1fr)' : 'auto') : `${w}px`);
     }
     grid.style.setProperty('--cols', tracks.join(' '));
     at.dataset['off'] = [...off].join(' ');

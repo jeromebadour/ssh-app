@@ -452,10 +452,36 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     const PASSWORD = 'berth-lab-canary-7f3a91 password';
     const phase = () => ctx.gate.state.phase;
     const sh = ctx.shell.webContents;
-    const at = (sel: string, on: Tab | null = null) => js<{ x: number; y: number } | null>(on ? on.view : ctx.shell, `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    // Where to press a control, and whether a press there reaches it at all.
+    //
+    // This used to hand back the middle of the control's own box and nothing else, which is a lie whenever
+    // the control is not on screen. The file list scrolls sideways by his own choice (nothing gives way,
+    // 2026-11-18 night), and once it is scrolled the Name head sits at x -89: the middle of its box is at
+    // x -8, off the pane, off the window. A press sent there lands on nothing at all. Every probe that
+    // pressed such a control then read the screen, found it unchanged, and blamed the app for not sorting,
+    // for not closing, for not answering. The Windows gate failed on exactly this and named the sort and
+    // the find field as the faults. They were never the faults. The press was.
+    //
+    // So a point is only a point if it reaches the control. The control is brought on screen first, the way
+    // the browser brings a control a person tabs to on screen, and then the point is read; and the point is
+    // only handed back once the page itself says that is what stands there. A press that cannot reach its
+    // control is counted and refused, never sent, because a press sent nowhere is a check that cannot fail.
+    type Point = { x: number; y: number; reached: boolean; stood: string };
+    const at = (sel: string, on: Tab | null = null) => js<Point | null>(on ? on.view : ctx.shell, `(() => {
+      const b = document.querySelector(${JSON.stringify(sel)});
+      if (!b) return null;
+      const mid = () => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; };
+      const lands = (p) => { const hit = document.elementFromPoint(p.x, p.y); return { ok: !!hit && (hit === b || b.contains(hit)), stood: hit ? (hit.id || (typeof hit.className === 'string' ? hit.className : '') || hit.tagName) : 'nothing' }; };
+      let p = mid();
+      let got = lands(p);
+      if (!got.ok) { b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); p = mid(); got = lands(p); }
+      return { x: p.x, y: p.y, reached: got.ok, stood: got.stood };
+    })()`);
+    let pressesThatReachedNothing: string[] = [];
     const clickOn = async (sel: string, on: Tab | null = null) => {
       const p = await at(sel, on);
       if (!p) return false;
+      if (!p.reached) { pressesThatReachedNothing.push(`${sel} at ${p.x},${p.y}: ${p.stood}`); return false; }
       // A tab's view draws where it sits in the window, but is clicked in its own, so the point is its own.
       const w = on ? on.view.webContents : sh;
       w.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
@@ -884,9 +910,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       };
       const moveTo = async (sel: string) => {
         const p = await at(sel);
-        if (p) sh.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
+        if (p && !p.reached) pressesThatReachedNothing.push(`hover ${sel} at ${p.x},${p.y}: ${p.stood}`);
+        if (p && p.reached) sh.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
         await sleep(120);
-        return !!p;
+        return !!p && p.reached;
       };
       const selectAll = async () => {
         sh.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['control'] });
@@ -5603,6 +5630,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
+    // Every press this run sent had to reach the control it named. One that did not is the fault the Windows
+    // gate hid behind two others: it pressed the Name head and the find field while the list was scrolled
+    // sideways, reached nothing, and read the unchanged screen as the app's fault. A run with a press like
+    // that in it cannot be trusted on anything it says after it, so the run says so here by name.
+    check(`every press this run sent reached the control it named (${pressesThatReachedNothing.length} did not)`,
+      pressesThatReachedNothing.length === 0, pressesThatReachedNothing.slice(0, 6).join(' | '));
     check(`no message was dropped, but the ones refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
     // The local log, over the whole run: every failure in it is one the app wrote itself, a view's flood
     // cannot become the log, and nothing it holds was lost.

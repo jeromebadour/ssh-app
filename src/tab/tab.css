@@ -146,7 +146,18 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
    after it take exactly what they need, and when the row outgrows the pane the pane scrolls to it. */
 /* The columns: a width each, set by the grips in the head and the same for the rows under them. Until one
    is dragged, the name takes what is left and the rest take what they need, which is where they began. */
-.fb-row, .fb-head { display: grid; grid-template-columns: var(--cols, 1.25em minmax(11em, 1fr) auto auto auto); align-items: center; gap: .9em; padding: 0 .84em; }
+/* One grid, and the rows take their columns from it.
+   The head and every row used to be a grid of its own, each handed the same column definition. A track
+   written as `auto` or as a share is resolved by each grid against its own content and its own width, so
+   the head resolved Size against the word Size while a row resolved it against 1.1 MB, and no two rows
+   resolved it against each other either. They lined up where their contents happened to match and nowhere
+   else: on this screen they mostly did, on a machine whose font is wider they did not, and the head came
+   away from the rows under it at the size the window opens at.
+   The sheet holds the definition now and each row spans it whole, taking those same tracks for its own
+   cells. One resolution, so there is nothing left to disagree. The row keeps its own box, which is what it
+   needs for its hover, its selection, its focus ring and its drag. */
+.fb-sheet { display: grid; grid-template-columns: var(--cols, 1.25em minmax(16em, 1fr) auto auto auto); }
+.fb-row, .fb-head { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; gap: .9em; padding: 0 .84em; }
 /* A column he turned off: its cells go, and the track with them, so nothing is left standing where it
    was. The names never go: a list of files without them is not a list. */
 #files[data-off~='size'] .fb-size, #files[data-off~='size'] .fb-head-size,
@@ -166,6 +177,7 @@ html[data-live='no'] #files { box-shadow: inset 0 0 0 1px var(--line); }
 /* As wide as the widest row, and never narrower than the pane, so every row is the width of every other
    one and a chosen row reaches the edge wherever the list is scrolled to. */
 .fb-sheet { width: max-content; min-width: 100%; }
+/* The padding at the ends of a row is the row's own, so the grid above it carries none of its own. */
 /* The head's own glyph for the name column, in the same column the rows draw a file's glyph in. */
 .fb-head-glyph { display: flex; align-items: center; width: 1.25em; color: #8b959e; }
 .fb-row:hover { background: color-mix(in srgb, #c3ccd3 7%, transparent); }
