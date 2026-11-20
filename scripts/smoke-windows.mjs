@@ -76,8 +76,16 @@ function run(dir, args, env, { ms, until }) {
   });
 }
 
+// How long one run may take before it is cut off from out here. It is the app's own ceiling (five minutes
+// times the machine factor) with a minute on top, the same arithmetic the Linux runner uses, so the app
+// always reaches its own limit first and says which probe it was on: a run cut off from out here says
+// nothing at all about why. It was a flat 150 seconds, which the box screens have never fitted in: that
+// package holds 459 probes and takes minutes. It only ever seemed to fit because a probe threw partway
+// through and ended the run, so until now the Windows gate had never once run that package whole.
+const EACH_RUN_MS = 360_000 * Number(factor);
+
 async function selftest(name, dir, mode) {
-  const r = await run(dir, ['--lab', ...THROUGH_CANARY], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor, SSHAPP_LABBOX: path.resolve('.build/labbox/labbox.exe') }, { ms: 150_000 });
+  const r = await run(dir, ['--lab', ...THROUGH_CANARY], { SSHAPP_SELFTEST: mode, SSHAPP_BUDGET_FACTOR: factor, SSHAPP_LABBOX: path.resolve('.build/labbox/labbox.exe') }, { ms: EACH_RUN_MS });
   const line = r.out.split('\n').find((l) => l.startsWith('SELFTEST '));
   if (!line) {
     if (r.how === 'still up') await r.end();
