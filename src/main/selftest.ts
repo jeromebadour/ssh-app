@@ -5189,7 +5189,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       clearInterval(watching);
       check('a tab on the box: the link comes up, signed in by the key process', up && t.engine.signAsked >= 1 && t.engine.signRefused === 0 && ctx.signsRefused() === 0, [t.engine.link, phases, t.engine.signAsked, t.engine.signRefused, ctx.signsRefused()]);
       check('what was agreed is the plan\'s', t.engine.link.cipher === 'aes256-gcm@openssh.com' && ['mlkem768x25519-sha256', 'curve25519-sha256'].includes(t.engine.link.keyExchange), t.engine.link);
-      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs', addr, user: 'demo', folder: "/var/log/it's here", pinType: 'ED25519', keepsRunning: false }), ctx.shellState().tabs);
+      check('the tab says which box and place it is on', JSON.stringify(ctx.shellState().tabs.find((x) => x.id === t.id)?.box) === JSON.stringify({ id, name: 'lab-box', colour: 2, place: 'logs', addr, user: 'demo', folder: "/var/log/it's here", pinType: 'ED25519', keepsRunning: false, pinned: [] }), ctx.shellState().tabs);
       await until(async () => (await js<string>(t.view, `document.readyState`)) === 'complete', 10_000);
       // What the box said at sign-in is folded into one line, with the real notice in it lifted onto that
       // line; nothing of it is drawn in the terminal until the line is opened.
