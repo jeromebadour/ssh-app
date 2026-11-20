@@ -147,6 +147,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // How often a finished command may make this pane ask the box for its folder again.
   const AGAIN_APART_MS = 500;
   let askedAgainAt = 0;
+  let owedAgain = false; // a command finished while a listing was on its way: it is listed again when that lands
+  let againSoon: ReturnType<typeof setTimeout> | null = null;
   // The folders pinned on this box, newest first, exactly as main holds them.
   let pinned: string[] = [];
   let space: { total: number; free: number } | null = null;
@@ -672,7 +674,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // The empty part of the list, or the way up: the folder itself is what the menu is about.
       const up = parent(where || asked);
       if (up !== '') lines.push({ glyph: 'up', label: 'The folder above', run: () => goTo(up) });
-      lines.push({ glyph: 'refresh', label: 'List this folder again', keys: 'F5', run: () => open(where || asked, 0, true), id: 'fb-menu-again-list' });
+      lines.push({ glyph: 'refresh', label: 'List this folder again', keys: 'F5', run: () => listAgain(), id: 'fb-menu-again-list' });
       lines.push({ glyph: 'newfolder', label: 'New folder', run: () => askForFolder(), id: 'fb-menu-newfolder' });
       lines.push({ glyph: 'send', label: 'Send a file here', run: () => send() });
       lines.push({ apart: true });
@@ -857,6 +859,38 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     s2.setAttribute('aria-hidden', 'true');
     s2.textContent = '/';
     return s2;
+  };
+
+  // This folder, listed again from the box, with where he is left exactly as it is: not the way back, not
+  // the way forward, and not the filter he typed, because listing the same folder again is not going
+  // anywhere. What F5 does, and what a command finishing in the terminal asks for.
+  //
+  // It is never dropped, only put off. Not while the trash is open, because the trash is not a folder on
+  // this disk and listing underneath it would throw away what he opened it to read. Not while a listing is
+  // already on its way, because that one may have been asked for before the command changed anything and
+  // taking it as current would leave him reading rows from before his own rm; it is owed and runs when that
+  // listing lands. And never more often than twice a second, because a box printing prompts in a loop would
+  // otherwise have Berth asking it for a listing per prompt; the one that arrives too soon waits out the
+  // rest of the window rather than being thrown away. A refresh silently lost is a list he would act on.
+  const listAgain = (): void => {
+    const folder = where || asked;
+    if (folder === '' || bin.open) return;
+    if (busy) {
+      owedAgain = true;
+      return;
+    }
+    const left = AGAIN_APART_MS - (Date.now() - askedAgainAt);
+    if (left > 0) {
+      if (againSoon === null) {
+        againSoon = setTimeout(() => {
+          againSoon = null;
+          listAgain();
+        }, left);
+      }
+      return;
+    }
+    askedAgainAt = Date.now();
+    open(folder, 0, true);
   };
 
   const goTo = (path: string): void => {
@@ -1155,6 +1189,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (p.error) why = `${WHY[p.error] ?? WHY['failed']!}${p.fault === undefined || p.fault === '' ? '' : ` (fault ${p.fault})`}`;
     if (p.done) {
       busy = false;
+      // A command finished while this listing was on its way, so what just arrived is from before it: the
+      // folder is asked for again, once, now that there is nothing in flight to cancel.
+      if (owedAgain) {
+        owedAgain = false;
+        setTimeout(listAgain, 0);
+      }
       // Whatever was just renamed or just made is what the list stands on, if it is in this listing at all.
       if (standNext !== '') {
         const want = standNext;
@@ -2568,9 +2608,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   at.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key !== 'F5' || e.ctrlKey || e.altKey || e.metaKey) return;
     e.preventDefault();
-    const folder = where || asked;
-    if (folder === '') return;
-    open(folder, 0, true);
+    listAgain();
   });
 
   at.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -2636,18 +2674,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   return {
     open: goTo,
-    again: () => {
-      // Not while the trash is open: the trash is not a folder on the disk, and listing underneath it would
-      // throw away what he opened it to read. Not while a listing is already on its way either, and never
-      // more often than twice a second: a box printing prompts in a loop would otherwise have Berth asking
-      // it for a listing per prompt, which is the same fault the bell has and the same answer to it.
-      const folder = where || asked;
-      if (folder === '' || bin.open || busy) return;
-      const now = Date.now();
-      if (now - askedAgainAt < AGAIN_APART_MS) return;
-      askedAgainAt = now;
-      open(folder, 0, true);
-    },
+    again: listAgain,
     pinnedAre: (paths) => {
       if (JSON.stringify(paths) === JSON.stringify(pinned)) return;
       pinned = [...paths];
