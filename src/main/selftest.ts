@@ -2292,13 +2292,26 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false };
               const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; };
               // The head has to ride the list's own sideways scroll, or a column and its name come apart.
+              //
+              // It used to ask only whether the head moved at all, after a scroll of 40px it could not always
+              // take: where the row outgrows the pane by a couple of pixels the scroll is clamped to those
+              // two, both rounded reads land on the same whole pixel, and the answer came out of the rounding
+              // rather than out of the app. That is what failed on Windows at 100 per cent and nowhere else.
+              // It is asked properly now: the list is scrolled by as much as it really has, and the head must
+              // have moved by exactly that much. That is the thing itself, and it also catches a head that
+              // rides the scroll by some other amount, which the old question never could.
               const head = document.getElementById('fb-head');
-              const before = Math.round(head.getBoundingClientRect().left);
-              list.scrollLeft = 40;
-              const moved = Math.round(head.getBoundingClientRect().left) < before;
-              const canScroll = list.scrollWidth > list.clientWidth + 1;
-              list.scrollLeft = 0;
-              void before;
+              const most = list.scrollWidth - list.clientWidth;
+              const canScroll = most > 1;
+              let moved = true;
+              if (canScroll) {
+                const before = head.getBoundingClientRect().left;
+                list.scrollLeft = Math.min(40, most);
+                const really = list.scrollLeft;
+                const after = head.getBoundingClientRect().left;
+                moved = really > 0 && Math.abs((before - after) - really) < 1.5;
+                list.scrollLeft = 0;
+              }
               return {
                 name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'),
                 cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length,
@@ -3852,6 +3865,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('and still not one byte of it reached the shell', gotOwn === '', JSON.stringify(gotOwn));
             }
             await shot('blocks', 'one command and its output told from the next', behind);
+            // Finding words in the scrollback, opened by the glyph in the terminal's own head rather than by
+            // the key (the key is main's and is held in the full run). The picture is what he judges it by:
+            // the field over the head, the count beside it, and Berth's own marks on the box's output.
+            {
+              const findShown = (): Promise<boolean> => js<boolean>(behind.view, `(() => { const f = document.getElementById('term-find'); return !!f && !f.hidden; })()`);
+              // The marks are counted against what the terminal already wore, not against nought: a block's
+              // own mark is drawn with the same decoration the search uses, so "no marks at all" is a thing
+              // that can never be true in a terminal with blocks in it, and a probe asking for it would have
+              // been failing on the blocks rather than on the search.
+              const marksBefore = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              const opened = (await clickOn('#term-find-open', behind)) && (await until(() => findShown(), 3000));
+              const held = await shown(behind);
+              const word = (held.match(/[A-Za-z]{4,}/g) ?? [])[0] ?? '';
+              await js(behind.view, `(() => { const f = document.getElementById('term-find-field'); f.value = ${JSON.stringify(word)}; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+              await sleep(300);
+              const said = await js<string>(behind.view, `document.getElementById('term-find-count')?.textContent ?? ''`);
+              const marked = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              check(`the glyph in the terminal's head opens the find, and what it found is marked on the output: ${said}`,
+                opened && word !== '' && /\d+ of \d+/.test(said) && marked > marksBefore, [opened, word, said, marked, marksBefore]);
+              await shot('term-find', 'finding words in what the box printed: the count, and the marks on its output', behind);
+              // The glyph closes it again, and takes its marks with it.
+              const shut = (await clickOn('#term-find-open', behind)) && !(await findShown());
+              const marksAfter = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              check('and the same glyph closes it, taking its own marks off and leaving the blocks their own',
+                shut && marksAfter === marksBefore, [shut, marksBefore, marked, marksAfter]);
+            }
           }
 
           // The one notification he asked for: something that took a while ended in a tab he is not looking
@@ -4809,7 +4848,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -5404,6 +5443,62 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await js(ctx.shell, `window.shellPort.cmd({ op: 'overlay', on: false })`);
           check('with a dialog over the tab nothing is saved', !(await there(blocked)) && ctx.saves().refused === refusedBefore, [await there(blocked), ctx.saves().refused - refusedBefore]);
           ctx.savesTo(null);
+        }
+        // ---- Ctrl+Shift+F: finding words in what the box has printed ----
+        //
+        // The last of the gaps a week of real use would have met (SECTION-10-LIVE). The whole of it is a read
+        // of what the terminal already holds: the box is asked for nothing and given nothing, which is the
+        // rule under every key this app takes (plan B2.5). Ctrl+F alone stays the shell's own.
+        {
+          const findShown = (): Promise<boolean> => js<boolean>(t.view, `(() => { const f = document.getElementById('term-find'); return !!f && !f.hidden; })()`);
+          const findSays = (): Promise<string> => js<string>(t.view, `document.getElementById('term-find-count')?.textContent ?? ''`);
+          const findHas = (): Promise<string> => js<string>(t.view, `document.getElementById('term-find-field')?.value ?? ''`);
+          const marks = (): Promise<number> => js<number>(t.view, `document.querySelectorAll('.xterm-decoration').length`);
+          const typeFind = async (what: string): Promise<void> => {
+            await js(t.view, `(() => { const f = document.getElementById('term-find-field'); f.value = ${JSON.stringify(what)}; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            await sleep(250);
+          };
+          const findKey = async (key: string, shift: boolean): Promise<void> => {
+            await js(t.view, `document.getElementById('term-find-field').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shift ? 'true' : 'false'}, bubbles: true }))`);
+            await sleep(250);
+          };
+          check('the terminal\u2019s find field is not there until it is asked for, and a glyph in its head asks', !(await findShown()) && (await has('#term-find-open', t)), [await findShown(), await has('#term-find-open', t)]);
+          const useFind = await stillInUse();
+          const boxBeforeFind = await boxGot();
+          press(t.view.webContents, 'F', ['control', 'shift']);
+          const findOpened = await until(() => findShown(), 5000);
+          const handIn = await js<string>(t.view, `document.activeElement?.id ?? ''`);
+          check('Ctrl+Shift+F opens it with the hand already in it, and the box is given nothing', !useFind || (findOpened && handIn === 'term-find-field' && (await boxGot()) === ''), [useFind, ...keysCouldWork(), findOpened, handIn, JSON.stringify(boxBeforeFind)]);
+          if (findOpened) {
+            // Something the box really printed, taken from what the terminal holds rather than guessed, so
+            // this probe cannot pass on a word that was never there.
+            const held = await shown(t);
+            const word = (held.match(/[A-Za-z]{4,}/g) ?? [])[0] ?? '';
+            await typeFind(word);
+            const said = await findSays();
+            const of = Number((said.match(/of (\d+)/) ?? [])[1] ?? '0');
+            const at = Number((said.match(/^(\d+) of/) ?? [])[1] ?? '0');
+            check(`finding a word the box printed says which one he is on and how many there are: ${said}`, word !== '' && of >= 1 && at >= 1 && at <= of && (await marks()) > 0, [word, said, await marks()]);
+            // The next one and the one before it, by the keys every find field answers.
+            const first = await findSays();
+            await findKey('Enter', false);
+            const second = await findSays();
+            await findKey('Enter', true);
+            const back = await findSays();
+            check('Enter goes to the next one and Shift and Enter to the one before it', of < 2 || (second !== first && back === first), [first, second, back, of]);
+            // A word that is not there says so plainly, and says it in its own colour rather than as 0 of 0.
+            await typeFind('zzqqxx-not-in-any-output');
+            const none = await findSays();
+            const noneColour = await js<string>(t.view, `document.getElementById('term-find-count')?.dataset.none ?? ''`);
+            check('a word that is not there says so, in the colour of a thing that is not there', none === 'not found' && noneColour === 'yes', [none, noneColour]);
+            // Escape: the field goes, what he typed goes, and the marks come off the box's own output.
+            await findKey('Escape', false);
+            const shut = !(await findShown());
+            check('Escape closes it, empties it, and takes the marks off the box\u2019s output', shut && (await findHas()) === '' && (await marks()) === 0, [shut, await findHas(), await marks()]);
+            // The whole of it asked the box for nothing and gave it nothing: a search is Berth reading what
+            // it already holds (plan B2.5).
+            check('and the whole search sent the box nothing and asked it for nothing', (await boxGot()) === '', JSON.stringify((await boxGot()).slice(0, 40)));
+          }
         }
         // And Ctrl+A alone is the shell's: it reaches the box exactly as it always did.
         press(t.view.webContents, 'A', ['control']);

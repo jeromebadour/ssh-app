@@ -505,6 +505,78 @@ const showZoom = (at: number, end: string): void => {
   zoomSaid.textContent = end === 'small' ? 'as small as it goes' : end === 'large' ? 'as large as it goes' : `${at}%`;
   if (at === 100 && end === 'own') { zoomSaid.hidden = false; zoomSaid.textContent = 'its own size'; }
 };
+// ---- Finding words in the terminal ----
+//
+// What a week of real use meets first and the gap this list named last: in his reference client he searches
+// the scrollback every day. It reads the terminal's own buffer and nothing else, so not one byte goes to the
+// box: the search is Berth looking at what it already holds (plan B2.5). The field opens on the glyph in the
+// pane's head or on Ctrl+Shift+F, which is main's press and never this page's.
+const findBar = document.getElementById('term-find') as HTMLDivElement;
+const findField = document.getElementById('term-find-field') as HTMLInputElement;
+const findCount = document.getElementById('term-find-count') as HTMLSpanElement;
+const findOpenBtn = document.getElementById('term-find-open') as HTMLButtonElement;
+const findBackBtn = document.getElementById('term-find-back') as HTMLButtonElement;
+const findNextBtn = document.getElementById('term-find-next') as HTMLButtonElement;
+findField.placeholder = 'Find in the terminal';
+findField.setAttribute('aria-label', 'Find these words in what the box has printed');
+findOpenBtn.title = 'Find in the terminal (Ctrl+Shift+F)';
+// The one control that opens it and closes it, in the same place both times, wearing which it is. The field
+// used to carry an X of its own and the bar covered this glyph, so the thing that opened the find could not
+// close it: one control, uncovered, is both simpler and reachable.
+findOpenBtn.setAttribute('aria-label', 'Find in the terminal');
+findOpenBtn.append(glyph('search'));
+findBackBtn.title = 'The one before this';
+findBackBtn.setAttribute('aria-label', 'The match before this one');
+findBackBtn.append(glyph('up'));
+findNextBtn.title = 'The next one';
+findNextBtn.setAttribute('aria-label', 'The next match');
+findNextBtn.append(glyph('down'));
+let finding = false;
+// The count is what a highlight cannot say: how many there are and which one he is standing on. Nothing
+// typed says nothing at all, rather than nought of nought, which reads as "it is not there".
+const sayFound = (r: { found: boolean; at: number; of: number }): void => {
+  const nothing = findField.value !== '' && r.of === 0;
+  findCount.dataset['none'] = nothing ? 'yes' : 'no';
+  findCount.textContent = findField.value === '' ? '' : r.of === 0 ? 'not found' : `${r.at + 1} of ${r.of}`;
+  findBackBtn.disabled = r.of === 0;
+  findNextBtn.disabled = r.of === 0;
+};
+const findStep = (way: 'next' | 'back'): void => sayFound(term.find(findField.value, way));
+const shutFind = (): void => {
+  if (!finding) return;
+  finding = false;
+  findBar.hidden = true;
+  findOpenBtn.setAttribute('aria-expanded', 'false');
+  // It clears itself as it closes: marks left on the screen behind a closed field are a terminal wearing
+  // Berth's own colour over the box's output for no reason he can see.
+  findField.value = '';
+  term.findOff();
+  sayFound({ found: false, at: -1, of: 0 });
+  term.focus();
+};
+const openFind = (): void => {
+  if (finding) { findField.select(); findField.focus(); return; }
+  finding = true;
+  findBar.hidden = false;
+  findOpenBtn.setAttribute('aria-expanded', 'true');
+  sayFound({ found: false, at: -1, of: 0 });
+  findField.focus();
+};
+findOpenBtn.addEventListener('click', () => (finding ? shutFind() : openFind()));
+findBackBtn.addEventListener('click', () => findStep('back'));
+findNextBtn.addEventListener('click', () => findStep('next'));
+// Typing looks as he types, forwards from where he is, which is what every find field he has ever used does.
+findField.addEventListener('input', () => findStep('next'));
+findField.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); shutFind(); return; }
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  e.stopPropagation();
+  findStep(e.shiftKey ? 'back' : 'next');
+});
+// Ctrl+Shift+F. Main saw the press and says so here; it never arrived as a key in this page.
+port.onFind(() => openFind());
+
 const zoomBy = (to: 'in' | 'out' | 'own'): void => {
   const r = term.zoom(to);
   showZoom(r.at, r.end);

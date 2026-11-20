@@ -1033,7 +1033,10 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
   const whole = !input.alt && input.shift && (input.key === 'A' || input.key === 'a');
   // And Ctrl+Shift+S puts the same thing in a file instead. Ctrl+S stays the shell's own.
   const toFile = !input.alt && input.shift && (input.key === 'S' || input.key === 's');
-  if (!digit && !step && !whole && !toFile) return false;
+  // And Ctrl+Shift+F opens the field that finds words in what the box has printed. Ctrl+F stays the shell's
+  // own: it is forward a character in every shell his hands already know.
+  const findIt = !input.alt && input.shift && (input.key === 'F' || input.key === 'f');
+  if (!digit && !step && !whole && !toFile && !findIt) return false;
   // A dialog of the window's own is in front, or the window is not the one being typed into: the press is not
   // this person's doing here, so nothing moves. It is still taken, so no view is given a key meant for main.
   if (overlay || !win?.isFocused()) {
@@ -1049,6 +1052,16 @@ function windowKey(input: { type: string; key: string; control: boolean; shift: 
       return true;
     }
     sendTo(tab.view, whole ? CH.tabWhole : CH.tabSaveAsk, true);
+    return true;
+  }
+  if (findIt) {
+    const tab = tabs.get(active);
+    if (!tab) {
+      done = 'There is no tab to search';
+      tellShell();
+      return true;
+    }
+    sendTo(tab.view, CH.tabFind, true);
     return true;
   }
   if (step) {

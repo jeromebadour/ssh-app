@@ -473,3 +473,28 @@ h1 .mark.now { animation: none; }
 .vw-why { padding: 12px; color: #cc9b47; font-size: 12.5px; }
 .vw-why.quiet { color: #808d99; }
 .vw-foot { flex: none; padding: 5px 12px 6px; border-top: 1px solid var(--line); color: #808d99; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Finding words in the terminal ----
+   The same shape the file list beside it uses: a glyph in the pane's own head, and a field that opens over
+   that head only while he is using it. A field standing open all day costs a row of the thing it searches
+   for a job he does for a few seconds at a time (his, 2026-11-18 night). The count beside it says which
+   match he is standing on and how many there are, because a highlight on its own does not say whether
+   there is another one further up. */
+#term-head { position: relative; }
+.head-find-open { flex: none; display: grid; place-items: center; width: 1.5em; height: 100%; padding: 0; border: 0; background: none; color: #8b959e; cursor: pointer; }
+#term-zoom[hidden] ~ .head-find-open, #term-drawn[hidden] ~ .head-find-open { margin-left: auto; }
+#term-zoom:not([hidden]) ~ .head-find-open, #term-drawn:not([hidden]) ~ .head-find-open { margin-left: 10px; }
+.head-find-open:hover, .head-find-open[aria-expanded='true'] { color: #d7dee4; }
+.head-find-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+.head-find { position: absolute; z-index: 3; inset: 0; right: calc(1.5em + 10px); display: flex; align-items: center; gap: .3em; padding: 0 10px; background: color-mix(in srgb, var(--hue) 9%, #141b21); }
+.head-find[hidden] { display: none; }
+.head-find-field { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #cfd6db; font: inherit; font-size: 1em; }
+.head-find-field::placeholder { color: #6d7781; }
+/* The count is a field, not a sentence: a number, its total, and its own colour. Nothing found wears the
+   colour of a thing that is not there, so he does not have to read the words to know. */
+.head-find-count { flex: none; color: #95a0ab; font-variant-numeric: tabular-nums; }
+.head-find-count[data-none='yes'] { color: #b08f3d; }
+.head-find-step { flex: none; display: grid; place-items: center; width: 1.4em; height: 100%; padding: 0; border: 0; background: none; color: #8b959e; cursor: pointer; }
+.head-find-step:hover:not(:disabled) { color: #d7dee4; }
+.head-find-step:disabled { color: #4e5862; cursor: default; }
+.head-find-step:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
