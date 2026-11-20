@@ -294,7 +294,7 @@ function info(t: Tab): TabInfo {
   // The id of the log line for the failure that ended this link, if one ended it, is main's to add: the
   // engine knows the cause, main is what wrote it down, and the window needs the id to say it.
   const said = doingNow.get(t.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
-  return { id: t.id, own: t.own, ownColour: t.ownColour, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519', keepsRunning: place?.tmux === true } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
+  return { id: t.id, own: t.own, ownColour: t.ownColour, againAt: t.againAt, state: t.engine.state, cause: t.engine.cause, box: box ? { id: box.id, name: box.name, colour: box.colour, place: t.place, addr: addrOf(box), user: box.user, folder: place?.folder ?? box.folder, pinType: box.pin.startsWith('ssh-rsa ') ? 'RSA' : 'ED25519', keepsRunning: place?.tmux === true, pinned: box.pinnedFolders ?? [] } : null, link: endFaults.get(t.id) ? { ...t.engine.link, fault: endFaults.get(t.id)! } : t.engine.link, doing: said.doing, finishedMs: said.finishedMs, unseen: said.unseen };
 }
 
 // The morning (B3, his own words 2026-11-15): the app starts with nothing open, and one offer to open again
@@ -1193,6 +1193,36 @@ ipcMain.on(CH.tabBell, (e) => {
   }
   done = `${tab.box?.name ?? 'The box'} rang the bell`;
   tellShell();
+});
+
+// Pinning a folder on this tab's box (his, per box, 2026-11-20). The view asks; main decides. What a box
+// could call a folder is main's rule and not the view's, the write goes into the locked list where the rest
+// of his own things are, and the box goes back to every tab on it so a pin made in one tab shows in the
+// others at once.
+const PINS_KEPT = 12;
+ipcMain.on(CH.tabPinFolder, (e, path: unknown, on: unknown) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:pin-folder', e);
+  if (typeof path !== 'string' || typeof on !== 'boolean') return drop('tab:pin-folder', e);
+  // A folder on a box: absolute, no newline, nothing that is not a path, and short enough to be one. The
+  // same shape every other path this app takes from a view has to have (plan B2.7).
+  if (path === '' || path.length > 4096 || !path.startsWith('/') || /[\u0000-\u001f\u007f]/.test(path)) return drop('tab:pin-folder', e);
+  const box = tab.box ? boxes?.get(tab.box.id) : undefined;
+  if (!box || !boxes) return drop('tab:pin-folder', e);
+  const had = box.pinnedFolders ?? [];
+  const next = on ? [path, ...had.filter((p) => p !== path)].slice(0, PINS_KEPT) : had.filter((p) => p !== path);
+  if (JSON.stringify(next) === JSON.stringify(had)) return;
+  void boxes.setPinnedFolders(box.id, next).then((saved) => {
+    if (!saved.ok) {
+      done = `That folder could not be pinned: ${String(saved.error ?? '')}`;
+      tellShell();
+      return;
+    }
+    // Every tab on this box, not only the one that asked: the same box's folders are the same everywhere.
+    for (const t of tabs.values()) if (t.box?.id === box.id && !t.view.webContents.isDestroyed()) sendTo(t.view, CH.tabState, info(t));
+    done = on ? `${path} is pinned on ${box.name}` : `${path} is no longer pinned on ${box.name}`;
+    tellShell();
+  });
 });
 
 // Windows' own way of saying something happened while he was elsewhere. It names the box and the place from

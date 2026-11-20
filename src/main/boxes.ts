@@ -342,6 +342,18 @@ export class Boxes {
 
   // Changing a setting: the whole list is written again, boxes and all, because the list is one file and the
   // key process holds it whole. Nothing is kept in memory as changed until the write says it worked.
+  // The folders he pinned on one box. The whole list is written again, as it is for every other change:
+  // the list is one file and the key process holds it whole.
+  setPinnedFolders(id: string, paths: string[]): Promise<KeyReply> {
+    return this.oneAtATime(() => {
+      if (!this.loaded || this.fault) return Promise.resolve({ ok: false, error: this.fault || 'locked' });
+      const was = this.get(id);
+      if (!was) return Promise.resolve({ ok: false, error: 'no such box' });
+      const next: Box = { ...was, pinnedFolders: paths };
+      return this.save(this.list.map((b) => (b.id === id ? next : b)));
+    });
+  }
+
   setSettings(next: Partial<AppSettings>): Promise<KeyReply> {
     return this.oneAtATime(() => this.save(this.list, { ...this.settings, ...next }));
   }

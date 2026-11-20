@@ -7,6 +7,7 @@
 import { BY_END, BY_FOLDER, BY_NAME } from './filetypes';
 import { whenAs, whenShort } from '../common/when';
 import { openMenu, shutMenu, type MenuLine } from '../ui/menu';
+import { foldSteps } from './path-steps';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
@@ -123,6 +124,13 @@ export function makeAsker(port: TabPort): Asker {
 
 export interface Files {
   open(path: string): void; // list this folder
+  // This folder, listed again from the box, with where he is left exactly as it is: not the way back, not
+  // the way forward, and not the filter he typed, because listing the same folder again is not going
+  // anywhere. What F5 does, for the one other thing that asks for it: a command finishing in the terminal.
+  again(): void;
+  // The folders pinned on this tab's box, as main holds them. The pane is told; it never decides and never
+  // writes: a pin lives in the locked list, which is main's alone (plan B2.4, B2.7).
+  pinnedAre(paths: string[]): void;
   emptyOldTrash(): void; // take what is older than the days this box keeps things out of its trash
   shown(): string; // the folder on screen now, as the box names it
   rows(): number;
@@ -136,6 +144,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let rows: FileRow[] = [];
   let why = '';
   let busy = false;
+  // How often a finished command may make this pane ask the box for its folder again.
+  const AGAIN_APART_MS = 500;
+  let askedAgainAt = 0;
+  let owedAgain = false; // a command finished while a listing was on its way: it is listed again when that lands
+  let againSoon: ReturnType<typeof setTimeout> | null = null;
+  // The folders pinned on this box, newest first, exactly as main holds them.
+  let pinned: string[] = [];
   let space: { total: number; free: number } | null = null;
   // Where the keyboard stands in the list, held by the name of the row rather than by its number: pages keep
   // arriving and the sort moves rows about, and a person's place should not move with them.
@@ -161,17 +176,22 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const carryGoing = new Map<number, string>(); // asks still fetching, by the name they are fetching
 
   const el = {
-    path: document.createElement('button'),
+    path: document.createElement('div'),
     list: document.createElement('div'),
     foot: document.createElement('div'),
     moving: document.createElement('div'),
   };
-  // A real button, not a div that happens to answer a press: it opens the folders this one is inside, so the
-  // keyboard must reach it and a reader must be told what it is (his rule, 2026-11-18 night).
+  // The path as a bar of steps, each one a folder he can press to go there (his, 2026-11-15 23:50, and the
+  // biggest gap §5.1 had). It was one line of text with the whole path in it, so the only way back up was
+  // the `..` row or the way-back button, one folder at a time.
+  //
+  // Each step is a real button and the separators between them are not: pressing the slash between two
+  // folders is not pressing either of them. Read end to end the bar still spells the path out, which is
+  // what it always said and what every probe over it reads.
   el.path.className = 'fb-path';
   el.path.id = 'fb-path';
-  el.path.type = 'button';
-  el.path.setAttribute('aria-haspopup', 'menu');
+  el.path.setAttribute('role', 'group');
+  el.path.setAttribute('aria-label', 'The folders this one is inside');
   const here = document.createElement('div');
   here.className = 'fb-here';
   // Sending a file into the folder on screen. It sits beside the folder's own name, because that is what it
@@ -474,6 +494,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     said = '';
     draw();
   });
+  // Pinning the folder on screen, on this box. It sits in the field with the path, because that is what it
+  // acts on. His own decision that a pin belongs to the box (2026-11-20): a path belongs to a box's own
+  // disk, so one kept Berth-wide would offer folders that are not there where he stands.
+  const pinBtn = document.createElement('button');
+  pinBtn.className = 'fb-pin';
+  pinBtn.id = 'fb-pin';
+  pinBtn.type = 'button';
+  pinBtn.append(glyph('pin'));
+  pinBtn.addEventListener('click', () => {
+    const now = where || asked;
+    if (now === '') return;
+    // The view asks and main decides: it holds the list, it says what a folder may be called, and it hands
+    // the box back with its folders on it. Nothing here is written down by this page.
+    port.pinFolder(now, !pinned.includes(now));
+  });
   const backBtn = wayBtn('back', 'The folder before this one (Alt and left, or the mouse\'s own back button)', () => back());
   const fwdBtn = wayBtn('forward', 'Forward again (Alt and right, or the mouse\'s own forward button)', () => forward());
   // The path and the caret that opens the folders above it are one field, with one edge around both: two
@@ -481,7 +516,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const field = document.createElement('div');
   field.className = 'fb-field';
   field.id = 'fb-field';
-  field.append(el.path, recentBtn);
+  field.append(el.path, pinBtn, recentBtn);
   here.append(backBtn, fwdBtn, field);
   const recentAt = document.createElement('div');
   recentAt.className = 'fb-recent-menu';
@@ -581,10 +616,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     e.preventDefault();
     pathMenu(e.clientX, e.clientY);
   });
-  el.path.addEventListener('click', (e: MouseEvent) => {
-    const box = el.path.getBoundingClientRect();
-    pathMenu(e.clientX, box.bottom);
-  });
+  // No left press on the bar itself any more: the steps are what a press is for, and the bar's own menu (copy
+  // this folder's path, send a file here) is where every other menu in this pane is, under the right button.
+  
 
   // The right button, on the list. There was no menu anywhere in this app: not on a file, not on a folder,
   // not on the empty part of a list, which he called one of the biggest gaps. What is in it is decided by
@@ -640,7 +674,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       // The empty part of the list, or the way up: the folder itself is what the menu is about.
       const up = parent(where || asked);
       if (up !== '') lines.push({ glyph: 'up', label: 'The folder above', run: () => goTo(up) });
-      lines.push({ glyph: 'refresh', label: 'List this folder again', keys: 'F5', run: () => open(where || asked, 0, true), id: 'fb-menu-again-list' });
+      lines.push({ glyph: 'refresh', label: 'List this folder again', keys: 'F5', run: () => listAgain(), id: 'fb-menu-again-list' });
       lines.push({ glyph: 'newfolder', label: 'New folder', run: () => askForFolder(), id: 'fb-menu-newfolder' });
       lines.push({ glyph: 'send', label: 'Send a file here', run: () => send() });
       lines.push({ apart: true });
@@ -761,6 +795,104 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // goTo is what a press means: a new folder, so anything forward of here is no longer where he is going.
   // open on its own is the listing itself, used again by the box's own answers and by a retry, and those must
   // never write history: a folder listed again because something in it changed is not a place he went.
+  // ---- The path as steps ----
+  //
+  // How many of the last folders are always shown when the path is too long for the bar, and how many
+  // characters of path the bar holds before it folds at all. Measured against the field's own room rather
+  // than guessed: the bar folds when the whole path would not fit, and the folded button carries the
+  // folders it stands for in its own menu.
+  const STEPS_SHOWN = 3;
+  const PATH_FITS = 46;
+  const stepBtn = (name: string, at: string, last: boolean): HTMLElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `fb-step${last ? ' fb-step-here' : ''}`;
+    b.dataset['at'] = at;
+    b.textContent = name;
+    if (last) {
+      // Where he already is. It is not a way to anywhere, so it does not invite a press: a control that
+      // answers nothing is worse than no control (BUILD-RULES 2.18).
+      b.disabled = true;
+      b.setAttribute('aria-current', 'true');
+    } else {
+      b.title = at;
+      b.setAttribute('aria-label', `Go to ${at}`);
+      b.addEventListener('click', () => goTo(at));
+    }
+    return b;
+  };
+  const drawSteps = (path: string): void => {
+    // The folder he is in is told by its own path and not by where it sits in a list: the steps are built
+    // twice over (once to draw, once to decide what folds) and two runs of the same pure function hand back
+    // equal steps that are not the same objects, so asking whether this one is the last of them by identity
+    // answered no for every step and the bar had no "here" on it at all.
+    const now = path === '' ? '/' : path;
+    el.path.replaceChildren();
+    const { shown, folded } = foldSteps(now, PATH_FITS, STEPS_SHOWN);
+    shown.forEach((step, i) => {
+      const first = i === 0;
+      // No separator after the root: the root's own name is the separator, and two of them read as a path
+      // that begins with a doubled slash.
+      if (!first && el.path.lastElementChild?.getAttribute('data-at') !== '/') el.path.append(sep());
+      el.path.append(stepBtn(step.name, step.at, step.at === now));
+      // The folded ones sit where they belong: after the first step, before the rest.
+      if (first && folded.length > 0) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'fb-step fb-step-more';
+        more.id = 'fb-step-more';
+        more.textContent = '\u2026';
+        more.title = `${folded.length} more folders on the way here`;
+        more.setAttribute('aria-label', `${folded.length} more folders on the way here`);
+        more.setAttribute('aria-haspopup', 'menu');
+        more.addEventListener('click', () => {
+          const box = more.getBoundingClientRect();
+          openMenu(at, box.left, box.bottom, folded.map((f) => ({ glyph: 'folder', label: f.at, run: () => goTo(f.at), id: `fb-step-folded-${f.at}` })), glyph);
+        });
+        el.path.append(more);
+      }
+    });
+  };
+  const sep = (): HTMLElement => {
+    const s2 = document.createElement('span');
+    s2.className = 'fb-sep';
+    s2.setAttribute('aria-hidden', 'true');
+    s2.textContent = '/';
+    return s2;
+  };
+
+  // This folder, listed again from the box, with where he is left exactly as it is: not the way back, not
+  // the way forward, and not the filter he typed, because listing the same folder again is not going
+  // anywhere. What F5 does, and what a command finishing in the terminal asks for.
+  //
+  // It is never dropped, only put off. Not while the trash is open, because the trash is not a folder on
+  // this disk and listing underneath it would throw away what he opened it to read. Not while a listing is
+  // already on its way, because that one may have been asked for before the command changed anything and
+  // taking it as current would leave him reading rows from before his own rm; it is owed and runs when that
+  // listing lands. And never more often than twice a second, because a box printing prompts in a loop would
+  // otherwise have Berth asking it for a listing per prompt; the one that arrives too soon waits out the
+  // rest of the window rather than being thrown away. A refresh silently lost is a list he would act on.
+  const listAgain = (): void => {
+    const folder = where || asked;
+    if (folder === '' || bin.open) return;
+    if (busy) {
+      owedAgain = true;
+      return;
+    }
+    const left = AGAIN_APART_MS - (Date.now() - askedAgainAt);
+    if (left > 0) {
+      if (againSoon === null) {
+        againSoon = setTimeout(() => {
+          againSoon = null;
+          listAgain();
+        }, left);
+      }
+      return;
+    }
+    askedAgainAt = Date.now();
+    open(folder, 0, true);
+  };
+
   const goTo = (path: string): void => {
     if (path === '') return;
     if (been[wasAt] !== path) {
@@ -1057,6 +1189,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     if (p.error) why = `${WHY[p.error] ?? WHY['failed']!}${p.fault === undefined || p.fault === '' ? '' : ` (fault ${p.fault})`}`;
     if (p.done) {
       busy = false;
+      // A command finished while this listing was on its way, so what just arrived is from before it: the
+      // folder is asked for again, once, now that there is nothing in flight to cancel.
+      if (owedAgain) {
+        owedAgain = false;
+        setTimeout(listAgain, 0);
+      }
       // Whatever was just renamed or just made is what the list stands on, if it is in this listing at all.
       if (standNext !== '') {
         const want = standNext;
@@ -1150,10 +1288,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // the focus, and the redraw that press causes would then take the keyboard off whatever it was really
     // on and put it on a row.
     const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.closest('#fb-list .fb-row') !== null;
-    // A long path is cut in the middle, keeping its start and its end: the end says which folder this is and
-    // the start says which disk it is on. It is cut here rather than by the stylesheet, because leaning on a
-    // text direction to cut from the left moves the leading "/" to the other end of the line.
-    el.path.textContent = shorten(here, 46);
+    // The steps. Read end to end they spell the path, which is what this bar has always said.
+    //
+    // A long path folds in the middle rather than being cut: the first step, one button standing for the
+    // folders in between, and the last few. The end says which folder this is and the start says which disk
+    // it is on, and the middle is a press away instead of being three dots that say nothing. Nothing is
+    // ever cut off the folder he is actually in.
+    drawSteps(here);
     el.path.title = here;
     // Where this tab has been, in numbers, for the window's own tests to read: a probe that judged the
     // history from the buttons alone would be judging the buttons.
@@ -1164,9 +1305,52 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // gone: a button that comes and goes under the hand is a button that is pressed by accident.
     backBtn.disabled = !canBack();
     fwdBtn.disabled = !canForward();
-    recentBtn.disabled = been.length < 2;
+    // The caret opens where this tab has been and, above it, the folders pinned on this box, so one press
+    // is enough to reach it whichever of the two he is after. It is one panel and not two: both answer the
+    // same question, which is where can I go from here.
+    recentBtn.disabled = been.length < 2 && pinned.length === 0;
     recentBtn.dataset['on'] = recentOpen ? 'yes' : 'no';
+    // Whether this folder is pinned, on the button that pins it.
+    const isPinned = pinned.includes(here);
+    pinBtn.disabled = here === '';
+    pinBtn.dataset['on'] = isPinned ? 'yes' : 'no';
+    pinBtn.title = here === '' ? 'Pin this folder on this box' : isPinned ? `${here} is pinned on this box: press to take it off` : `Pin ${here} on this box`;
+    pinBtn.setAttribute('aria-pressed', isPinned ? 'true' : 'false');
+    at.dataset['pinned'] = String(pinned.length);
     recentAt.replaceChildren();
+    if (recentOpen && pinned.length > 0) {
+      // The pinned ones first, because they are the ones he chose: where the tab has been is a record, and a
+      // pin is a decision. Each is a press, and the one he is standing in is not a way to anywhere.
+      const head = document.createElement('div');
+      head.className = 'fb-recent-head';
+      head.textContent = 'Pinned on this box';
+      recentAt.append(head);
+      for (const path of pinned) {
+        const b = document.createElement('button');
+        b.className = `fb-recent-one fb-recent-pinned${path === here ? ' fb-recent-here' : ''}`;
+        b.type = 'button';
+        b.dataset['path'] = path;
+        b.dataset['way'] = 'pinned';
+        b.disabled = path === here;
+        b.append(glyph('pin'));
+        const words = document.createElement('span');
+        words.className = 'fb-recent-words';
+        words.textContent = shorten(path, 46);
+        b.title = path;
+        b.append(words);
+        b.addEventListener('click', () => {
+          recentOpen = false;
+          goTo(path);
+        });
+        recentAt.append(b);
+      }
+      if (been.length > 1) {
+        const head2 = document.createElement('div');
+        head2.className = 'fb-recent-head';
+        head2.textContent = 'Where this tab has been';
+        recentAt.append(head2);
+      }
+    }
     if (recentOpen && been.length > 0) {
       // What is behind him and what is ahead, each nearest first, with where he is standing between them.
       // Written as the trail in the order he walked it first, and that was wrong on sight: walking back and
@@ -2424,9 +2608,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   at.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key !== 'F5' || e.ctrlKey || e.altKey || e.metaKey) return;
     e.preventDefault();
-    const folder = where || asked;
-    if (folder === '') return;
-    open(folder, 0, true);
+    listAgain();
   });
 
   at.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -2492,6 +2674,12 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   return {
     open: goTo,
+    again: listAgain,
+    pinnedAre: (paths) => {
+      if (JSON.stringify(paths) === JSON.stringify(pinned)) return;
+      pinned = [...paths];
+      draw();
+    },
     emptyOldTrash,
     shown: () => where,
     rows: () => rows.length,
@@ -2604,6 +2792,9 @@ export const SHAPES: Record<string, string> = {
   wayBack: 'M10 3.5L5.5 8l4.5 4.5',
   wayForward: 'M6 3.5L10.5 8 6 12.5',
   recent: 'M4 6.5L8 10.5l4-4',
+  // The same pin the shell draws (src/ui/glyphs.tsx), so one thing does not wear two shapes in one window.
+  // Drawn as one path here because this pane's glyphs are one path each.
+  pin: 'M6 2.5h4l-.5 4 2 2H4.5l2-2zM8 8.5v5',
   // Narrowing the list: a lens, drawn as the one glyph a person already reads as "look for".
   search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3 3',
   // The four columns the list can be ordered by: letters, a stack with weight at its foot, a clock, and a

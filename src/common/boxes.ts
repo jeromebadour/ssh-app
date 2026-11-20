@@ -38,6 +38,13 @@ export interface Box {
   pin: string; // the box's identity, one authorized-keys line; empty until the first-connection check passed
   pinFingerprint: string; // SHA256:..., as OpenSSH prints it
   pinnedAt: string; // when it was pinned (UTC); empty until then
+  // The folders he pinned on this box, newest first. Per box and not per tab or Berth-wide, his own
+  // decision (2026-11-20): a path belongs to a box's own disk, so a pin kept Berth-wide would offer him
+  // folders that are not there where he is standing, and one kept per tab would have to be made again every
+  // time he opens a tab on the same box. They live in the locked list with everything else of his, because
+  // which folders he works in is as much his as the boxes themselves (plan B2.4).
+  // An older list has no such field, so it is read as none rather than refusing to open.
+  pinnedFolders?: string[];
   created: string;
 }
 

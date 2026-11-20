@@ -69,6 +69,9 @@ const port: TabPort = {
   bell() {
     ipcRenderer.send(CH.tabBell);
   },
+  pinFolder(path, on) {
+    ipcRenderer.send(CH.tabPinFolder, String(path), Boolean(on));
+  },
   onRightClick(cb) {
     ipcRenderer.on(CH.tabRightClick, () => cb());
   },
