@@ -1945,11 +1945,89 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             check("and its own back button goes back", await until(async () => (await pathNow()) === startedAt, 8000), await pathNow());
             await js(front.view, `document.getElementById('fb-recent').click()`);
             await sleep(120);
-            const inMenu = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-recent-menu .fb-recent-one')].map((b) => b.dataset.path)`);
-            check(`the folders this tab has been in are listed, newest first and each of them once: ${inMenu.length}`, inMenu.length >= 2 && inMenu[0]!.endsWith('/ledger') && inMenu.includes(startedAt) && new Set(inMenu).size === inMenu.length, inMenu);
-            await shot('the-way-back', 'the folders this tab has been in, with the ways back and forward', front);
-            await js(front.view, `[...document.querySelectorAll('#fb-recent-menu .fb-recent-one')].find((b) => b.dataset.path.endsWith('/ledger')).click()`);
+            // The trail, in the order he walked it, each one marked with the way he would have to go to reach
+            // it. His, 2026-11-20: the buttons were not enough on their own, because they walk one step and
+            // say nothing about what is behind or ahead of where he is standing.
+            const trail = await js<{ path: string; way: string }[]>(front.view, `[...document.querySelectorAll('#fb-recent-menu .fb-recent-one[data-path]')].map((b) => ({ path: b.dataset.path, way: b.dataset.way }))`);
+            const standing = trail.filter((e) => e.way === 'here');
+            const ways = trail.map((e) => e.way);
+            check(`where this tab has been is a trail in the order he walked it, one place marked as where he is: ${ways.join(' ')}`,
+              trail.length >= 2 && standing.length === 1 && standing[0]!.path === startedAt
+                && !ways.slice(0, ways.indexOf('here')).some((w) => w !== 'behind')
+                && !ways.slice(ways.indexOf('here') + 1).some((w) => w !== 'ahead'),
+              trail);
+            check('and what is ahead of him is on it, which is the half the buttons alone never showed', trail.some((e) => e.way === 'ahead' && e.path.endsWith('/ledger')), trail);
+            await shot('the-way-back', 'where this tab has been, with what is behind him and what is ahead', front);
+            // Pressing a place on the trail goes there and leaves the trail alone. Treated as a new folder
+            // it would throw away everything ahead of it, and the list he pressed it from would have been
+            // telling him about a place that stopped existing the moment he used it.
+            {
+              // Two places ahead, not one. With a single folder ahead of him, cutting the trail and walking
+              // to that same folder leave the trail looking identical, so the probe could not tell a jump
+              // that keeps what is ahead from one that throws it away. So one more folder is put ahead
+              // first: he goes on to /var, and then walks back twice.
+              // Into a folder, then out to a different one, so the two ahead of him are two different
+              // places. Two that are the same folder would be one row on this list and the probe would be
+              // unable to tell a jump that keeps what is ahead from one that throws it away.
+              await js(front.view, `document.querySelector('#fb-list .fb-row[data-kind="folder"][data-name="ledger"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+              await until(async () => (await pathNow()).endsWith('/ledger'), 8000);
+              await js(front.view, `document.querySelector('.fb-path').dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 40, clientY: 40 }))`);
+              await sleep(200);
+              await js(front.view, `(() => { const e = [...document.querySelectorAll('#fb-menu .fb-menu-one')].find((b) => b.querySelector('.fb-menu-words')?.textContent === '/var'); if (e) e.click(); })()`);
+              await until(async () => (await pathNow()) === '/var', 8000);
+              await clickOn('#fb-back', front);
+              await until(async () => (await pathNow()).endsWith('/ledger'), 8000);
+              await clickOn('#fb-back', front);
+              await until(async () => (await pathNow()) === startedAt, 8000);
+              const aheadNow = await js<string[]>(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen !== 'yes') document.getElementById('fb-recent').click(); return [...document.querySelectorAll('#fb-recent-menu .fb-recent-one[data-way="ahead"]')].map((b) => b.dataset.path); })()`);
+              check(`two folders stand ahead of him on the trail: ${aheadNow.join(', ')}`, aheadNow.length === 2, aheadNow);
+              await sleep(200);
+              await js(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen !== 'yes') document.getElementById('fb-recent').click(); })()`);
+              await sleep(200);
+              const pressedAhead = await js<string>(front.view, `(() => { const e = document.querySelector('#fb-recent-menu .fb-recent-one[data-way="ahead"]'); if (!e) return ''; e.click(); return e.dataset.path; })()`);
+              check('there is a place ahead on the trail to press', pressedAhead !== '' && pressedAhead === aheadNow[0], [pressedAhead, aheadNow]);
+              const jumped = await until(async () => (await pathNow()) === pressedAhead, 8000);
+              const afterJump = await wayState();
+              check(`pressing the nearer of the two goes to it, and the way back is still open behind it: ${pressedAhead}`, jumped && afterJump.back, [await pathNow(), pressedAhead, afterJump]);
+              // And the one that was further ahead is still further ahead: walking to a place on the trail
+              // as though it were a new folder would have taken everything past it away, and that is the
+              // thing a list of what is ahead cannot survive.
+              const stillAhead = await js<string[]>(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen !== 'yes') document.getElementById('fb-recent').click(); return [...document.querySelectorAll('#fb-recent-menu .fb-recent-one[data-way="ahead"]')].map((b) => b.dataset.path); })()`);
+              check('and what was further ahead than it is still ahead: the jump moved him, it did not cut the trail', aheadNow[1] !== undefined && stillAhead.includes(aheadNow[1]), [stillAhead, aheadNow]);
+              await js(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen === 'yes') document.getElementById('fb-recent').click(); })()`);
+              await js(front.view, `document.getElementById('fb-back').click()`);
+              await until(async () => (await pathNow()) === startedAt, 8000);
+              const afterBack = await wayState();
+              check('and forward is still open after going back again', afterBack.fwd, [await pathNow(), afterBack]);
+            }
+            // Opened first, and guarded: this used to lean on the list still being open from the step above
+            // it, and on a place being there to find. The step above it is a different one now, and a probe
+            // that throws because the thing it reaches for is missing says nothing about what it is for.
+            await js(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen !== 'yes') document.getElementById('fb-recent').click(); })()`);
+            await sleep(200);
+            const pressedOne = await js<string>(front.view, `(() => { const e = [...document.querySelectorAll('#fb-recent-menu .fb-recent-one[data-path]')].find((b) => b.dataset.path.endsWith('/ledger')); if (!e) return ''; e.click(); return e.dataset.path; })()`);
+            check('there is a place on the trail to press', pressedOne !== '', pressedOne);
             check('and pressing one of them goes there, and shuts the list', (await until(async () => (await pathNow()).endsWith('/ledger'), 8000)) && (await js<number>(front.view, `document.querySelectorAll('#fb-recent-menu .fb-recent-one').length`)) === 0, await pathNow());
+            await clickOn('#fb-back', front);
+            await until(async () => (await pathNow()) === startedAt, 8000);
+
+            // And a way to be rid of it. The folder on screen is not history, so it stays and the rest goes.
+            {
+              await js(front.view, `(() => { if (document.getElementById('files').dataset.recentOpen !== 'yes') document.getElementById('fb-recent').click(); })()`);
+              await sleep(200);
+              const hadClear = await js<boolean>(front.view, `!!document.getElementById('fb-recent-clear')`);
+              await js(front.view, `(() => { const e = document.getElementById('fb-recent-clear'); if (e) e.click(); })()`);
+              await sleep(300);
+              const afterClear = await hist();
+              const stillHere = await pathNow();
+              const ways = await wayState();
+              check('clearing where this tab has been leaves the folder on screen and nothing else, with both ways shut', hadClear && Number(afterClear.been) === 1 && stillHere === startedAt && !ways.back && !ways.fwd, [hadClear, afterClear, stillHere, ways]);
+            }
+            // And the trail is walked again, because the steps after this one were written when it was still
+            // there: a probe that clears something has to put it back, or it is quietly testing the probes
+            // that follow it as well as itself.
+            await js(front.view, `document.querySelector('#fb-list .fb-row[data-kind="folder"][data-name="ledger"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+            await until(async () => (await pathNow()).endsWith('/ledger'), 8000);
             await clickOn('#fb-back', front);
             await until(async () => (await pathNow()) === startedAt, 8000);
 
@@ -4015,14 +4093,23 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // The mark belonging to one named command, found by the row that command is drawn on rather than
           // by counting marks from the end: how many marks there are depends on what the box printed, and a
           // probe that counted would quietly start pressing the wrong command's mark one day.
-          const onRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo cmd-made-this-output')`);
-          const mark = onRow === null ? null : await js<{ x: number; y: number } | null>(marked.view, `(() => {
-            const y = ${onRow.y};
-            const m = [...document.querySelectorAll('.berth-block-copy')].find((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top && y <= r.bottom; });
-            if (!m) return null;
-            const r = m.getBoundingClientRect();
-            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-          })()`);
+          // Both reads together and tried again if they disagree: asking where the row is scrolls the
+          // terminal to it, and a mark read a moment later can be read while that scroll is still settling,
+          // which leaves the row at one height and every mark at another.
+          let onRow: { x: number; y: number } | null = null;
+          let mark: { x: number; y: number } | null = null;
+          for (let look = 0; look < 4 && mark === null; look++) {
+            if (look > 0) await sleep(400);
+            onRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo cmd-made-this-output')`);
+            if (onRow === null) continue;
+            mark = await js<{ x: number; y: number } | null>(marked.view, `(() => {
+              const y = ${onRow.y};
+              const m = [...document.querySelectorAll('.berth-block-copy')].find((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top - 2 && y <= r.bottom + 2; });
+              if (!m) return null;
+              const r = m.getBoundingClientRect();
+              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            })()`);
+          }
           check('and that mark sits on the row of the command it belongs to', mark !== null, [onRow, mark]);
           clipboard.writeText('not-from-any-block');
           if (mark) {

@@ -693,6 +693,18 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     else forward();
     e.preventDefault();
   });
+  // The right button on either way button opens the trail itself, which is where every other window puts
+  // it: the button walks one step, and holding the right button over it shows the whole of what is behind
+  // and ahead so he can go straight to one of them.
+  for (const b of [backBtn, fwdBtn]) {
+    b.addEventListener('contextmenu', (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      recentOpen = true;
+      said = '';
+      draw();
+    });
+  }
   // Alt and an arrow, which is the same pair of ways by the keyboard. Alt is the window's own, so this is
   // read before the list's own arrows, which move where it stands.
   at.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -742,6 +754,10 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const been: string[] = [];
   let wasAt = -1;
   const MOST_KEPT = 60;
+  // How many of them are offered on each side at once. The trail itself is longer than this; what is offered
+  // is the part of it a person is going to press, and a list longer than the pane is a list he scrolls
+  // through instead of reading.
+  const MOST_SHOWN = 10;
   // goTo is what a press means: a new folder, so anything forward of here is no longer where he is going.
   // open on its own is the listing itself, used again by the box's own answers and by a retry, and those must
   // never write history: a folder listed again because something in it changed is not a place he went.
@@ -754,6 +770,24 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       wasAt = been.length - 1;
     }
     open(path);
+  };
+  // Moving to a place on the trail rather than walking there one at a time. It moves where he is standing
+  // and nothing else: what is ahead of that point stays ahead, so a jump backwards can still be undone by
+  // going forward again. Pressing it as though it were a new folder would throw the forward half away, and
+  // then the list he pressed it from would have been telling him about a place he could no longer reach.
+  const jumpTo = (i: number): void => {
+    if (i < 0 || i >= been.length || i === wasAt) return;
+    wasAt = i;
+    open(been[i]!);
+  };
+  // Clearing it. Where he is standing now stays, because that is not history, that is the folder on screen.
+  const clearTrail = (): void => {
+    const here = been[wasAt];
+    been.length = 0;
+    if (here !== undefined) been.push(here);
+    wasAt = been.length - 1;
+    said = 'Where this tab has been is cleared';
+    draw();
   };
   const canBack = (): boolean => wasAt > 0;
   const canForward = (): boolean => wasAt >= 0 && wasAt < been.length - 1;
@@ -1134,28 +1168,74 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     recentBtn.dataset['on'] = recentOpen ? 'yes' : 'no';
     recentAt.replaceChildren();
     if (recentOpen && been.length > 0) {
-      // Newest first, each folder once: a list of where he has been is not a list of how often he went.
-      const seen = new Set<string>();
-      for (let i = been.length - 1; i >= 0; i--) {
-        const folder = been[i]!;
-        if (seen.has(folder)) continue;
-        seen.add(folder);
+      // What is behind him and what is ahead, each nearest first, with where he is standing between them.
+      // Written as the trail in the order he walked it first, and that was wrong on sight: walking back and
+      // forth down one branch wrote the same two folders over and over, so the list was nine rows of two
+      // names and the one press he wanted was somewhere in the middle of them. Nearest first is the order
+      // the presses are in, which is the order a person reads this list looking for.
+      const step = (from: number, to: number, way: 'behind' | 'ahead'): void => {
+        // Each folder once on each side, the nearest time he was there. Walking down one branch and back
+        // writes the same two names over and over, and a list of ten rows holding two names is not a list of
+        // where he can go: it is the same two places, counted. Nearest first, because that is the order the
+        // presses are in. Where he is standing is not on either side of itself.
+        const seen = new Set<string>([been[wasAt] ?? '']);
+        let shown = 0;
+        for (let i = from; way === 'behind' ? i >= to : i <= to; i += way === 'behind' ? -1 : 1) {
+          const folder = been[i]!;
+          if (seen.has(folder)) continue;
+          seen.add(folder);
+          if (shown >= MOST_SHOWN) break;
+          shown++;
+          const b = document.createElement('button');
+          b.className = 'fb-recent-one';
+          b.type = 'button';
+          b.dataset['path'] = folder;
+          b.dataset['way'] = way;
+          b.append(glyph(way === 'behind' ? 'wayBack' : 'wayForward'));
+          const words = document.createElement('span');
+          words.textContent = shorten(folder, 46);
+          words.title = `${folder} (${Math.abs(i - wasAt)} ${way === 'behind' ? 'back' : 'forward'})`;
+          b.append(words);
+          b.addEventListener('click', () => {
+            recentOpen = false;
+            jumpTo(i);
+          });
+          recentAt.append(b);
+        }
+      };
+      step(wasAt - 1, 0, 'behind');
+      // Where he is now, between the two, so the list reads as one way and then the other rather than as a
+      // heap with one row coloured differently somewhere inside it.
+      {
         const b = document.createElement('button');
-        b.className = 'fb-recent-one';
+        b.className = 'fb-recent-one fb-recent-here';
         b.type = 'button';
-        b.dataset['path'] = folder;
-        if (i === wasAt) b.dataset['on'] = 'yes';
+        b.disabled = true;
+        b.dataset['path'] = been[wasAt] ?? '';
+        b.dataset['way'] = 'here';
+        b.dataset['on'] = 'yes';
         b.append(glyph('folder'));
         const words = document.createElement('span');
-        words.textContent = shorten(folder, 52);
-        words.title = folder;
+        words.textContent = shorten(been[wasAt] ?? '', 46);
+        words.title = `${been[wasAt] ?? ''} (where this tab is now)`;
         b.append(words);
-        b.addEventListener('click', () => {
-          recentOpen = false;
-          goTo(folder);
-        });
         recentAt.append(b);
       }
+      step(wasAt + 1, been.length - 1, 'ahead');
+      // And a way to be rid of it. The folder on screen is not history, so it stays and the rest goes.
+      const wipe = document.createElement('button');
+      wipe.className = 'fb-recent-one fb-recent-clear';
+      wipe.id = 'fb-recent-clear';
+      wipe.type = 'button';
+      wipe.append(glyph('bin'));
+      const wipeWords = document.createElement('span');
+      wipeWords.textContent = 'Clear where this tab has been';
+      wipe.append(wipeWords);
+      wipe.addEventListener('click', () => {
+        recentOpen = false;
+        clearTrail();
+      });
+      recentAt.append(wipe);
     }
     // Which column the list is ordered by, and which way: said on the buttons themselves, in words a reader
     // hears as well as in their look, because a button that is "on" only by its colour says nothing aloud.
