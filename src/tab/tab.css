@@ -508,3 +508,17 @@ h1 .mark.now { animation: none; }
 .head-find-step:hover:not(:disabled) { color: #d7dee4; }
 .head-find-step:disabled { color: #4e5862; cursor: default; }
 .head-find-step:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+
+/* ---- Pinning a folder on this box ----
+   The button sits in the field with the path, because the folder on screen is what it acts on. Pinned shows
+   on the button itself: a control whose state has to be guessed at is a control that gets pressed twice. */
+.fb-pin { flex: none; display: grid; place-items: center; width: 1.9em; padding: 0; border: 0; background: none; color: #6d7781; cursor: pointer; }
+.fb-pin:hover:not(:disabled) { color: #c3ccd3; }
+.fb-pin[data-on='yes'] { color: color-mix(in srgb, var(--hue) 70%, #c3ccd3); }
+.fb-pin:disabled { color: #4e5862; cursor: default; }
+.fb-pin:focus-visible { outline: 2px solid color-mix(in srgb, var(--hue) 65%, #c3ccd3); outline-offset: -2px; }
+/* The two halves of the panel the caret opens: the folders he pinned, and where this tab has been. One
+   panel, because both answer the same question, which is where can I go from here. */
+.fb-recent-head { padding: 6px 10px 3px; color: #6d7781; font-size: 10.5px; letter-spacing: .02em; }
+.fb-recent-head:not(:first-child) { border-top: 1px solid var(--line); margin-top: 3px; }
+.fb-recent-pinned[data-on] { color: #c3ccd3; }

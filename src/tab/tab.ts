@@ -382,6 +382,9 @@ port.onState((info) => {
   chrome.againIn = info.againAt;
   chrome.info = info;
   draw();
+  // The folders pinned on this box. Main hands them with the box, so a pin made in one tab shows in every
+  // other tab on the same box without either of them asking.
+  files.pinnedAre(info.box?.pinned ?? []);
   // The file browser opens on the tab's own place once the link is up, and only once: moving about afterwards
   // is the person's, not the window's. A tab with no place of its own starts where the account's home is,
   // which the box works out itself from ".".

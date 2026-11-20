@@ -32,6 +32,7 @@ export const CH = {
   tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
   tabFind: 'tab:find', // main to tab view: open the terminal's find field (Ctrl+Shift+F)
   tabBell: 'tab:bell', // tab view to main: the box rang the terminal's bell
+  tabPinFolder: 'tab:pin-folder', // tab view to main: pin or unpin a folder on this tab's box
   tabSaveAsk: 'tab:save-ask', // main to tab view: hand over the whole terminal to be saved as a file (Ctrl+Shift+S)
   tabSave: 'tab:save', // tab view to main: text to put in a file he picks, and what it is (plain text, size-limited)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
@@ -134,6 +135,7 @@ export interface TabBox {
   folder: string; // the place's folder, or the box's starting folder
   pinType: string; // 'ED25519' or 'RSA': the kind of identity pinned for this box
   keepsRunning: boolean; // a tmux place: what runs in it survives a link that is truly gone (plan B2.5, line 2)
+  pinned: string[]; // the folders he pinned on this box, newest first (his, per box, 2026-11-20)
 }
 
 export interface TabInfo {
@@ -415,6 +417,10 @@ export interface TabPort {
   // The box rang the bell. The view says only that it happened; what is said about it, and whether the tab
   // is marked, is main's, from main's own words and clock.
   bell(): void;
+  // Pin or unpin a folder on this tab's box. The view asks; main decides whether the path is one a box
+  // could have, writes it into the locked list and hands the box back with its folders on it. The view
+  // never holds the list and never writes it.
+  pinFolder(path: string, on: boolean): void;
   onSaveAsk(cb: () => void): void; // main says Ctrl+Shift+S was pressed: hand over the whole terminal to save
   // Text for a file. The view never names a file: it hands over what to write and what to call it in words,
   // and main asks him where it goes (the same rule the key file and the downloads folder follow, plan B2.7).

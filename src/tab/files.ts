@@ -128,6 +128,9 @@ export interface Files {
   // the way forward, and not the filter he typed, because listing the same folder again is not going
   // anywhere. What F5 does, for the one other thing that asks for it: a command finishing in the terminal.
   again(): void;
+  // The folders pinned on this tab's box, as main holds them. The pane is told; it never decides and never
+  // writes: a pin lives in the locked list, which is main's alone (plan B2.4, B2.7).
+  pinnedAre(paths: string[]): void;
   emptyOldTrash(): void; // take what is older than the days this box keeps things out of its trash
   shown(): string; // the folder on screen now, as the box names it
   rows(): number;
@@ -144,6 +147,8 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // How often a finished command may make this pane ask the box for its folder again.
   const AGAIN_APART_MS = 500;
   let askedAgainAt = 0;
+  // The folders pinned on this box, newest first, exactly as main holds them.
+  let pinned: string[] = [];
   let space: { total: number; free: number } | null = null;
   // Where the keyboard stands in the list, held by the name of the row rather than by its number: pages keep
   // arriving and the sort moves rows about, and a person's place should not move with them.
@@ -487,6 +492,21 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     said = '';
     draw();
   });
+  // Pinning the folder on screen, on this box. It sits in the field with the path, because that is what it
+  // acts on. His own decision that a pin belongs to the box (2026-11-20): a path belongs to a box's own
+  // disk, so one kept Berth-wide would offer folders that are not there where he stands.
+  const pinBtn = document.createElement('button');
+  pinBtn.className = 'fb-pin';
+  pinBtn.id = 'fb-pin';
+  pinBtn.type = 'button';
+  pinBtn.append(glyph('pin'));
+  pinBtn.addEventListener('click', () => {
+    const now = where || asked;
+    if (now === '') return;
+    // The view asks and main decides: it holds the list, it says what a folder may be called, and it hands
+    // the box back with its folders on it. Nothing here is written down by this page.
+    port.pinFolder(now, !pinned.includes(now));
+  });
   const backBtn = wayBtn('back', 'The folder before this one (Alt and left, or the mouse\'s own back button)', () => back());
   const fwdBtn = wayBtn('forward', 'Forward again (Alt and right, or the mouse\'s own forward button)', () => forward());
   // The path and the caret that opens the folders above it are one field, with one edge around both: two
@@ -494,7 +514,7 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const field = document.createElement('div');
   field.className = 'fb-field';
   field.id = 'fb-field';
-  field.append(el.path, recentBtn);
+  field.append(el.path, pinBtn, recentBtn);
   here.append(backBtn, fwdBtn, field);
   const recentAt = document.createElement('div');
   recentAt.className = 'fb-recent-menu';
@@ -1245,9 +1265,52 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // gone: a button that comes and goes under the hand is a button that is pressed by accident.
     backBtn.disabled = !canBack();
     fwdBtn.disabled = !canForward();
-    recentBtn.disabled = been.length < 2;
+    // The caret opens where this tab has been and, above it, the folders pinned on this box, so one press
+    // is enough to reach it whichever of the two he is after. It is one panel and not two: both answer the
+    // same question, which is where can I go from here.
+    recentBtn.disabled = been.length < 2 && pinned.length === 0;
     recentBtn.dataset['on'] = recentOpen ? 'yes' : 'no';
+    // Whether this folder is pinned, on the button that pins it.
+    const isPinned = pinned.includes(here);
+    pinBtn.disabled = here === '';
+    pinBtn.dataset['on'] = isPinned ? 'yes' : 'no';
+    pinBtn.title = here === '' ? 'Pin this folder on this box' : isPinned ? `${here} is pinned on this box: press to take it off` : `Pin ${here} on this box`;
+    pinBtn.setAttribute('aria-pressed', isPinned ? 'true' : 'false');
+    at.dataset['pinned'] = String(pinned.length);
     recentAt.replaceChildren();
+    if (recentOpen && pinned.length > 0) {
+      // The pinned ones first, because they are the ones he chose: where the tab has been is a record, and a
+      // pin is a decision. Each is a press, and the one he is standing in is not a way to anywhere.
+      const head = document.createElement('div');
+      head.className = 'fb-recent-head';
+      head.textContent = 'Pinned on this box';
+      recentAt.append(head);
+      for (const path of pinned) {
+        const b = document.createElement('button');
+        b.className = `fb-recent-one fb-recent-pinned${path === here ? ' fb-recent-here' : ''}`;
+        b.type = 'button';
+        b.dataset['path'] = path;
+        b.dataset['way'] = 'pinned';
+        b.disabled = path === here;
+        b.append(glyph('pin'));
+        const words = document.createElement('span');
+        words.className = 'fb-recent-words';
+        words.textContent = shorten(path, 46);
+        b.title = path;
+        b.append(words);
+        b.addEventListener('click', () => {
+          recentOpen = false;
+          goTo(path);
+        });
+        recentAt.append(b);
+      }
+      if (been.length > 1) {
+        const head2 = document.createElement('div');
+        head2.className = 'fb-recent-head';
+        head2.textContent = 'Where this tab has been';
+        recentAt.append(head2);
+      }
+    }
     if (recentOpen && been.length > 0) {
       // What is behind him and what is ahead, each nearest first, with where he is standing between them.
       // Written as the trail in the order he walked it first, and that was wrong on sight: walking back and
@@ -2585,6 +2648,11 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
       askedAgainAt = now;
       open(folder, 0, true);
     },
+    pinnedAre: (paths) => {
+      if (JSON.stringify(paths) === JSON.stringify(pinned)) return;
+      pinned = [...paths];
+      draw();
+    },
     emptyOldTrash,
     shown: () => where,
     rows: () => rows.length,
@@ -2697,6 +2765,9 @@ export const SHAPES: Record<string, string> = {
   wayBack: 'M10 3.5L5.5 8l4.5 4.5',
   wayForward: 'M6 3.5L10.5 8 6 12.5',
   recent: 'M4 6.5L8 10.5l4-4',
+  // The same pin the shell draws (src/ui/glyphs.tsx), so one thing does not wear two shapes in one window.
+  // Drawn as one path here because this pane's glyphs are one path each.
+  pin: 'M6 2.5h4l-.5 4 2 2H4.5l2-2zM8 8.5v5',
   // Narrowing the list: a lens, drawn as the one glyph a person already reads as "look for".
   search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3 3',
   // The four columns the list can be ordered by: letters, a stack with weight at its foot, a clock, and a

@@ -2155,6 +2155,54 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               await clickOn('#fb-back', front);
               await until(async () => (await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)) === where, 8000);
             }
+            // ---- Pinning a folder, on this box ----
+            //
+            // The other half of what §5.1 owed, and his own decision on 2026-11-20: a pin belongs to the box
+            // and not to the tab or to Berth, because a path belongs to a box's own disk. The view asks and
+            // main decides: main says what a folder may be called, main writes it into the locked list, and
+            // main hands the box back with its folders on it. Nothing of it is written down by the page.
+            {
+              const here2 = await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`);
+              const pinState = (): Promise<{ on: string; count: string }> => js(front.view, `(() => {
+                const b = document.getElementById('fb-pin');
+                return { on: b?.dataset.on ?? '', count: document.getElementById('files')?.dataset.pinned ?? '' };
+              })()`);
+              const before = await pinState();
+              await clickOn('#fb-pin', front);
+              const pinned = await until(async () => (await pinState()).on === 'yes', 8000);
+              check(`pinning the folder on screen pins it on this box, and the button says so: ${here2}`,
+                before.on === 'no' && pinned && (await pinState()).count === '1', [here2, before, await pinState()]);
+              // It is in the locked list, which is the only place anything of his is kept: not in a file
+              // beside it and not in the page.
+              const inList = await until(() => (ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []).includes(here2), 8000);
+              check('and it is kept on the box inside the locked list, where everything of his is',
+                inList, ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []);
+              // The caret's panel offers it, under its own heading, beside where the tab has been.
+              await clickOn('#fb-recent', front);
+              await sleep(200);
+              const offered = await js<{ heads: string[]; pins: string[] }>(front.view, `(() => ({
+                heads: [...document.querySelectorAll('#fb-recent-menu .fb-recent-head')].map((h) => h.textContent ?? ''),
+                pins: [...document.querySelectorAll('#fb-recent-menu .fb-recent-pinned')].map((b) => b.dataset.path ?? ''),
+              }))()`);
+              check(`the caret's panel offers the pinned folders under their own heading: ${offered.pins.join(', ')}`,
+                offered.pins.includes(here2) && offered.heads.some((h) => /pinned/i.test(h)), offered);
+              await js(front.view, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+              await sleep(150);
+              // And pressing it again takes it off, in the list as well as on the button.
+              await clickOn('#fb-pin', front);
+              const offAgain = await until(async () => (await pinState()).on === 'no', 8000);
+              const goneFromList = await until(() => !(ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []).includes(here2), 8000);
+              check('pressing it again takes the pin off, on the button and in the list', offAgain && goneFromList,
+                [await pinState(), ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []]);
+              // A path a box could not have is refused by main and never written: the view does not decide
+              // what a folder may be called (plan B2.7).
+              const droppedBefore = ctx.dropped();
+              await js(front.view, `(window.tabPort.pinFolder('not-absolute', true), window.tabPort.pinFolder('/with\u0000a-null', true), window.tabPort.pinFolder('', true))`);
+              await sleep(400);
+              check('a folder a box could not have is refused by main and never written',
+                ctx.dropped() === droppedBefore + 3 && (ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []).length === 0,
+                [ctx.dropped() - droppedBefore, ctx.boxes.get(front.box!.id)?.pinnedFolders ?? []]);
+            }
             // ---- The heads line up with their columns, and the quiet ones can be read ----
             //
             // His, 2026-11-19, looking at the built window: the Name head did not start where the names
@@ -4994,7 +5042,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'bell,columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'bell,columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,pinFolder,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
