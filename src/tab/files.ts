@@ -7,6 +7,7 @@
 import { BY_END, BY_FOLDER, BY_NAME } from './filetypes';
 import { whenAs, whenShort } from '../common/when';
 import { openMenu, shutMenu, type MenuLine } from '../ui/menu';
+import { foldSteps } from './path-steps';
 import { GRAB_MAX, MOST_AT_ONCE, type FileAsk, type FilePage, type FileRow, type TabPort } from '../common/ipc';
 
 // What the window says for each way a listing can stop. A box's own words are never shown: it chooses them.
@@ -123,6 +124,10 @@ export function makeAsker(port: TabPort): Asker {
 
 export interface Files {
   open(path: string): void; // list this folder
+  // This folder, listed again from the box, with where he is left exactly as it is: not the way back, not
+  // the way forward, and not the filter he typed, because listing the same folder again is not going
+  // anywhere. What F5 does, for the one other thing that asks for it: a command finishing in the terminal.
+  again(): void;
   emptyOldTrash(): void; // take what is older than the days this box keeps things out of its trash
   shown(): string; // the folder on screen now, as the box names it
   rows(): number;
@@ -136,6 +141,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   let rows: FileRow[] = [];
   let why = '';
   let busy = false;
+  // How often a finished command may make this pane ask the box for its folder again.
+  const AGAIN_APART_MS = 500;
+  let askedAgainAt = 0;
   let space: { total: number; free: number } | null = null;
   // Where the keyboard stands in the list, held by the name of the row rather than by its number: pages keep
   // arriving and the sort moves rows about, and a person's place should not move with them.
@@ -161,17 +169,22 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   const carryGoing = new Map<number, string>(); // asks still fetching, by the name they are fetching
 
   const el = {
-    path: document.createElement('button'),
+    path: document.createElement('div'),
     list: document.createElement('div'),
     foot: document.createElement('div'),
     moving: document.createElement('div'),
   };
-  // A real button, not a div that happens to answer a press: it opens the folders this one is inside, so the
-  // keyboard must reach it and a reader must be told what it is (his rule, 2026-11-18 night).
+  // The path as a bar of steps, each one a folder he can press to go there (his, 2026-11-15 23:50, and the
+  // biggest gap §5.1 had). It was one line of text with the whole path in it, so the only way back up was
+  // the `..` row or the way-back button, one folder at a time.
+  //
+  // Each step is a real button and the separators between them are not: pressing the slash between two
+  // folders is not pressing either of them. Read end to end the bar still spells the path out, which is
+  // what it always said and what every probe over it reads.
   el.path.className = 'fb-path';
   el.path.id = 'fb-path';
-  el.path.type = 'button';
-  el.path.setAttribute('aria-haspopup', 'menu');
+  el.path.setAttribute('role', 'group');
+  el.path.setAttribute('aria-label', 'The folders this one is inside');
   const here = document.createElement('div');
   here.className = 'fb-here';
   // Sending a file into the folder on screen. It sits beside the folder's own name, because that is what it
@@ -581,10 +594,9 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     e.preventDefault();
     pathMenu(e.clientX, e.clientY);
   });
-  el.path.addEventListener('click', (e: MouseEvent) => {
-    const box = el.path.getBoundingClientRect();
-    pathMenu(e.clientX, box.bottom);
-  });
+  // No left press on the bar itself any more: the steps are what a press is for, and the bar's own menu (copy
+  // this folder's path, send a file here) is where every other menu in this pane is, under the right button.
+  
 
   // The right button, on the list. There was no menu anywhere in this app: not on a file, not on a folder,
   // not on the empty part of a list, which he called one of the biggest gaps. What is in it is decided by
@@ -761,6 +773,72 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
   // goTo is what a press means: a new folder, so anything forward of here is no longer where he is going.
   // open on its own is the listing itself, used again by the box's own answers and by a retry, and those must
   // never write history: a folder listed again because something in it changed is not a place he went.
+  // ---- The path as steps ----
+  //
+  // How many of the last folders are always shown when the path is too long for the bar, and how many
+  // characters of path the bar holds before it folds at all. Measured against the field's own room rather
+  // than guessed: the bar folds when the whole path would not fit, and the folded button carries the
+  // folders it stands for in its own menu.
+  const STEPS_SHOWN = 3;
+  const PATH_FITS = 46;
+  const stepBtn = (name: string, at: string, last: boolean): HTMLElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `fb-step${last ? ' fb-step-here' : ''}`;
+    b.dataset['at'] = at;
+    b.textContent = name;
+    if (last) {
+      // Where he already is. It is not a way to anywhere, so it does not invite a press: a control that
+      // answers nothing is worse than no control (BUILD-RULES 2.18).
+      b.disabled = true;
+      b.setAttribute('aria-current', 'true');
+    } else {
+      b.title = at;
+      b.setAttribute('aria-label', `Go to ${at}`);
+      b.addEventListener('click', () => goTo(at));
+    }
+    return b;
+  };
+  const drawSteps = (path: string): void => {
+    // The folder he is in is told by its own path and not by where it sits in a list: the steps are built
+    // twice over (once to draw, once to decide what folds) and two runs of the same pure function hand back
+    // equal steps that are not the same objects, so asking whether this one is the last of them by identity
+    // answered no for every step and the bar had no "here" on it at all.
+    const now = path === '' ? '/' : path;
+    el.path.replaceChildren();
+    const { shown, folded } = foldSteps(now, PATH_FITS, STEPS_SHOWN);
+    shown.forEach((step, i) => {
+      const first = i === 0;
+      // No separator after the root: the root's own name is the separator, and two of them read as a path
+      // that begins with a doubled slash.
+      if (!first && el.path.lastElementChild?.getAttribute('data-at') !== '/') el.path.append(sep());
+      el.path.append(stepBtn(step.name, step.at, step.at === now));
+      // The folded ones sit where they belong: after the first step, before the rest.
+      if (first && folded.length > 0) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'fb-step fb-step-more';
+        more.id = 'fb-step-more';
+        more.textContent = '\u2026';
+        more.title = `${folded.length} more folders on the way here`;
+        more.setAttribute('aria-label', `${folded.length} more folders on the way here`);
+        more.setAttribute('aria-haspopup', 'menu');
+        more.addEventListener('click', () => {
+          const box = more.getBoundingClientRect();
+          openMenu(at, box.left, box.bottom, folded.map((f) => ({ glyph: 'folder', label: f.at, run: () => goTo(f.at), id: `fb-step-folded-${f.at}` })), glyph);
+        });
+        el.path.append(more);
+      }
+    });
+  };
+  const sep = (): HTMLElement => {
+    const s2 = document.createElement('span');
+    s2.className = 'fb-sep';
+    s2.setAttribute('aria-hidden', 'true');
+    s2.textContent = '/';
+    return s2;
+  };
+
   const goTo = (path: string): void => {
     if (path === '') return;
     if (been[wasAt] !== path) {
@@ -1150,10 +1228,13 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
     // the focus, and the redraw that press causes would then take the keyboard off whatever it was really
     // on and put it on a row.
     const hadFocus = document.activeElement instanceof HTMLElement && document.activeElement.closest('#fb-list .fb-row') !== null;
-    // A long path is cut in the middle, keeping its start and its end: the end says which folder this is and
-    // the start says which disk it is on. It is cut here rather than by the stylesheet, because leaning on a
-    // text direction to cut from the left moves the leading "/" to the other end of the line.
-    el.path.textContent = shorten(here, 46);
+    // The steps. Read end to end they spell the path, which is what this bar has always said.
+    //
+    // A long path folds in the middle rather than being cut: the first step, one button standing for the
+    // folders in between, and the last few. The end says which folder this is and the start says which disk
+    // it is on, and the middle is a press away instead of being three dots that say nothing. Nothing is
+    // ever cut off the folder he is actually in.
+    drawSteps(here);
     el.path.title = here;
     // Where this tab has been, in numbers, for the window's own tests to read: a probe that judged the
     // history from the buttons alone would be judging the buttons.
@@ -2492,6 +2573,18 @@ export function startFiles(at: HTMLElement, port: TabPort, asker: Asker, openFil
 
   return {
     open: goTo,
+    again: () => {
+      // Not while the trash is open: the trash is not a folder on the disk, and listing underneath it would
+      // throw away what he opened it to read. Not while a listing is already on its way either, and never
+      // more often than twice a second: a box printing prompts in a loop would otherwise have Berth asking
+      // it for a listing per prompt, which is the same fault the bell has and the same answer to it.
+      const folder = where || asked;
+      if (folder === '' || bin.open || busy) return;
+      const now = Date.now();
+      if (now - askedAgainAt < AGAIN_APART_MS) return;
+      askedAgainAt = now;
+      open(folder, 0, true);
+    },
     emptyOldTrash,
     shown: () => where,
     rows: () => rows.length,

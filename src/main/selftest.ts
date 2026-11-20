@@ -2030,9 +2030,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               // unable to tell a jump that keeps what is ahead from one that throws it away.
               await js(front.view, `document.querySelector('#fb-list .fb-row[data-kind="folder"][data-name="ledger"]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
               await until(async () => (await pathNow()).endsWith('/ledger'), 8000);
-              await js(front.view, `document.querySelector('.fb-path').dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 40, clientY: 40 }))`);
-              await sleep(200);
-              await js(front.view, `(() => { const e = [...document.querySelectorAll('#fb-menu .fb-menu-one')].find((b) => b.querySelector('.fb-menu-words')?.textContent === '/var'); if (e) e.click(); })()`);
+              // Up two folders in one press, on the step for it. This used to open a menu of the folders
+              // above and press a line in it; the bar carries them in the open now, which is what he asked
+              // for, so the press is on the thing itself.
+              await js(front.view, `(() => { const b = document.querySelector('#fb-path .fb-step[data-at="/var"]'); if (b) b.click(); })()`);
               await until(async () => (await pathNow()) === '/var', 8000);
               await clickOn('#fb-back', front);
               await until(async () => (await pathNow()).endsWith('/ledger'), 8000);
@@ -2107,13 +2108,53 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
                 const edged = ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(s['border' + side + 'Width']) > 0 && s['border' + side + 'Style'] !== 'none' && !s['border' + side + 'Color'].includes('rgba(0, 0, 0, 0)'));
                 return { tag: e.tagName, cursor: s.cursor, edge: edged, fill: s.backgroundColor !== up && s.backgroundColor !== 'rgba(0, 0, 0, 0)' };
               };
-              return { field: look('#fb-field'), path: look('#fb-path'), head: look('#fb-by-name'), find: look('#fb-find'), foot: look('#fb-foot') };
+              // The path is a bar of steps now, so the control to look at is a step: the bar holds them and
+              // is not pressable itself. The question is unchanged, and it is asked of the thing that
+              // answers a press.
+              return { field: look('#fb-field'), path: look('#fb-path .fb-step:not([disabled])'), bar: look('#fb-path'), head: look('#fb-by-name'), find: look('#fb-find'), foot: look('#fb-foot') };
             })()`);
             const pressable = (c: { tag: string; cursor: string }): boolean => (c.tag === 'BUTTON' || c.tag === 'INPUT') && (c.cursor === 'pointer' || c.cursor === 'text');
-            check('the path is a field and looks like one: a real control, with its own edge and its own fill',
-              controls['field']!.edge && controls['field']!.fill && pressable(controls['path']!), controls);
+            check('the path is a field and looks like one: a real control, with its own edge and its own fill, and the folders on it are real buttons',
+              controls['field']!.edge && controls['field']!.fill && pressable(controls['path']!) && controls['bar']!.cursor !== 'pointer', controls);
             check('and every other control in the pane is a real control too, while the foot, which cannot be acted on, invites no press',
               pressable(controls['head']!) && pressable(controls['find']!) && controls['foot']!.cursor !== 'pointer', controls);
+            // ---- The path as a bar of steps ----
+            //
+            // The biggest gap §5.1 had, and one he asked for by name: the path was one line of text, so the
+            // only way up was the `..` row or the way-back button, a folder at a time. Every folder on the
+            // way here is now a press of its own.
+            {
+              const bar = (): Promise<{ says: string; steps: string[]; here: string; pressable: number }> => js(front.view, `(() => {
+                const at = document.getElementById('fb-path');
+                const steps = [...at.querySelectorAll('.fb-step')];
+                return {
+                  says: at.textContent ?? '',
+                  steps: steps.map((b) => b.dataset.at ?? b.id ?? ''),
+                  here: at.querySelector('.fb-step-here')?.dataset.at ?? '',
+                  pressable: steps.filter((b) => !b.disabled).length,
+                };
+              })()`);
+              const where = await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`);
+              const b = await bar();
+              // Read end to end it still spells the path, which is what this bar has always said and what
+              // every other probe over it reads.
+              check(`the bar spells the path out and carries every folder on the way here as its own press: ${b.says}`,
+                b.says === where && b.steps.length >= 2 && b.steps[0] === '/' && b.steps[b.steps.length - 1] === where,
+                [where, b]);
+              // Where he already is is not a way to anywhere, so it answers no press: a control that does
+              // nothing is worse than no control.
+              check('the folder he is in is the one step that invites no press',
+                b.here === where && b.pressable === b.steps.length - 1, b);
+              // And a press on one of them goes there, which is the whole point of the bar.
+              const up = b.steps[b.steps.length - 2] ?? '';
+              await js(front.view, `(() => { const x = document.querySelector('#fb-path .fb-step[data-at=' + JSON.stringify(${JSON.stringify(up)}) + ']'); if (x) x.click(); })()`);
+              const went = await until(async () => (await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)) === up, 8000);
+              check(`a press on a folder in the bar goes to it: ${up}`, up !== '' && went, [up, await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)]);
+              // Put back where it was found: the way back, because the folder it came from is no longer a
+              // step on the bar once he has gone up past it.
+              await clickOn('#fb-back', front);
+              await until(async () => (await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)) === where, 8000);
+            }
             // ---- The heads line up with their columns, and the quiet ones can be read ----
             //
             // His, 2026-11-19, looking at the built window: the Name head did not start where the names
@@ -2724,23 +2765,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('and with two of them here, the line that drags them out together is there', await until(() => has('#fb-drag-all', front), 15_000), '');
             }
             // ---- The path knows the way up. ----
-            // The caret beside the path already opens the folders this tab has been in. This is the other
-            // half, the folders this one is inside, which is how a path bar is used for changing folders.
-            // What is deliberately not in it: anything that types into his shell.
-            const pathAt = await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`);
-            await js(front.view, `document.querySelector('.fb-path').dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 40, clientY: 40 }))`);
-            await sleep(160);
-            const upFolders = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+            // It used to offer the folders this one is inside on a menu, under a press on the path itself.
+            // They are on the bar in the open now, each its own press, which is what he asked for: a menu
+            // that has to be opened to see where you can go is a menu, not a path bar. So the same question
+            // is asked of the bar, and the menu under the right button keeps what is actually a menu's: copy
+            // this folder's path, and send a file here. What is deliberately in neither: anything that types
+            // into his shell.
+            const pathAt = await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`);
+            const upFolders = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-path .fb-step')].map((b) => b.dataset.at ?? '')`);
             const wantUp: string[] = [];
             for (let f = pathAt.slice(0, pathAt.lastIndexOf('/')); f !== ''; f = f.slice(0, f.lastIndexOf('/'))) wantUp.push(f === '' ? '/' : f);
-            check(`pressing the path offers every folder it is inside: ${upFolders.join(', ')}`, wantUp.length > 0 && wantUp.every((f) => upFolders.includes(f)) && upFolders.includes('Copy this folder\u2019s path'), [upFolders, wantUp]);
-            check('and nothing in it types into his shell', !upFolders.some((w) => /terminal|shell|cd /i.test(w)), upFolders);
+            wantUp.push('/');
+            check(`the bar carries every folder this one is inside: ${upFolders.join(', ')}`, wantUp.length > 1 && wantUp.every((f) => upFolders.includes(f)), [upFolders, wantUp]);
+            // And the menu the right button opens keeps what belongs on a menu, and types nothing.
+            await js(front.view, `document.getElementById('fb-path').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40 }))`);
+            await sleep(160);
+            const pathLines = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one .fb-menu-words')].map((w) => w.textContent)`);
+            await js(front.view, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+            await sleep(120);
+            check(`and the bar's own menu holds what belongs on a menu, and nothing that types into his shell: ${pathLines.join(', ')}`,
+              pathLines.includes('Copy this folder\u2019s path') && !pathLines.some((w) => /terminal|shell|cd /i.test(w)), pathLines);
             // Pressing one of them goes there.
             const goUpTo = wantUp[0]!;
-            await js(front.view, `[...document.querySelectorAll('#fb-menu .fb-menu-one')].find((b) => b.querySelector('.fb-menu-words').textContent === ${JSON.stringify(goUpTo)}).click()`);
-            check(`and pressing one goes there: ${goUpTo}`, await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`)) === goUpTo, 10_000), await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`));
+            await js(front.view, `(() => { const b = document.querySelector('#fb-path .fb-step[data-at=' + JSON.stringify(${JSON.stringify(goUpTo)}) + ']'); if (b) b.click(); })()`);
+            check(`and pressing one goes there: ${goUpTo}`, await until(async () => (await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)) === goUpTo, 10_000), await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`));
             await clickOn('#fb-back', front);
-            await until(async () => (await js<string>(front.view, `document.querySelector('.fb-path')?.title ?? ''`)) === pathAt, 10_000);
+            await until(async () => (await js<string>(front.view, `document.getElementById('fb-path')?.title ?? ''`)) === pathAt, 10_000);
 
             // ---- What is chosen is what the delete takes. ----
             // #111 gave the list a selection and the delete went on acting on the one row the keyboard stood
@@ -3811,6 +3861,22 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           await js(ctx.shell, `document.querySelector('[data-tab="${behind.id}"]')?.click()`);
           const cleared = await until(() => (infoOf(behind.id)?.finishedMs ?? 0) === 0 && infoOf(behind.id)?.unseen === false, 5000);
           check('looking at the tab clears what it had to say, with no press of its own', cleared, [infoOf(behind.id)?.finishedMs, infoOf(behind.id)?.unseen]);
+          // A command finishing lists the folder the pane is already in, from the box (his, 2026-11-20). A
+          // build, an rm or a tar changes what is in the folder he is looking at, and a list still showing
+          // what was there before the command is a list he would act on. What it must not do is go
+          // anywhere: the folder the shell itself is in is never read out of a prompt, because a prompt can
+          // print a relative path, a tmux title or a path on another host after an inner ssh.
+          {
+            const asks = (): number => Number((ctx.filesAsked() as Record<string, number>)['list'] ?? 0);
+            const wherever = (): string => String((ctx.filesAskedWhere() as Record<string, string>)['list'] ?? '');
+            const paneWas = await js<string>(behind.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+            const asksBefore = asks();
+            await type(behind, 'first-one\n');
+            const listedAgain = await until(() => asks() > asksBefore, 15_000);
+            const paneNow = await js<string>(behind.view, `document.getElementById('fb-path')?.textContent ?? ''`);
+            check('a command finishing lists the folder the pane is already in, and the pane has not gone anywhere',
+              listedAgain && paneNow === paneWas, [listedAgain, asks() - asksBefore, wherever(), paneWas, paneNow]);
+          }
           // One command and its output told from the next: the prompt in the box's own colour and a hairline
           // where each block begins. It is the thing he said matters most about a terminal, because with
           // everything one colour he cannot see where one command's output ends (2026-11-15 07:32).

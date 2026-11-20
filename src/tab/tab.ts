@@ -265,6 +265,19 @@ const readShape = (): void => {
   }
 };
 let shapeFault = '';
+// A command finished: the folder on screen is listed again from the box. A build, an rm, a tar or anything
+// else he just ran changes what is in the folder he is looking at, and a list that still shows what was
+// there before the command is a list he would act on. It is the folder he is already in and nothing about
+// where he stands changes, which is the one half of this that is not a guess: what folder the shell itself
+// is in is never read out of a prompt, because a prompt can print a relative path, a tmux title, or a path
+// on another host after an inner ssh, and a pane that jumps to the wrong folder is worse than one that does
+// not jump (his, 2026-11-20).
+//
+// It is a hook set once the pane exists and not a call straight to it: the reading of the box's output can
+// run before the pane is built, and naming the pane's own const from up here throws where it stands in its
+// own dead zone, which no type check can see and which kills this page outright.
+let afterCommand: (() => void) | null = null;
+let promptsSeen = 0;
 
 const readShapeNow = (): void => {
   const got = term.since(seenRow);
@@ -274,6 +287,16 @@ const readShapeNow = (): void => {
   const done = blocks.takeFinished();
   // Main is told only when it changes, and the finished command's length is a number and nothing else: what
   // was typed is his own text and never leaves this view (plan B2.7).
+  // A prompt, and not a command seen to have taken a while, is what tells the pane its folder may have
+  // changed. A command only counts as finished once it was seen running, which is right for the mark on a
+  // tab and for the one notification he asked for: he does not want a mark for every ls. But `rm`, `mv` and
+  // `touch` are instant and never pass through running at all, and those are exactly the commands that
+  // change what is in the folder he is looking at. A new prompt means the one before it is over, however
+  // long it took.
+  if (blocks.prompts > promptsSeen) {
+    promptsSeen = blocks.prompts;
+    afterCommand?.();
+  }
   if (done) port.doing(blocks.doing, done.ms);
   else if (blocks.doing !== saidDoing) port.doing(blocks.doing, 0);
   saidDoing = blocks.doing;
@@ -330,6 +353,7 @@ let last = '';
 const asker = makeAsker(port);
 const viewer = startViewer(document.body, port, asker);
 const files = startFiles(document.getElementById('files') as HTMLDivElement, port, asker, (p, n, b) => viewer.open(p, n, b));
+afterCommand = () => files.again();
 let askedFor = '';
 
 port.onState((info) => {
