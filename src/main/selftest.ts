@@ -151,7 +151,16 @@ async function until(what: () => boolean | Promise<boolean>, ms: number, every =
   }
 }
 
-const js = <T>(view: WebContentsView, code: string) => view.webContents.executeJavaScript(code, true) as Promise<T>;
+// Every read of a page goes through here, so this is the one place that can say which read failed. A script
+// that throws in the page comes back as "Script failed to execute" and nothing else: the one probe on
+// Windows that ended a whole run said exactly that and named nothing, and with no Windows machine here a
+// fault that will not say where it is costs a push and a CI run per guess. It names itself now.
+const js = <T>(view: WebContentsView, code: string) =>
+  (view.webContents.executeJavaScript(code, true) as Promise<T>).catch((err: unknown) => {
+    const why = err instanceof Error ? err.message : String(err);
+    const one = code.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`a read of the page failed: ${why}\n  the script: ${one}`);
+  });
 const shown = (t: Tab) => js<string>(t.view, `window.berthTerm.text()`);
 // Is the tab's page whole: every stylesheet it names loaded with rules in it, the terminal's typeface loaded, and
 // the library's own hidden text field hidden (it shows when the library's stylesheet is missing).
@@ -2286,10 +2295,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // at 150 and 200 per cent the name was cut to nothing and the time column came out wider than it.
             // What gives way is measured against the list's own size now, so it gives way as the text grows
             // and not only when the pane is dragged narrower.
-            const rowNow = (): Promise<{ name: number; numbers: number; cut: number; size: string; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }> => js(front.view, `(() => {
+            const rowNow = (): Promise<{ name: number; numbers: number; cut: number; size: string; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean; most: number; asked: number; took: number; headBy: number }> => js(front.view, `(() => {
               const list = document.getElementById('fb-list');
               const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file');
-              if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false };
+              if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false, most: -1, asked: -1, took: -1, headBy: -1 };
               const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; };
               // The head has to ride the list's own sideways scroll, or a column and its name come apart.
               //
@@ -2301,18 +2310,21 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               // have moved by exactly that much. That is the thing itself, and it also catches a head that
               // rides the scroll by some other amount, which the old question never could.
               const head = document.getElementById('fb-head');
-              const most = list.scrollWidth - list.clientWidth;
+              const most = Math.round(list.scrollWidth - list.clientWidth);
               const canScroll = most > 1;
               let moved = true;
+              let asked = 0, took = 0, headBy = 0;
               if (canScroll) {
                 const before = head.getBoundingClientRect().left;
-                list.scrollLeft = Math.min(40, most);
-                const really = list.scrollLeft;
-                const after = head.getBoundingClientRect().left;
-                moved = really > 0 && Math.abs((before - after) - really) < 1.5;
+                asked = Math.min(40, most);
+                list.scrollLeft = asked;
+                took = list.scrollLeft;
+                headBy = before - head.getBoundingClientRect().left;
+                moved = took > 0 && Math.abs(headBy - took) < 1.5;
                 list.scrollLeft = 0;
               }
               return {
+                most, asked, took: Math.round(took), headBy: Math.round(headBy),
                 name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'),
                 cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length,
                 size: document.getElementById('files').dataset.size,
@@ -2322,10 +2334,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               };
             })()`);
             await js(front.view, `document.getElementById('fb-list').focus()`);
-            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }[] = [];
+            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean; most: number; asked: number; took: number; headBy: number }[] = [];
             for (let i = 0; i < 6; i++) {
               const now = await rowNow();
-              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone, sizeGone: now.sizeGone, canScroll: now.canScroll, headWith: now.headWith });
+              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone, sizeGone: now.sizeGone, canScroll: now.canScroll, headWith: now.headWith, most: now.most, asked: now.asked, took: now.took, headBy: now.headBy });
               await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
               await sleep(130);
             }
@@ -3890,6 +3902,39 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               const marksAfter = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
               check('and the same glyph closes it, taking its own marks off and leaving the blocks their own',
                 shut && marksAfter === marksBefore, [shut, marksBefore, marked, marksAfter]);
+              // Double-clicking in a prompt: what he reaches for on a box is a path, a host, a user or a
+              // hash, and each has to come whole. Measured before the setting was written: the library's own
+              // default took demo@lab-box:/srv/ledger$ as one word, prompt and all, so the path could not be
+              // taken on its own at all. The prompt on screen holds all three, so all three are asked here.
+              {
+                const whole = await shown(behind);
+                const line = (whole.split('\n').find((l) => /@[\w.-]+:/.test(l)) ?? '').trim();
+                const host = (line.match(/@([\w.-]+):/) ?? [])[1] ?? '';
+                const where = (line.match(/:(\/[\w./-]*)/) ?? [])[1] ?? '';
+                const dbl = async (word: string): Promise<string> => {
+                  // Nothing selected first, or a press that lands on nothing hands back whatever the press
+                  // before it selected, and the probe reads the last answer again and calls it this one.
+                  await js(behind.view, `window.berthTerm.findOff()`);
+                  const at = await js<{ x: number; y: number } | null>(behind.view, `window.berthTerm.spot(${JSON.stringify(word)})`);
+                  if (!at) return '(not on screen)';
+                  for (const count of [1, 2]) {
+                    behind.view.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: count });
+                    behind.view.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: count });
+                  }
+                  await sleep(200);
+                  return (await js<string>(behind.view, `window.berthTerm.selection()`)).trim();
+                };
+                const gotWhere = where === '' ? '' : await dbl(where);
+                const gotHost = host === '' ? '' : await dbl(host);
+                // The path and the host are the two that can be aimed at: a word is found by its text, and
+                // the user name appears further along a row as well, where the block's own mark is anchored,
+                // so a press aimed by text alone cannot be relied on to land on the one in the prompt. Both
+                // of these break out of the prompt by the two characters the setting added, @ and :, which is
+                // the whole of what is being held here.
+                check(`a double press takes the path or the host on its own, not the whole prompt: ${JSON.stringify([gotWhere, gotHost])}`,
+                  line !== '' && where !== '' && host !== '' && gotWhere === where && gotHost === host,
+                  [line, [where, gotWhere], [host, gotHost]]);
+              }
             }
           }
 

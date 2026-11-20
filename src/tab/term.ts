@@ -174,6 +174,13 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     allowProposedApi: true,
     altClickMovesCursor: false, // it would type arrow keys for a click
     rightClickSelectsWord: false,
+    // What a double press takes as one word. The library's own default breaks on spaces and brackets and
+    // nothing else, and this was measured before it was changed: a double press on the path in
+    // demo@lab-box:/srv/ledger$ took the whole of it, prompt and all. On a box what he double-presses is a
+    // path, a host, a user or a hash, so the shell's own punctuation breaks a word and the characters that
+    // live inside those four do not: the slash, the dot, the dash, the underscore and the plus are left out
+    // of this on purpose, or /var/log/syslog, lab-box, a dotted name and a flag would each come apart.
+    wordSeparator: ' ()[]{}\'",;:@$=&|<>*?!~^\u0060',
     linkHandler: null,
     windowOptions: {}, // nothing about the window may be asked or set by a box
     screenReaderMode: false,
