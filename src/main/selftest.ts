@@ -2214,9 +2214,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('the width he dragged is saved, so the next tab starts with it', saved, ctx.settingsNow().columns);
               // Home on the grip puts the column back to the width its own contents ask for.
               await js(front.view, `(() => { const g = document.getElementById('fb-grip-size'); g.focus(); g.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); })()`);
-              await sleep(250);
+              // Waited for, not slept through: what main holds is what says the width was really let go of,
+              // and a fixed wait read the drag's own save still on its way on a slower machine and called
+              // that the app keeping a width it had been told to forget.
+              const letGo = await until(() => (ctx.settingsNow().columns?.size ?? 0) === 0, 5000);
               const back = await wide();
-              check('and it goes back to its own size, which no drag can give back by hand', back < now - 30 && (ctx.settingsNow().columns?.size ?? 0) === 0, [now, back, ctx.settingsNow().columns]);
+              check('and it goes back to its own size, which no drag can give back by hand', back < now - 30 && letGo, [now, back, ctx.settingsNow().columns]);
             }
             // The folder is listed again before the columns are read. The lab has made several files since the
             // pane last asked, and on a Windows runner the probes that re-list are the ones skipped there, so
@@ -2319,13 +2322,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               let moved = true;
               let asked = 0, took = 0, headBy = 0;
               if (canScroll) {
+                // From a known place, not from wherever the list was left. scrollLeft is a position and not
+                // a step, so setting it to 40 where the list already stood at 113 scrolls it back by 73 and
+                // the head moves the other way by 73: that is exactly what Windows reported, and it was the
+                // measurement's fault and not the app's. Where the list was is put back afterwards, because
+                // a probe that leaves the screen somewhere else is a probe the next one pays for.
+                const was = list.scrollLeft;
+                list.scrollLeft = 0;
                 const before = head.getBoundingClientRect().left;
                 asked = Math.min(40, most);
                 list.scrollLeft = asked;
                 took = list.scrollLeft;
                 headBy = before - head.getBoundingClientRect().left;
                 moved = took > 0 && Math.abs(headBy - took) < 1.5;
-                list.scrollLeft = 0;
+                list.scrollLeft = was;
               }
               return {
                 most, asked, took: Math.round(took), headBy: Math.round(headBy),
@@ -3832,11 +3842,20 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // the shell. That last one is the standing rule of this whole app, and Ctrl with a minus is a
             // character a box would otherwise be sent.
             {
+              // The rows the library draws, asked for before they are read. getComputedStyle(null) throws,
+              // and a read that throws ends the whole run and takes every probe after it: on Windows this
+              // one did exactly that, and the run blamed four other things that were never wrong. A reader
+              // of the screen says what it found, including that it found nothing; it does not throw.
               const look = (): Promise<{ px: number; cols: number; said: string; hidden: boolean }> => js(behind.view, `(() => {
                 const z = document.getElementById('term-zoom');
                 const s = window.berthTerm.size();
-                return { px: Number(getComputedStyle(document.querySelector('.xterm-rows')).fontSize.replace('px', '')), cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
+                const rows = document.querySelector('.xterm-rows');
+                return { px: rows ? Number(getComputedStyle(rows).fontSize.replace('px', '')) : -1, cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
               })()`);
+              // And the rows have to be there at all before any of this means anything. If they never come,
+              // that is the finding, said as itself rather than as a throw with no name on it.
+              const rowsDrawn = await until(async () => (await look()).px > 0, 8000);
+              check('the terminal has drawn its rows before its size is read', rowsDrawn, (await look()).px);
               const w = behind.view.webContents;
               const press = async (key: string) => {
                 w.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: ['control'] });
