@@ -643,8 +643,21 @@ function closePaste(send: boolean): void {
 // and no click reaches a tab meanwhile; otherwise the tab in front is above the shell's empty middle.
 function stack(): void {
   if (!win || !shell) return;
-  if (overlay) win.contentView.addChildView(shell);
-  else for (const t of tabs.values()) win.contentView.addChildView(t.view);
+  if (overlay) {
+    win.contentView.addChildView(shell);
+    // Raising the window's own surface above the tabs is not the same as handing it the keyboard. Until
+    // this line, a dialog opened in front of him while every key he pressed still went to the terminal
+    // behind it: Enter answered the screen he had stopped looking at, and the only way to make the dialog
+    // hear him was to click it first. Every dialog in the app is drawn on this surface, so this is the one
+    // place it has to be done, and doing it anywhere else would be doing it once per dialog and forgetting.
+    shell.webContents.focus();
+  } else {
+    for (const t of tabs.values()) win.contentView.addChildView(t.view);
+    // And when the surface goes back down the keyboard goes with it, to the tab in front rather than being
+    // left on a window with nothing on it to type into.
+    const front = tabs.get(active);
+    if (front && !front.view.webContents.isDestroyed()) front.view.webContents.focus();
+  }
 }
 
 // A view that was closed has no contents any more: every send goes through here, and a late message to a

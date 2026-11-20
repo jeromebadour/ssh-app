@@ -489,6 +489,15 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     };
     const text = (sel: string, on: Tab | null = null) => js<string>(on ? on.view : ctx.shell, `document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
     const has = (sel: string, on: Tab | null = null) => js<boolean>(on ? on.view : ctx.shell, `!!document.querySelector(${JSON.stringify(sel)})`);
+    // A dialog of the window's own is drawn on the shell, above the tabs. Being drawn there is not the same
+    // as holding the keyboard, and until 2026-11-20 it never did: a dialog opened in front of him while
+    // every key still went to the terminal behind it, so Enter answered the screen he had stopped looking
+    // at and the dialog heard nothing until it was clicked. His. Every dialog in the app is drawn on that
+    // one surface, so this is asked of each of them rather than of one.
+    const keysAreOnTheWindow = (): boolean => ctx.shell.webContents.isFocused() && ![...ctx.tabs.values()].some((t) => t.view.webContents.isFocused());
+    const keysOn = async (what: string): Promise<void> => {
+      check(`${what}: and it holds the keyboard, so what he types answers it and not what is behind it`, await until(keysAreOnTheWindow, 2500), [ctx.shell.webContents.isFocused(), [...ctx.tabs.values()].map((t) => t.view.webContents.isFocused())]);
+    };
     // Every file under the lab's folders: none may hold the password.
     const filesHolding = async (needle: string): Promise<string[]> => {
       const found: string[] = [];
@@ -2587,6 +2596,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             const askHead = await js<string>(front.view, `document.querySelector('#fb-ask-delete .fb-ask-head')?.textContent ?? ''`);
             const askNames = await js<string[]>(front.view, `[...document.querySelectorAll('#fb-ask-names .fb-ask-name')].map((n) => n.title || n.textContent)`);
             check(`the dialog says how many go and names every one of them: ${askHead}`, askHead === 'Delete 3 things?' && JSON.stringify(askNames.slice().sort()) === JSON.stringify(three.slice().sort()), [askHead, askNames, three]);
+            // This one is the pane's own, drawn in the tab rather than on the window, so the keyboard
+            // belongs to the tab here. What matters is the same thing: something inside the question holds
+            // it, so Enter answers the question and not the list of files behind it.
+            check('the question before files are deleted holds the keyboard itself, inside the tab',
+              front.view.webContents.isFocused() && (await js<boolean>(front.view, `!!document.activeElement?.closest('#fb-ask-delete')`)),
+              [front.view.webContents.isFocused(), await js<string>(front.view, `document.activeElement?.id ?? document.activeElement?.className ?? ''`)]);
             // Keeping them keeps all three, and keeps them chosen.
             await clickOn('#fb-ask-keep', front);
             await sleep(200);
@@ -3559,6 +3574,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const goes = await text('#closing-goes');
           check('closing a tab with a session on it asks first, naming the box and where it stands', asked && goes.includes('lab-box') && (goes.includes('connected') || goes.includes('not answering')) && ctx.tabs.has(live.id), [goes, ctx.tabs.has(live.id)]);
           check('the way out has the focus, so Enter keeps the tab', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'closing-keep', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
+          await keysOn('the question before a tab closes');
           await shot('closing-tab', 'closing a tab with a session on it');
           await clickOn('#closing-keep');
           check('Keep the tab: it is still open and its session is untouched', (await until(async () => !(await has('#closing')), 2000)) && ctx.tabs.has(live.id) && ctx.tabs.get(live.id)!.engine.link.phase === 'up', ctx.tabs.get(live.id)?.engine.link.phase);
@@ -3568,6 +3584,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           const askedApp = await until(async () => (await has('#closing')) && ctx.shellState().closing !== null, 3000);
           check('closing the window asks too, and the window does not close while it is asking', askedApp && !ctx.win.isDestroyed() && (await text('#closing-title')).includes('Close Berth'), [askedApp, await text('#closing-title')]);
           check('and it names the session that would end', (await text('#closing-goes')).includes('lab-box'), await text('#closing-goes'));
+          await keysOn('the question before the window closes');
           await shot('closing-app', 'closing Berth with a session open');
           await clickOn('#closing-keep');
           check('Keep Berth open: the window and its session are still here, and the footer says so', (await until(async () => !(await has('#closing')), 2000)) && !ctx.win.isDestroyed() && ctx.tabs.has(live.id) && (await text('#status-done')).includes('kept open'), await text('#status-done'));
@@ -3829,6 +3846,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           open1.view.webContents.sendInputEvent({ type: 'mouseUp', x: spotUrl.x, y: spotUrl.y, button: 'left', clickCount: 1, modifiers: ['control'] });
         }
         check('Ctrl+click on an address a box printed asks first', await until(() => has('#link'), 3000), await text('#link'));
+        await keysOn('the question before an address is opened');
         await shot('link', 'an address a box printed, Ctrl+clicked');
         await read(ctx.shell);
         await clickOn('#link-drop');
@@ -4269,6 +4287,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         await shot('boxes-unchecked', 'the Boxes menu, a box not checked yet');
         await clickOn('[data-box="quiet-box"]');
         check('a box never checked, picked from Boxes, opens its check and no tab', (await until(() => has('#check'), 3000)) && ctx.shellState().tabs.length === 0, '');
+        await keysOn("the box's own check");
         await clickOn('#check-close');
 
         // Another identity at the box's address: the tab stops, and the stop is said in its dialog.
@@ -4346,6 +4365,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
         check('Delete asks first, naming what goes: the box, its key, its pinned identity, and the tabs open on it', askedRemove && goes.includes('lab-box-renamed') && goes.includes('its key') && goes.includes('the identity pinned for it') && /\d+ open tabs? on it/.test(goes), goes);
         check('and it says what stays on the box itself', (await text('#remove-stays')).includes('only the box can take it out'), await text('#remove-stays'));
         check('the way out has the focus, so Enter keeps the box', (await js<string>(ctx.shell, `document.activeElement?.id ?? ''`)) === 'remove-cancel', await js<string>(ctx.shell, `document.activeElement?.id ?? ''`));
+        await keysOn('the question before a box is removed');
         await shot('remove-box', 'Delete box: what goes with it');
         await read(ctx.shell);
         await clickOn('#remove-cancel');
@@ -4975,6 +4995,21 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       check('a paste of more than one line is not sent on the key: it is shown first, on the shell', beforeShown === '' && shownOk && (await text('#paste')).includes('2 lines to lab-box') && (await text('#paste')).includes('the last line runs on arrival'), [JSON.stringify(beforeShown), await text('#paste')]);
       const shellAbove = () => { const kids = ctx.win.contentView.children; return kids[kids.length - 1] === ctx.shell; };
       check('and the shell is above the tabs while it is shown', await until(shellAbove, 1000), '');
+      // And it holds the keyboard, which is not the same thing and was the whole of what was wrong. Drawn in
+      // front of him with the keys still on the tab behind it, a dialog answers nothing he types: Enter went
+      // to the terminal he had stopped looking at, and the only way to make the dialog hear him was to click
+      // it first. His, 2026-11-20. Every dialog in this app is drawn on this one surface, so every one of
+      // them was like that, and this is asked of each of them below rather than of this one alone.
+      await keysOn('the paste it shows before sending');
+      // Proved by using it: Enter alone, pressed where the keys now are, and nothing clicked anywhere.
+      ctx.shell.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      ctx.shell.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      const byEnterAlone = await boxGot();
+      check('Enter alone sends it, with nothing clicked first', (await until(async () => !(await has('#paste')), 3000)) && byEnterAlone === 'echo first-line\nsha256sum /srv/x.tar.gz\n', JSON.stringify(byEnterAlone));
+      // Shown again, for the two answers below to be pressed as before.
+      clipboard.writeText('echo first-line\nsha256sum /srv/x.tar.gz\n');
+      await pasteKey(t);
+      await until(() => has('#paste'), 3000);
       await clickOn('#paste-drop');
       const afterDrop = await boxGot();
       check("Don't send: nothing reaches the box, and the window says so", !(await has('#paste')) && afterDrop === '' && (await text('#status-done')).includes('not sent'), [afterDrop, await text('#status-done')]);
