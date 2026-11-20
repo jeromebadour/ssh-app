@@ -32,6 +32,16 @@
                readout that always says the same thing is a readout nobody reads (BUILD-RULES 2.8). A state
                belongs in the head, never in the output, where only what the box said is drawn. -->
           <span id="term-drawn" hidden></span>
+          <!-- Finding words in what the box has printed. A glyph, not a field standing open all day: the
+               same answer the file list beside it got (his, 2026-11-18 night). Ctrl+Shift+F opens it too,
+               and that press is main's, never this page's, so no box can see it or ask for it. -->
+          <button id="term-find-open" type="button" class="head-find-open" aria-expanded="false"></button>
+          <div id="term-find" class="head-find" hidden>
+            <input id="term-find-field" class="head-find-field" type="text" spellcheck="false" autocomplete="off" />
+            <span id="term-find-count" class="head-find-count"></span>
+            <button id="term-find-back" type="button" class="head-find-step"></button>
+            <button id="term-find-next" type="button" class="head-find-step"></button>
+          </div>
         </header>
         <div id="term"></div>
       </section>

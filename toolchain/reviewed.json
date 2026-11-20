@@ -8,6 +8,7 @@
     "@fontsource/*": "Open-licensed typefaces (OFL 1.1), font files only, no code: IBM Plex Sans Condensed and IBM Plex Mono, Berth's chosen type. Ships.",
     "@types/node": "Type declarations for Node (ours, and the copy Electron's own types ask for). Build only.",
     "@typescript/typescript-*": "TypeScript's own program, one build per platform; only the one for this machine is installed. Build only.",
+    "@xterm/addon-search": "The terminal's search, over the buffer the terminal already holds: it finds words in what a box printed, on screen and scrolled out, marks them and says how many there are. MIT, by the xterm.js authors, the same people as the renderer and the terminal itself. It reads the buffer and draws decorations; it opens nothing, reaches no network and sends the box nothing, which is why a search can be Berth looking at what it holds rather than a command run on his machine (plan B2.5). Ships.",
     "@xterm/addon-webgl": "The terminal's WebGL renderer (his, 2026-11-18 night): the plain renderer ignores a colour set on a decoration, so the prompt's own letters cannot be coloured without it. From the same project as the terminal itself, MIT, no dependency of its own, and the app proves its fallback: a machine with no WebGL draws with the plain renderer and says so. Ships.",
     "@xterm/xterm": "The terminal each tab draws a box's output in (plan B3, B7): the library alone, no add-on, no dependency of its own. Ships.",
     "debug": "Logging helper inside @electron/get. Build only.",

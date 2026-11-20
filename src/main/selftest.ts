@@ -50,6 +50,7 @@ interface Ctx {
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
   keysRefused(): number;
+  bellsHeard(): number;
   rightClicksRefused(): number; // an answer about a right press that belonged to no press main saw
   rightClicksSeen(): number; // right presses main itself saw on a tab's view, wherever in it they landed
   typedInto(tab: number): number; // bytes typed into this tab's box, which only a person's own keys add to
@@ -151,7 +152,16 @@ async function until(what: () => boolean | Promise<boolean>, ms: number, every =
   }
 }
 
-const js = <T>(view: WebContentsView, code: string) => view.webContents.executeJavaScript(code, true) as Promise<T>;
+// Every read of a page goes through here, so this is the one place that can say which read failed. A script
+// that throws in the page comes back as "Script failed to execute" and nothing else: the one probe on
+// Windows that ended a whole run said exactly that and named nothing, and with no Windows machine here a
+// fault that will not say where it is costs a push and a CI run per guess. It names itself now.
+const js = <T>(view: WebContentsView, code: string) =>
+  (view.webContents.executeJavaScript(code, true) as Promise<T>).catch((err: unknown) => {
+    const why = err instanceof Error ? err.message : String(err);
+    const one = code.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`a read of the page failed: ${why}\n  the script: ${one}`);
+  });
 const shown = (t: Tab) => js<string>(t.view, `window.berthTerm.text()`);
 // Is the tab's page whole: every stylesheet it names loaded with rules in it, the terminal's typeface loaded, and
 // the library's own hidden text field hidden (it shows when the library's stylesheet is missing).
@@ -452,10 +462,39 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     const PASSWORD = 'berth-lab-canary-7f3a91 password';
     const phase = () => ctx.gate.state.phase;
     const sh = ctx.shell.webContents;
-    const at = (sel: string, on: Tab | null = null) => js<{ x: number; y: number } | null>(on ? on.view : ctx.shell, `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    // Where to press a control, and whether a press there reaches it at all.
+    //
+    // This used to hand back the middle of the control's own box and nothing else, which is a lie whenever
+    // the control is not on screen. The file list scrolls sideways by his own choice (nothing gives way,
+    // 2026-11-18 night), and once it is scrolled the Name head sits at x -89: the middle of its box is at
+    // x -8, off the pane, off the window. A press sent there lands on nothing at all. Every probe that
+    // pressed such a control then read the screen, found it unchanged, and blamed the app for not sorting,
+    // for not closing, for not answering. The Windows gate failed on exactly this and named the sort and
+    // the find field as the faults. They were never the faults. The press was.
+    //
+    // So a point is only a point if it reaches the control. The control is brought on screen first, the way
+    // the browser brings a control a person tabs to on screen, and then the point is read; and the point is
+    // only handed back once the page itself says that is what stands there. A press that cannot reach its
+    // control is counted and refused, never sent, because a press sent nowhere is a check that cannot fail.
+    type Point = { x: number; y: number; reached: boolean; stood: string };
+    const at = (sel: string, on: Tab | null = null) => js<Point | null>(on ? on.view : ctx.shell, `(() => {
+      const b = document.querySelector(${JSON.stringify(sel)});
+      if (!b) return null;
+      const mid = () => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; };
+      const lands = (p) => { const hit = document.elementFromPoint(p.x, p.y); return { ok: !!hit && (hit === b || b.contains(hit)), stood: hit ? (hit.id || (typeof hit.className === 'string' ? hit.className : '') || hit.tagName) : 'nothing' }; };
+      let p = mid();
+      let got = lands(p);
+      if (!got.ok) { b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); p = mid(); got = lands(p); }
+      return { x: p.x, y: p.y, reached: got.ok, stood: got.stood };
+    })()`);
+    // How far apart two bells must be for the second to be said (main's own BELL_APART_MS). The lab waits
+    // this out rather than guessing, so the arm about a tab behind is not refused by the throttle above it.
+    const BELL_APART_MS_LAB = 2_000;
+    let pressesThatReachedNothing: string[] = [];
     const clickOn = async (sel: string, on: Tab | null = null) => {
       const p = await at(sel, on);
       if (!p) return false;
+      if (!p.reached) { pressesThatReachedNothing.push(`${sel} at ${p.x},${p.y}: ${p.stood}`); return false; }
       // A tab's view draws where it sits in the window, but is clicked in its own, so the point is its own.
       const w = on ? on.view.webContents : sh;
       w.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
@@ -884,9 +923,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       };
       const moveTo = async (sel: string) => {
         const p = await at(sel);
-        if (p) sh.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
+        if (p && !p.reached) pressesThatReachedNothing.push(`hover ${sel} at ${p.x},${p.y}: ${p.stood}`);
+        if (p && p.reached) sh.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
         await sleep(120);
-        return !!p;
+        return !!p && p.reached;
       };
       const selectAll = async () => {
         sh.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['control'] });
@@ -2174,9 +2214,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('the width he dragged is saved, so the next tab starts with it', saved, ctx.settingsNow().columns);
               // Home on the grip puts the column back to the width its own contents ask for.
               await js(front.view, `(() => { const g = document.getElementById('fb-grip-size'); g.focus(); g.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })); })()`);
-              await sleep(250);
+              // Waited for, not slept through: what main holds is what says the width was really let go of,
+              // and a fixed wait read the drag's own save still on its way on a slower machine and called
+              // that the app keeping a width it had been told to forget.
+              const letGo = await until(() => (ctx.settingsNow().columns?.size ?? 0) === 0, 5000);
               const back = await wide();
-              check('and it goes back to its own size, which no drag can give back by hand', back < now - 30 && (ctx.settingsNow().columns?.size ?? 0) === 0, [now, back, ctx.settingsNow().columns]);
+              check('and it goes back to its own size, which no drag can give back by hand', back < now - 30 && letGo, [now, back, ctx.settingsNow().columns]);
             }
             // The folder is listed again before the columns are read. The lab has made several files since the
             // pane last asked, and on a Windows runner the probes that re-list are the ones skipped there, so
@@ -2259,20 +2302,43 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // at 150 and 200 per cent the name was cut to nothing and the time column came out wider than it.
             // What gives way is measured against the list's own size now, so it gives way as the text grows
             // and not only when the pane is dragged narrower.
-            const rowNow = (): Promise<{ name: number; numbers: number; cut: number; size: string; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }> => js(front.view, `(() => {
+            const rowNow = (): Promise<{ name: number; numbers: number; cut: number; size: string; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean; most: number; asked: number; took: number; headBy: number }> => js(front.view, `(() => {
               const list = document.getElementById('fb-list');
               const r = [...document.querySelectorAll('#fb-list .fb-row')].find((x) => x.dataset.kind === 'file');
-              if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false };
+              if (!r) return { name: -1, numbers: -1, cut: -1, size: '?', timeGone: true, sizeGone: true, canScroll: false, headWith: false, most: -1, asked: -1, took: -1, headBy: -1 };
               const w = (q) => { const e = r.querySelector(q); return e ? Math.round(e.getBoundingClientRect().width) : 0; };
               // The head has to ride the list's own sideways scroll, or a column and its name come apart.
+              //
+              // It used to ask only whether the head moved at all, after a scroll of 40px it could not always
+              // take: where the row outgrows the pane by a couple of pixels the scroll is clamped to those
+              // two, both rounded reads land on the same whole pixel, and the answer came out of the rounding
+              // rather than out of the app. That is what failed on Windows at 100 per cent and nowhere else.
+              // It is asked properly now: the list is scrolled by as much as it really has, and the head must
+              // have moved by exactly that much. That is the thing itself, and it also catches a head that
+              // rides the scroll by some other amount, which the old question never could.
               const head = document.getElementById('fb-head');
-              const before = Math.round(head.getBoundingClientRect().left);
-              list.scrollLeft = 40;
-              const moved = Math.round(head.getBoundingClientRect().left) < before;
-              const canScroll = list.scrollWidth > list.clientWidth + 1;
-              list.scrollLeft = 0;
-              void before;
+              const most = Math.round(list.scrollWidth - list.clientWidth);
+              const canScroll = most > 1;
+              let moved = true;
+              let asked = 0, took = 0, headBy = 0;
+              if (canScroll) {
+                // From a known place, not from wherever the list was left. scrollLeft is a position and not
+                // a step, so setting it to 40 where the list already stood at 113 scrolls it back by 73 and
+                // the head moves the other way by 73: that is exactly what Windows reported, and it was the
+                // measurement's fault and not the app's. Where the list was is put back afterwards, because
+                // a probe that leaves the screen somewhere else is a probe the next one pays for.
+                const was = list.scrollLeft;
+                list.scrollLeft = 0;
+                const before = head.getBoundingClientRect().left;
+                asked = Math.min(40, most);
+                list.scrollLeft = asked;
+                took = list.scrollLeft;
+                headBy = before - head.getBoundingClientRect().left;
+                moved = took > 0 && Math.abs(headBy - took) < 1.5;
+                list.scrollLeft = was;
+              }
               return {
+                most, asked, took: Math.round(took), headBy: Math.round(headBy),
                 name: w('.fb-name'), numbers: w('.fb-size') + w('.fb-when'),
                 cut: [...document.querySelectorAll('#fb-list .fb-row .fb-name')].filter((n) => n.scrollWidth > n.clientWidth + 1).length,
                 size: document.getElementById('files').dataset.size,
@@ -2282,10 +2348,10 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               };
             })()`);
             await js(front.view, `document.getElementById('fb-list').focus()`);
-            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean }[] = [];
+            const steps: { size: string; name: number; numbers: number; cut: number; timeGone: boolean; sizeGone: boolean; canScroll: boolean; headWith: boolean; most: number; asked: number; took: number; headBy: number }[] = [];
             for (let i = 0; i < 6; i++) {
               const now = await rowNow();
-              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone, sizeGone: now.sizeGone, canScroll: now.canScroll, headWith: now.headWith });
+              steps.push({ size: now.size, name: now.name, numbers: now.numbers, cut: now.cut, timeGone: now.timeGone, sizeGone: now.sizeGone, canScroll: now.canScroll, headWith: now.headWith, most: now.most, asked: now.asked, took: now.took, headBy: now.headBy });
               await js(front.view, `document.getElementById('fb-list').dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, bubbles: true }))`);
               await sleep(130);
             }
@@ -3776,11 +3842,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // the shell. That last one is the standing rule of this whole app, and Ctrl with a minus is a
             // character a box would otherwise be sent.
             {
+              // How tall a letter really is, measured from the screen the library draws on rather than from a
+              // CSS property of one renderer's own rows.
+              //
+              // This used to read getComputedStyle on `.xterm-rows`, which exists only under the plain
+              // renderer: the rows are elements there and a canvas under the WebGL one. This screen has no
+              // graphics renderer, so it was always the plain one here and the read always worked; on his
+              // machine and on Windows the WebGL renderer draws, there is no `.xterm-rows` at all, and
+              // getComputedStyle(null) threw. The throw ended the whole run and took every probe after it
+              // with it, and the gate then blamed four other things that were never wrong. So this probe has
+              // never once measured the terminal's own size on Windows.
+              //
+              // The cell is the honest measure of it either way, and a stronger one: a font size in a
+              // stylesheet is what was asked for, and the height of a cell on screen is what he actually
+              // sees. A reader of the screen says what it found, including that it found nothing.
               const look = (): Promise<{ px: number; cols: number; said: string; hidden: boolean }> => js(behind.view, `(() => {
                 const z = document.getElementById('term-zoom');
                 const s = window.berthTerm.size();
-                return { px: Number(getComputedStyle(document.querySelector('.xterm-rows')).fontSize.replace('px', '')), cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
+                const screen = document.querySelector('#term .xterm-screen');
+                const box = screen ? screen.getBoundingClientRect() : null;
+                const tall = box && s.rows > 0 ? box.height / s.rows : -1;
+                return { px: tall > 0 ? Math.round(tall * 100) / 100 : -1, cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
               })()`);
+              // And it has to be drawn at all before any of this means anything. If it never is, that is the
+              // finding, said as itself rather than as a throw with no name on it.
+              const rowsDrawn = await until(async () => (await look()).px > 0, 8000);
+              check('the terminal has drawn its screen before its size is read', rowsDrawn, await look());
               const w = behind.view.webContents;
               const press = async (key: string) => {
                 w.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: ['control'] });
@@ -3825,6 +3912,65 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
               check('and still not one byte of it reached the shell', gotOwn === '', JSON.stringify(gotOwn));
             }
             await shot('blocks', 'one command and its output told from the next', behind);
+            // Finding words in the scrollback, opened by the glyph in the terminal's own head rather than by
+            // the key (the key is main's and is held in the full run). The picture is what he judges it by:
+            // the field over the head, the count beside it, and Berth's own marks on the box's output.
+            {
+              const findShown = (): Promise<boolean> => js<boolean>(behind.view, `(() => { const f = document.getElementById('term-find'); return !!f && !f.hidden; })()`);
+              // The marks are counted against what the terminal already wore, not against nought: a block's
+              // own mark is drawn with the same decoration the search uses, so "no marks at all" is a thing
+              // that can never be true in a terminal with blocks in it, and a probe asking for it would have
+              // been failing on the blocks rather than on the search.
+              const marksBefore = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              const opened = (await clickOn('#term-find-open', behind)) && (await until(() => findShown(), 3000));
+              const held = await shown(behind);
+              const word = (held.match(/[A-Za-z]{4,}/g) ?? [])[0] ?? '';
+              await js(behind.view, `(() => { const f = document.getElementById('term-find-field'); f.value = ${JSON.stringify(word)}; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+              await sleep(300);
+              const said = await js<string>(behind.view, `document.getElementById('term-find-count')?.textContent ?? ''`);
+              const marked = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              check(`the glyph in the terminal's head opens the find, and what it found is marked on the output: ${said}`,
+                opened && word !== '' && /\d+ of \d+/.test(said) && marked > marksBefore, [opened, word, said, marked, marksBefore]);
+              await shot('term-find', 'finding words in what the box printed: the count, and the marks on its output', behind);
+              // The glyph closes it again, and takes its marks with it.
+              const shut = (await clickOn('#term-find-open', behind)) && !(await findShown());
+              const marksAfter = await js<number>(behind.view, `document.querySelectorAll('.xterm-decoration').length`);
+              check('and the same glyph closes it, taking its own marks off and leaving the blocks their own',
+                shut && marksAfter === marksBefore, [shut, marksBefore, marked, marksAfter]);
+              // Double-clicking in a prompt: what he reaches for on a box is a path, a host, a user or a
+              // hash, and each has to come whole. Measured before the setting was written: the library's own
+              // default took demo@lab-box:/srv/ledger$ as one word, prompt and all, so the path could not be
+              // taken on its own at all. The prompt on screen holds all three, so all three are asked here.
+              {
+                const whole = await shown(behind);
+                const line = (whole.split('\n').find((l) => /@[\w.-]+:/.test(l)) ?? '').trim();
+                const host = (line.match(/@([\w.-]+):/) ?? [])[1] ?? '';
+                const where = (line.match(/:(\/[\w./-]*)/) ?? [])[1] ?? '';
+                const dbl = async (word: string): Promise<string> => {
+                  // Nothing selected first, or a press that lands on nothing hands back whatever the press
+                  // before it selected, and the probe reads the last answer again and calls it this one.
+                  await js(behind.view, `window.berthTerm.findOff()`);
+                  const at = await js<{ x: number; y: number } | null>(behind.view, `window.berthTerm.spot(${JSON.stringify(word)})`);
+                  if (!at) return '(not on screen)';
+                  for (const count of [1, 2]) {
+                    behind.view.webContents.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: count });
+                    behind.view.webContents.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: count });
+                  }
+                  await sleep(200);
+                  return (await js<string>(behind.view, `window.berthTerm.selection()`)).trim();
+                };
+                const gotWhere = where === '' ? '' : await dbl(where);
+                const gotHost = host === '' ? '' : await dbl(host);
+                // The path and the host are the two that can be aimed at: a word is found by its text, and
+                // the user name appears further along a row as well, where the block's own mark is anchored,
+                // so a press aimed by text alone cannot be relied on to land on the one in the prompt. Both
+                // of these break out of the prompt by the two characters the setting added, @ and :, which is
+                // the whole of what is being held here.
+                check(`a double press takes the path or the host on its own, not the whole prompt: ${JSON.stringify([gotWhere, gotHost])}`,
+                  line !== '' && where !== '' && host !== '' && gotWhere === where && gotHost === host,
+                  [line, [where, gotWhere], [host, gotHost]]);
+              }
+            }
           }
 
           // The one notification he asked for: something that took a while ended in a tab he is not looking
@@ -4782,7 +4928,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'bell,columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -5378,6 +5524,114 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           check('with a dialog over the tab nothing is saved', !(await there(blocked)) && ctx.saves().refused === refusedBefore, [await there(blocked), ctx.saves().refused - refusedBefore]);
           ctx.savesTo(null);
         }
+        // ---- Ctrl+Shift+F: finding words in what the box has printed ----
+        //
+        // The last of the gaps a week of real use would have met (SECTION-10-LIVE). The whole of it is a read
+        // of what the terminal already holds: the box is asked for nothing and given nothing, which is the
+        // rule under every key this app takes (plan B2.5). Ctrl+F alone stays the shell's own.
+        {
+          const findShown = (): Promise<boolean> => js<boolean>(t.view, `(() => { const f = document.getElementById('term-find'); return !!f && !f.hidden; })()`);
+          const findSays = (): Promise<string> => js<string>(t.view, `document.getElementById('term-find-count')?.textContent ?? ''`);
+          const findHas = (): Promise<string> => js<string>(t.view, `document.getElementById('term-find-field')?.value ?? ''`);
+          const marks = (): Promise<number> => js<number>(t.view, `document.querySelectorAll('.xterm-decoration').length`);
+          const typeFind = async (what: string): Promise<void> => {
+            await js(t.view, `(() => { const f = document.getElementById('term-find-field'); f.value = ${JSON.stringify(what)}; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            await sleep(250);
+          };
+          const findKey = async (key: string, shift: boolean): Promise<void> => {
+            await js(t.view, `document.getElementById('term-find-field').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shift ? 'true' : 'false'}, bubbles: true }))`);
+            await sleep(250);
+          };
+          check('the terminal\u2019s find field is not there until it is asked for, and a glyph in its head asks', !(await findShown()) && (await has('#term-find-open', t)), [await findShown(), await has('#term-find-open', t)]);
+          // The press is made again if the machine handed the focus away between the check and the press:
+          // main refuses a window key where the window is not the person's to drive, which is right, and a
+          // probe that read that refusal as the app's fault failed in CI for a reason that was the machine's
+          // (the same trap the password typing here already works around).
+          const boxBeforeFind = await boxGot();
+          let useFind = false;
+          let findOpened = false;
+          for (let go = 0; go < 4 && !findOpened; go++) {
+            useFind = await stillInUse();
+            if (!useFind) continue;
+            press(t.view.webContents, 'F', ['control', 'shift']);
+            findOpened = await until(() => findShown(), 3000);
+          }
+          const handIn = await js<string>(t.view, `document.activeElement?.id ?? ''`);
+          check('Ctrl+Shift+F opens it with the hand already in it, and the box is given nothing', !useFind || (findOpened && handIn === 'term-find-field' && (await boxGot()) === ''), [useFind, ...keysCouldWork(), findOpened, handIn, JSON.stringify(boxBeforeFind)]);
+          if (findOpened) {
+            // Something the box really printed, taken from what the terminal holds rather than guessed, so
+            // this probe cannot pass on a word that was never there.
+            const held = await shown(t);
+            const word = (held.match(/[A-Za-z]{4,}/g) ?? [])[0] ?? '';
+            await typeFind(word);
+            const said = await findSays();
+            const of = Number((said.match(/of (\d+)/) ?? [])[1] ?? '0');
+            const at = Number((said.match(/^(\d+) of/) ?? [])[1] ?? '0');
+            check(`finding a word the box printed says which one he is on and how many there are: ${said}`, word !== '' && of >= 1 && at >= 1 && at <= of && (await marks()) > 0, [word, said, await marks()]);
+            // The next one and the one before it, by the keys every find field answers.
+            const first = await findSays();
+            await findKey('Enter', false);
+            const second = await findSays();
+            await findKey('Enter', true);
+            const back = await findSays();
+            check('Enter goes to the next one and Shift and Enter to the one before it', of < 2 || (second !== first && back === first), [first, second, back, of]);
+            // A word that is not there says so plainly, and says it in its own colour rather than as 0 of 0.
+            await typeFind('zzqqxx-not-in-any-output');
+            const none = await findSays();
+            const noneColour = await js<string>(t.view, `document.getElementById('term-find-count')?.dataset.none ?? ''`);
+            check('a word that is not there says so, in the colour of a thing that is not there', none === 'not found' && noneColour === 'yes', [none, noneColour]);
+            // Escape: the field goes, what he typed goes, and the marks come off the box's own output.
+            await findKey('Escape', false);
+            const shut = !(await findShown());
+            check('Escape closes it, empties it, and takes the marks off the box\u2019s output', shut && (await findHas()) === '' && (await marks()) === 0, [shut, await findHas(), await marks()]);
+            // The whole of it asked the box for nothing and gave it nothing: a search is Berth reading what
+            // it already holds (plan B2.5).
+            check('and the whole search sent the box nothing and asked it for nothing', (await boxGot()) === '', JSON.stringify((await boxGot()).slice(0, 40)));
+          }
+        }
+        // ---- The bell ----
+        //
+        // A box rings it to say "look at this". Berth dropped it on the floor until now: nothing in the app
+        // listened at all. There is no sound, by decision: a box that can make this machine beep can make it
+        // beep a thousand times. It is said where everything else that happened is said, with the clock on
+        // it, and a tab he is not looking at is marked as it is for a command that finished behind him.
+        {
+          const bellsBefore = ctx.bellsHeard();
+          const droppedBefore = ctx.dropped();
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+          await until(() => ctx.shellState().active === t.id, 5000);
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          const said = await until(() => ctx.shellState().done.includes('rang the bell'), 5000);
+          check('a box ringing the bell is said where Berth says what happened, naming the box',
+            said && ctx.bellsHeard() === bellsBefore + 1, [ctx.shellState().done, ctx.bellsHeard() - bellsBefore]);
+          // And nothing of it reaches the box: a bell is a thing Berth was told, not a thing it answers.
+          check('and the box is answered nothing for it', (await boxGot()) === '', JSON.stringify((await boxGot()).slice(0, 40)));
+          // Rung again at once: refused, and counted like every other refusal. Without this a box in a loop
+          // owns that line and nothing else can be read there.
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          await sleep(400);
+          refusedByTheLock += 2;
+          check('a box cannot own that line by ringing it in a loop: the ones too close together are refused and counted',
+            ctx.bellsHeard() === bellsBefore + 1 && ctx.dropped() === droppedBefore + 2,
+            [ctx.bellsHeard() - bellsBefore, ctx.dropped() - droppedBefore]);
+          // And a bell in a tab he is not looking at marks that tab, the same quiet dot a tab wears when it
+          // printed while he was elsewhere. The mark is what he sees when the words have scrolled by.
+          const elsewhere = ids.find((id) => id !== t.id);
+          if (elsewhere !== undefined) {
+            await sleep(BELL_APART_MS_LAB);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${elsewhere} })`);
+            await until(() => ctx.shellState().active === elsewhere, 5000);
+            await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+            const marked = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${t.id}"] .sig-output') ? 'yes' : 'no'`)) === 'yes', 6000);
+            check('a bell in a tab he is not looking at marks that tab', marked, [marked, ctx.bellsHeard() - bellsBefore]);
+            // And looking at it is the answer to it: the mark goes with no press of its own.
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+            await until(() => ctx.shellState().active === t.id, 5000);
+            const gone = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${t.id}"] .sig-output') ? 'yes' : 'no'`)) === 'no', 5000);
+            check('and looking at the tab takes the mark off, with no press of its own', gone, gone);
+          }
+        }
         // And Ctrl+A alone is the shell's: it reaches the box exactly as it always did.
         press(t.view.webContents, 'A', ['control']);
         const plainReached = await until(async () => (await boxGot()).includes('\u0001'), 3000);
@@ -5603,6 +5857,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     }
 
     check('no view ever reached the canary web server', canaryHits === 0, canaryHits);
+    // Every press this run sent had to reach the control it named. One that did not is the fault the Windows
+    // gate hid behind two others: it pressed the Name head and the find field while the list was scrolled
+    // sideways, reached nothing, and read the unchanged screen as the app's fault. A run with a press like
+    // that in it cannot be trusted on anything it says after it, so the run says so here by name.
+    check(`every press this run sent reached the control it named (${pressesThatReachedNothing.length} did not)`,
+      pressesThatReachedNothing.length === 0, pressesThatReachedNothing.slice(0, 6).join(' | '));
     check(`no message was dropped, but the ones refused on purpose (late from a closed view, not acted on: ${ctx.lateFromClosed()})`, ctx.dropped() === refusedByTheLock, [ctx.dropped(), refusedByTheLock, ctx.droppedOn()]);
     // The local log, over the whole run: every failure in it is one the app wrote itself, a view's flood
     // cannot become the log, and nothing it holds was lost.

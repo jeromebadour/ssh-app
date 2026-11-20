@@ -5,6 +5,7 @@
 //     main's work, from a key or a click it saw itself.
 //   - Output is counted as taken only once the terminal has worked through it, so a box sends ahead of the
 //     window by a fixed amount at most.
+import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { guard } from './guards';
@@ -141,6 +142,12 @@ export interface Term {
   // Shift held means the menu, and so does the press landing on a block's mark, whose own menu is about that
   // one command. A press older than a moment is no answer at all, which is why the time is here.
   rightPress(): { at: number; menu: boolean; onBlock: boolean } | null;
+  // Finding words in what the box has printed, on screen and scrolled out. It is a read of the terminal's
+  // own buffer and nothing else: not one byte goes to the box, which is the rule for every key this app
+  // takes (B2.5). Returns which match it landed on and how many there are, because a highlight on its own
+  // does not say whether there is another one further up.
+  find(what: string, way: 'next' | 'back'): { found: boolean; at: number; of: number };
+  findOff(): void; // the highlights and the selection the search made, gone
 }
 
 // A web address in a box's output. Only http and https, only as far as a character that cannot be in one, and
@@ -148,7 +155,7 @@ export interface Term {
 const ADDRESS = /\bhttps?:\/\/[^\s<>"'`{}|\\^[\]]+/g;
 const TRAILING = /[.,;:!?)\]}'"]+$/;
 
-export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void; link(url: string): void }): Term {
+export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void; link(url: string): void; bell(): void }): Term {
   stylesWithoutInline();
   const term = new Terminal({
     fontFamily: "'Plex Mono', monospace",
@@ -167,10 +174,20 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     allowProposedApi: true,
     altClickMovesCursor: false, // it would type arrow keys for a click
     rightClickSelectsWord: false,
+    // What a double press takes as one word. The library's own default breaks on spaces and brackets and
+    // nothing else, and this was measured before it was changed: a double press on the path in
+    // demo@lab-box:/srv/ledger$ took the whole of it, prompt and all. On a box what he double-presses is a
+    // path, a host, a user or a hash, so the shell's own punctuation breaks a word and the characters that
+    // live inside those four do not: the slash, the dot, the dash, the underscore and the plus are left out
+    // of this on purpose, or /var/log/syslog, lab-box, a dotted name and a flag would each come apart.
+    wordSeparator: ' ()[]{}\'",;:@$=&|<>*?!~^\u0060',
     linkHandler: null,
     windowOptions: {}, // nothing about the window may be asked or set by a box
     screenReaderMode: false,
   });
+  // The bell a box rings. The terminal does nothing with it here: it is handed on, and what is said about it
+  // is main's, in main's own words, in the one place those words live.
+  term.onBell(() => out.bell());
   const encoder = new TextEncoder();
   const send = (text: string): void => out.typed(encoder.encode(text));
   guard(term, send);
@@ -242,12 +259,32 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     }
   };
 
+  // Finding words in the scrollback. The addon reads the terminal's own buffer, marks what it finds and says
+  // how many it found; nothing is sent to the box. The marks are muted ambers, the hue this app uses for
+  // something to look at, with the one he is standing on brighter than the rest.
+  const search = new SearchAddon({ highlightLimit: 2000 });
+  const FOUND = {
+    matchBackground: '#4a3d1c',
+    matchBorder: '#6b5a2e',
+    matchOverviewRuler: '#6b5a2e',
+    activeMatchBackground: '#8a6d2c',
+    activeMatchBorder: '#b08f3d',
+    activeMatchColorOverviewRuler: '#b08f3d',
+  };
+  let foundAt = -1;
+  let foundOf = 0;
+  search.onDidChangeResults((r) => {
+    foundAt = r.resultIndex;
+    foundOf = r.resultCount;
+  });
+
   const FACE = "13.5px 'Plex Mono'";
   const ready = Promise.all([document.fonts.load(FACE), document.fonts.load(`600 ${FACE}`)]).then(
     () => undefined,
     () => undefined, // a face that will not load is said by the self-test; the terminal still opens
   ).then(() => {
     term.open(host);
+    term.loadAddon(search);
     drawnBy = wearRenderer(term);
     // A machine with no graphics renderer at all is said as well, once, at the start: a prompt that is not
     // coloured is a thing he would otherwise put down to Berth not doing what it said it would.
@@ -378,6 +415,20 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
       return true;
     },
     rightPress: () => (rightAt === null ? null : { at: rightAt.at, menu: rightAt.menu, onBlock: rightAt.onBlock }),
+    // Nothing to look for is not a search with no results: it is no search, so the marks come off and the
+    // count says nothing rather than nought of nought, which reads as "it is not there".
+    find: (what: string, way: 'next' | 'back') => {
+      if (what === '') { search.clearDecorations(); foundAt = -1; foundOf = 0; return { found: false, at: -1, of: 0 }; }
+      const opts = { decorations: FOUND, caseSensitive: false, regex: false, wholeWord: false };
+      const found = way === 'next' ? search.findNext(what, opts) : search.findPrevious(what, opts);
+      return { found, at: foundAt, of: foundOf };
+    },
+    findOff: () => {
+      search.clearDecorations();
+      term.clearSelection();
+      foundAt = -1;
+      foundOf = 0;
+    },
     bracketedPaste: () => term.modes.bracketedPasteMode,
     drawnBy: () => drawnBy,
     takeAll: () => {

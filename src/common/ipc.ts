@@ -30,6 +30,8 @@ export const CH = {
   tabDropped: 'tab:dropped', // tab preload to main: these paths were dropped into this folder
   tabDoing: 'tab:doing', // tab view to main: waiting at a prompt, running something, or it cannot tell
   tabWhole: 'tab:whole', // main to tab view: select the whole terminal and copy it (Ctrl+Shift+A)
+  tabFind: 'tab:find', // main to tab view: open the terminal's find field (Ctrl+Shift+F)
+  tabBell: 'tab:bell', // tab view to main: the box rang the terminal's bell
   tabSaveAsk: 'tab:save-ask', // main to tab view: hand over the whole terminal to be saved as a file (Ctrl+Shift+S)
   tabSave: 'tab:save', // tab view to main: text to put in a file he picks, and what it is (plain text, size-limited)
   tabFilePage: 'tab:file-page', // main to tab view: one page of an answer, saying which ask it belongs to
@@ -407,6 +409,12 @@ export interface TabPort {
   // gains a wrong mark and nothing else.
   doing(doing: string, finishedMs: number): void;
   onWhole(cb: () => void): void; // main says Ctrl+Shift+A was pressed: select the whole terminal and copy it
+  // Main says Ctrl+Shift+F was pressed: open the field that finds words in what the box has printed. The
+  // key never reaches this page on its own, so no box can see it or make it happen.
+  onFind(cb: () => void): void;
+  // The box rang the bell. The view says only that it happened; what is said about it, and whether the tab
+  // is marked, is main's, from main's own words and clock.
+  bell(): void;
   onSaveAsk(cb: () => void): void; // main says Ctrl+Shift+S was pressed: hand over the whole terminal to save
   // Text for a file. The view never names a file: it hands over what to write and what to call it in words,
   // and main asks him where it goes (the same rule the key file and the downloads folder follow, plan B2.7).

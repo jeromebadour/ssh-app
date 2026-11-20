@@ -138,7 +138,10 @@ jobs:
     needs: [plan, lab]
     if: needs.plan.outputs.windows == 'true'
     runs-on: windows-2025
-    timeout-minutes: 45
+    # The box screens hold 459 probes and the runner now lets that package run to the end rather than cutting
+    # it off at 150 seconds, which is all it ever got: it only seemed to fit because a probe threw partway
+    # through. A gate that stops a release has to have read the whole thing.
+    timeout-minutes: 75
     defaults:
       run:
         shell: bash
