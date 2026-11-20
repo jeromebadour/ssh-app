@@ -43,6 +43,10 @@ const term = openTerminal(host, {
   },
   selected: (text) => port.copy(text),
   link: (url) => port.link(url),
+  // The bell is handed straight to main and nothing is drawn here for it. What a box did is said in the one
+  // place Berth says what happened, and a tab he is not looking at is marked there, as it is for a command
+  // that finished behind him. Nothing in the page decides any of that.
+  bell: () => port.bell(),
 });
 window.berthGlyphPath = (name) => glyph(name).querySelector('path')?.getAttribute('d') ?? '';
 window.berthBlocks = () => ({ hue, marks: blocks.marks.length, drawn: drawn.size, prompts: blocks.prompts, gaveUp: blocks.gaveUp, seenRow, held: term.held(), fault: blocksFault, shapeFault });

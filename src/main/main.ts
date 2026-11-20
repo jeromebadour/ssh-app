@@ -1007,6 +1007,7 @@ function openTab(boxId = '', place = '', ownName = '', ownColour = 0): Tab | nul
 // programs on a box use to move between their own windows. Those stay the box's.
 const typedInto = new Map<number, number>(); // bytes a person has typed into each tab, and nothing else has
 let keysRefused = 0; // a window key pressed where the window is not the person's to drive: counted, never acted on
+let bellsHeard = 0; // how many bells were said, for the lab: the ones refused for coming too fast are counted as drops
 
 function goToTab(id: number): void {
   if (!tabs.has(id)) return;
@@ -1166,6 +1167,32 @@ ipcMain.on(CH.tabDoing, (e, doing: unknown, finishedMs: unknown) => {
   if (behind && took >= WORTH_TELLING_MS && !(win?.isFocused() ?? false)) tellHim(tab, took);
   tellShell();
   if (tabs.get(tab.id) === tab) sendTo(tab.view, CH.tabState, info(tab));
+});
+
+// The bell. A box rings it to say "look at this", and until now Berth dropped it on the floor: nothing in
+// the app listened at all. It is said the way every other thing that happened is said, in the one place
+// those words live, with the clock on it, and the tab is marked when he is not looking at it, exactly as a
+// command that finished behind marks it. No sound: a box that can make this machine beep can make it beep
+// a thousand times, and an app that beeps is an app he mutes and then never hears about anything.
+//
+// How often a box may say it is main's to decide, not the box's. Without this a box in a loop owns Berth's
+// own line and nothing else can be read there; the ones refused are counted like every other refusal.
+const BELL_APART_MS = 2_000;
+const bellLast = new Map<number, number>();
+ipcMain.on(CH.tabBell, (e) => {
+  const tab = tabByContents.get(e.sender.id);
+  if (!tab || !fromMainFrameOf(e, tab.origin)) return drop('tab:bell', e);
+  const now = Date.now();
+  const last = bellLast.get(tab.id) ?? 0;
+  if (now - last < BELL_APART_MS) return drop('tab:bell', e);
+  bellLast.set(tab.id, now);
+  bellsHeard++;
+  if (active !== tab.id) {
+    const was = doingNow.get(tab.id) ?? { doing: 'unknown' as const, finishedMs: 0, unseen: false };
+    doingNow.set(tab.id, { ...was, unseen: true });
+  }
+  done = `${tab.box?.name ?? 'The box'} rang the bell`;
+  tellShell();
 });
 
 // Windows' own way of saying something happened while he was elsewhere. It names the box and the place from
@@ -2588,7 +2615,7 @@ if (!app.requestSingleInstanceLock()) {
       await runSelfTest({ gate: g, keys: k, boxes: b, signsRefused: () => signsRefused, signsPassedOn: () => signsPassedOn, signAs: (boxId: string, req: SignRequest) => {
         const box = b.get(boxId);
         return box ? signFor(box, req) : Promise.resolve({ error: 'no such box' });
-      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, rightClicksRefused: () => rightClicksRefused, rightClicksSeen: () => rightClicksSeen, typedInto: (tab: number) => typedInto.get(tab) ?? 0, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
+      }, listFile, backups, shell, shellLoaded, openTab, closeTab, tabs, shellState, dropped: () => droppedMessages, droppedOn: () => Object.fromEntries(droppedOn), lateFromClosed: () => lateFromClosed, missing: () => Object.fromEntries(missing), opened: () => ({ url: lastOpened, asked: opensAsked, refused: linksRefused }), windowAsked: () => [...windowAsked], keysRefused: () => keysRefused, bellsHeard: () => bellsHeard, rightClicksRefused: () => rightClicksRefused, rightClicksSeen: () => rightClicksSeen, typedInto: (tab: number) => typedInto.get(tab) ?? 0, overlayOn: () => overlay, windowInUse: () => win?.isFocused() ?? false, downloads: downloadsInto(), filesAsked: () => Object.fromEntries(filesAsked), filesAskedWhere: () => Object.fromEntries(filesAskedWhere), told: () => ({ decided: wouldTell, shown: notified }), faults: async () => { await faultLog().settled(); return { ...faultLog().counts, lately: faultLog().lately, file: faultLog().file }; }, chooseKeyFile, chooseToSend: (answer: (() => string | string[] | undefined) | null) => void (labChoosesAFile = answer), savesTo: (answer: (() => string | undefined) | null) => void (labSavesToFile = answer), saves: () => ({ refused: savesRefused, to: savedTo }), stillToSend: (tab: number) => queuedToSend.get(tab)?.paths.length ?? 0, watchDrags: (watch: ((file: string) => void) | null) => void (labWatchesDrags = watch), chooseFolder: (answer: (() => string | undefined) | null) => void (labChoosesAFolder = answer), settingsNow: () => boxes?.settings ?? { ...SETTINGS_DEFAULT }, lastTabsNow: () => boxes?.lastTabs ?? [], watchFirstVisits: (watch: ((v: { addr: string; user: string; hostKey: string; password: string; command: string }) => Visited) | null) => void (labWatchesVisits = watch), dragsAsked: () => dragsAsked, transfersOn: (tab: number) => [...coming.keys()].filter((k) => k.startsWith(`${tab}:`)).length + [...sendingNow.keys()].filter((k) => k.startsWith(`${tab}:`)).length, canDrag: (tab: number) => [...draggable.keys()].filter((k) => k.startsWith(`${tab}:`)).length, keyPassphrase: (p: string) => {
         if (!keyFile) return;
         keyFile.passphrase.fill(0);
         keyFile.passphrase = Buffer.from(p, 'utf8');

@@ -155,7 +155,7 @@ export interface Term {
 const ADDRESS = /\bhttps?:\/\/[^\s<>"'`{}|\\^[\]]+/g;
 const TRAILING = /[.,;:!?)\]}'"]+$/;
 
-export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void; link(url: string): void }): Term {
+export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array): void; selected(text: string): void; link(url: string): void; bell(): void }): Term {
   stylesWithoutInline();
   const term = new Terminal({
     fontFamily: "'Plex Mono', monospace",
@@ -185,6 +185,9 @@ export function openTerminal(host: HTMLElement, out: { typed(bytes: Uint8Array):
     windowOptions: {}, // nothing about the window may be asked or set by a box
     screenReaderMode: false,
   });
+  // The bell a box rings. The terminal does nothing with it here: it is handed on, and what is said about it
+  // is main's, in main's own words, in the one place those words live.
+  term.onBell(() => out.bell());
   const encoder = new TextEncoder();
   const send = (text: string): void => out.typed(encoder.encode(text));
   guard(term, send);

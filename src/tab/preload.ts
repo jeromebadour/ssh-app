@@ -66,6 +66,9 @@ const port: TabPort = {
   onFind(cb) {
     ipcRenderer.on(CH.tabFind, () => cb());
   },
+  bell() {
+    ipcRenderer.send(CH.tabBell);
+  },
   onRightClick(cb) {
     ipcRenderer.on(CH.tabRightClick, () => cb());
   },

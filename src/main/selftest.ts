@@ -50,6 +50,7 @@ interface Ctx {
   opened(): { url: string; asked: number; refused: number };
   windowAsked(): string[];
   keysRefused(): number;
+  bellsHeard(): number;
   rightClicksRefused(): number; // an answer about a right press that belonged to no press main saw
   rightClicksSeen(): number; // right presses main itself saw on a tab's view, wherever in it they landed
   typedInto(tab: number): number; // bytes typed into this tab's box, which only a person's own keys add to
@@ -486,6 +487,9 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       if (!got.ok) { b.scrollIntoView({ block: 'nearest', inline: 'nearest' }); p = mid(); got = lands(p); }
       return { x: p.x, y: p.y, reached: got.ok, stood: got.stood };
     })()`);
+    // How far apart two bells must be for the second to be said (main's own BELL_APART_MS). The lab waits
+    // this out rather than guessing, so the arm about a tab behind is not refused by the throttle above it.
+    const BELL_APART_MS_LAB = 2_000;
     let pressesThatReachedNothing: string[] = [];
     const clickOn = async (sel: string, on: Tab | null = null) => {
       const p = await at(sel, on);
@@ -4893,7 +4897,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
       const sealed = await js<boolean>(v, `(window.tabPort ?? window.shellPort).sandboxed`);
       check(`${name}: sandboxed`, sealed === true, sealed);
       const port = await js<string>(v, `Object.keys(window.tabPort ?? window.shellPort).sort().join()`);
-      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
+      check(`${name}: only its own port`, port === (name === 'shell' ? 'cmd,frame,gateCreate,gateForgetRestore,gatePickBackup,gatePickRestore,gateRestore,gateUnlock,gateUsePrevious,keyPassphrase,meter,onGate,onState,sandboxed' : 'bell,columns,copy,doing,drag,dragAll,dropped,files,frame,link,meter,onAgain,onBanner,onBlockAsk,onClear,onCopyAsk,onFilePage,onFind,onOutput,onPace,onPaste,onRightClick,onSaveAsk,onSettings,onShown,onState,onWhole,pasteMode,reopen,resize,rightClickWas,sandboxed,save,send,taken'), port);
     }
     const pids = [process.pid, ...views.map(([, v]) => v.webContents.getOSProcessId()), a.engine.pid, b.engine.pid];
     check('every view and engine is its own process', new Set(pids).size === pids.length && !pids.includes(0), pids);
@@ -5508,10 +5512,19 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             await sleep(250);
           };
           check('the terminal\u2019s find field is not there until it is asked for, and a glyph in its head asks', !(await findShown()) && (await has('#term-find-open', t)), [await findShown(), await has('#term-find-open', t)]);
-          const useFind = await stillInUse();
+          // The press is made again if the machine handed the focus away between the check and the press:
+          // main refuses a window key where the window is not the person's to drive, which is right, and a
+          // probe that read that refusal as the app's fault failed in CI for a reason that was the machine's
+          // (the same trap the password typing here already works around).
           const boxBeforeFind = await boxGot();
-          press(t.view.webContents, 'F', ['control', 'shift']);
-          const findOpened = await until(() => findShown(), 5000);
+          let useFind = false;
+          let findOpened = false;
+          for (let go = 0; go < 4 && !findOpened; go++) {
+            useFind = await stillInUse();
+            if (!useFind) continue;
+            press(t.view.webContents, 'F', ['control', 'shift']);
+            findOpened = await until(() => findShown(), 3000);
+          }
           const handIn = await js<string>(t.view, `document.activeElement?.id ?? ''`);
           check('Ctrl+Shift+F opens it with the hand already in it, and the box is given nothing', !useFind || (findOpened && handIn === 'term-find-field' && (await boxGot()) === ''), [useFind, ...keysCouldWork(), findOpened, handIn, JSON.stringify(boxBeforeFind)]);
           if (findOpened) {
@@ -5543,6 +5556,49 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // The whole of it asked the box for nothing and gave it nothing: a search is Berth reading what
             // it already holds (plan B2.5).
             check('and the whole search sent the box nothing and asked it for nothing', (await boxGot()) === '', JSON.stringify((await boxGot()).slice(0, 40)));
+          }
+        }
+        // ---- The bell ----
+        //
+        // A box rings it to say "look at this". Berth dropped it on the floor until now: nothing in the app
+        // listened at all. There is no sound, by decision: a box that can make this machine beep can make it
+        // beep a thousand times. It is said where everything else that happened is said, with the clock on
+        // it, and a tab he is not looking at is marked as it is for a command that finished behind him.
+        {
+          const bellsBefore = ctx.bellsHeard();
+          const droppedBefore = ctx.dropped();
+          await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+          await until(() => ctx.shellState().active === t.id, 5000);
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          const said = await until(() => ctx.shellState().done.includes('rang the bell'), 5000);
+          check('a box ringing the bell is said where Berth says what happened, naming the box',
+            said && ctx.bellsHeard() === bellsBefore + 1, [ctx.shellState().done, ctx.bellsHeard() - bellsBefore]);
+          // And nothing of it reaches the box: a bell is a thing Berth was told, not a thing it answers.
+          check('and the box is answered nothing for it', (await boxGot()) === '', JSON.stringify((await boxGot()).slice(0, 40)));
+          // Rung again at once: refused, and counted like every other refusal. Without this a box in a loop
+          // owns that line and nothing else can be read there.
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+          await sleep(400);
+          refusedByTheLock += 2;
+          check('a box cannot own that line by ringing it in a loop: the ones too close together are refused and counted',
+            ctx.bellsHeard() === bellsBefore + 1 && ctx.dropped() === droppedBefore + 2,
+            [ctx.bellsHeard() - bellsBefore, ctx.dropped() - droppedBefore]);
+          // And a bell in a tab he is not looking at marks that tab, the same quiet dot a tab wears when it
+          // printed while he was elsewhere. The mark is what he sees when the words have scrolled by.
+          const elsewhere = ids.find((id) => id !== t.id);
+          if (elsewhere !== undefined) {
+            await sleep(BELL_APART_MS_LAB);
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${elsewhere} })`);
+            await until(() => ctx.shellState().active === elsewhere, 5000);
+            await js(t.view, `window.berthTerm.write(new Uint8Array([7]), () => {})`);
+            const marked = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${t.id}"] .sig-output') ? 'yes' : 'no'`)) === 'yes', 6000);
+            check('a bell in a tab he is not looking at marks that tab', marked, [marked, ctx.bellsHeard() - bellsBefore]);
+            // And looking at it is the answer to it: the mark goes with no press of its own.
+            await js(ctx.shell, `window.shellPort.cmd({ op: 'select', id: ${t.id} })`);
+            await until(() => ctx.shellState().active === t.id, 5000);
+            const gone = await until(async () => (await js<string>(ctx.shell, `document.querySelector('[data-tab="${t.id}"] .sig-output') ? 'yes' : 'no'`)) === 'no', 5000);
+            check('and looking at the tab takes the mark off, with no press of its own', gone, gone);
           }
         }
         // And Ctrl+A alone is the shell's: it reaches the box exactly as it always did.
