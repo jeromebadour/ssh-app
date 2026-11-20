@@ -2677,8 +2677,12 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // This one is the pane's own, drawn in the tab rather than on the window, so the keyboard
             // belongs to the tab here. What matters is the same thing: something inside the question holds
             // it, so Enter answers the question and not the list of files behind it.
+            // Waited for rather than read once: the pane puts the cursor on the safe answer in a turn of its
+            // own, after the question is drawn, so asking the instant it appears asks before the answer is
+            // true either way. Read once, this failed in the gate and passed here, which is the worst shape
+            // a probe can have.
             check('the question before files are deleted holds the keyboard itself, inside the tab',
-              front.view.webContents.isFocused() && (await js<boolean>(front.view, `!!document.activeElement?.closest('#fb-ask-delete')`)),
+              front.view.webContents.isFocused() && (await until(async () => js<boolean>(front.view, `!!document.activeElement?.closest('#fb-ask-delete')`), 3000)),
               [front.view.webContents.isFocused(), await js<string>(front.view, `document.activeElement?.id ?? document.activeElement?.className ?? ''`)]);
             // Keeping them keeps all three, and keeps them chosen.
             await clickOn('#fb-ask-keep', front);
