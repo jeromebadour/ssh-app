@@ -495,6 +495,25 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
     // at and the dialog heard nothing until it was clicked. His. Every dialog in the app is drawn on that
     // one surface, so this is asked of each of them rather than of one.
     const keysAreOnTheWindow = (): boolean => ctx.shell.webContents.isFocused() && ![...ctx.tabs.values()].some((t) => t.view.webContents.isFocused());
+    // The nearest block mark at or just above a row, given that row's height on screen. Where the terminal
+    // is narrow a prompt and the command it carries wrap, and the words are then found on the second of
+    // those rows while the mark stays on the first, so looking only at the row the words are on finds
+    // nothing at all. Used by every probe that has to press or read one command's own mark.
+    const markNear = async (on: Tab, y: number): Promise<{ x: number; y: number } | null> => js<{ x: number; y: number } | null>(on.view, `(() => {
+      const screen = document.querySelector('.xterm-screen');
+      const high = screen ? screen.getBoundingClientRect().height / window.berthTerm.size().rows : 18;
+      let best = null;
+      let near = high * 2.5;
+      for (const e of document.querySelectorAll('.berth-block-copy')) {
+        const r = e.getBoundingClientRect();
+        if (r.height <= 0 || r.width <= 0) continue;
+        const middle = r.top + r.height / 2;
+        if (middle > ${y} + high) continue;
+        const gap = ${y} - middle;
+        if (gap < near) { near = gap; best = r; }
+      }
+      return best ? { x: Math.round(best.left + best.width / 2), y: Math.round(best.top + best.height / 2) } : null;
+    })()`);
     const keysOn = async (what: string): Promise<void> => {
       check(`${what}: and it holds the keyboard, so what he types answers it and not what is behind it`, await until(keysAreOnTheWindow, 2500), [ctx.shell.webContents.isFocused(), [...ctx.tabs.values()].map((t) => t.view.webContents.isFocused())]);
     };
@@ -4106,13 +4125,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             if (look > 0) await sleep(400);
             onRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo cmd-made-this-output')`);
             if (onRow === null) continue;
-            mark = await js<{ x: number; y: number } | null>(marked.view, `(() => {
-              const y = ${onRow.y};
-              const m = [...document.querySelectorAll('.berth-block-copy')].find((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top - 2 && y <= r.bottom + 2; });
-              if (!m) return null;
-              const r = m.getBoundingClientRect();
-              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-            })()`);
+            mark = await markNear(marked, onRow.y);
           }
           check('and that mark sits on the row of the command it belongs to', mark !== null, [onRow, mark]);
           clipboard.writeText('not-from-any-block');
@@ -4189,10 +4202,7 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
           // the first command after every Clear quietly missing its block. The mark is looked for on the row
           // of the very first command typed after the Clear.
           const afterRow = await js<{ x: number; y: number } | null>(marked.view, `window.berthTerm.spot('echo after-the-wipe')`);
-          const markedAgain = afterRow === null ? false : await js<boolean>(marked.view, `(() => {
-            const y = ${afterRow.y};
-            return [...document.querySelectorAll('.berth-block-copy')].some((e) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && y >= r.top && y <= r.bottom; });
-          })()`);
+          const markedAgain = afterRow === null ? false : (await markNear(marked, afterRow.y)) !== null;
           check('Clear on a tab drawing blocks empties it, and the very first command after it still gets its own mark', wiped && wentEmpty && markedAgain, [wiped, wentEmpty, markedAgain, afterRow, await js<unknown>(marked.view, `window.berthBlocks()`)]);
           // And every mark it draws is on a prompt. A mark is drawn from a row the reading remembers, and
           // the rows a Clear takes away are rows it still remembers: kept across one, those marks come back
