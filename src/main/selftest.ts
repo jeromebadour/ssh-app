@@ -3842,20 +3842,32 @@ export async function runSelfTest(ctx: Ctx): Promise<void> {
             // the shell. That last one is the standing rule of this whole app, and Ctrl with a minus is a
             // character a box would otherwise be sent.
             {
-              // The rows the library draws, asked for before they are read. getComputedStyle(null) throws,
-              // and a read that throws ends the whole run and takes every probe after it: on Windows this
-              // one did exactly that, and the run blamed four other things that were never wrong. A reader
-              // of the screen says what it found, including that it found nothing; it does not throw.
+              // How tall a letter really is, measured from the screen the library draws on rather than from a
+              // CSS property of one renderer's own rows.
+              //
+              // This used to read getComputedStyle on `.xterm-rows`, which exists only under the plain
+              // renderer: the rows are elements there and a canvas under the WebGL one. This screen has no
+              // graphics renderer, so it was always the plain one here and the read always worked; on his
+              // machine and on Windows the WebGL renderer draws, there is no `.xterm-rows` at all, and
+              // getComputedStyle(null) threw. The throw ended the whole run and took every probe after it
+              // with it, and the gate then blamed four other things that were never wrong. So this probe has
+              // never once measured the terminal's own size on Windows.
+              //
+              // The cell is the honest measure of it either way, and a stronger one: a font size in a
+              // stylesheet is what was asked for, and the height of a cell on screen is what he actually
+              // sees. A reader of the screen says what it found, including that it found nothing.
               const look = (): Promise<{ px: number; cols: number; said: string; hidden: boolean }> => js(behind.view, `(() => {
                 const z = document.getElementById('term-zoom');
                 const s = window.berthTerm.size();
-                const rows = document.querySelector('.xterm-rows');
-                return { px: rows ? Number(getComputedStyle(rows).fontSize.replace('px', '')) : -1, cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
+                const screen = document.querySelector('#term .xterm-screen');
+                const box = screen ? screen.getBoundingClientRect() : null;
+                const tall = box && s.rows > 0 ? box.height / s.rows : -1;
+                return { px: tall > 0 ? Math.round(tall * 100) / 100 : -1, cols: s.cols, said: z?.textContent ?? '', hidden: !!z?.hidden };
               })()`);
-              // And the rows have to be there at all before any of this means anything. If they never come,
-              // that is the finding, said as itself rather than as a throw with no name on it.
+              // And it has to be drawn at all before any of this means anything. If it never is, that is the
+              // finding, said as itself rather than as a throw with no name on it.
               const rowsDrawn = await until(async () => (await look()).px > 0, 8000);
-              check('the terminal has drawn its rows before its size is read', rowsDrawn, (await look()).px);
+              check('the terminal has drawn its screen before its size is read', rowsDrawn, await look());
               const w = behind.view.webContents;
               const press = async (key: string) => {
                 w.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: ['control'] });
